@@ -1,0 +1,74 @@
+[project]
+name = "patient-assistant"
+version = "0.1.0"
+description = "AI Patient Assistant — LangGraph agent cho báo cáo theo dõi và đặt lịch khám (dữ liệu giả lập)"
+requires-python = ">=3.12"
+dependencies = [
+    "langgraph>=0.6",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.5",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",
+    "anthropic[bedrock]>=0.70",
+    "sqlalchemy[asyncio]>=2.0",
+    "structlog>=24.1",
+    "holidays>=0.60",
+]
+
+[project.scripts]
+pa-eval = "patient_assistant.evaluation.runner:main"
+
+[project.optional-dependencies]
+postgres = [
+    "asyncpg>=0.29",
+    "langgraph-checkpoint-postgres>=2.0",
+    "psycopg[binary]>=3.2",
+]
+stt = ["faster-whisper>=1.1"]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "hypothesis>=6.100",
+    "httpx>=0.27",
+    "aiosqlite>=0.20",
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/patient_assistant"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = ["llm: gọi LLM thật (Bedrock), không chạy mặc định"]
+addopts = "-m 'not llm'"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+packages = ["patient_assistant"]
+plugins = ["pydantic.mypy"]
+strict = false
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = ["patient_assistant.domain.*"]
+strict = true
+
+[[tool.mypy.overrides]]
+module = ["faster_whisper", "langgraph.checkpoint.postgres.*"]
+ignore_missing_imports = true

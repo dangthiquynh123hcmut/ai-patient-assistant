@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Patient Assistant — Sơ đồ kiến trúc</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --ink: #1d2433; --muted: #5b6475; --line: #e3e6ec;
+    --code: #2f6fde; --llm: #8b5cf6; --hitl: #d97706; --tool: #059669; --stop: #dc2626;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); background: var(--bg); }
+  header { padding: 28px 32px 8px; }
+  header h1 { margin: 0 0 4px; font-size: 22px; }
+  header p { margin: 0; color: var(--muted); }
+  nav { position: sticky; top: 0; z-index: 5; display: flex; gap: 6px; flex-wrap: wrap; padding: 12px 32px; background: rgba(246,247,249,.94); backdrop-filter: blur(6px); border-bottom: 1px solid var(--line); }
+  nav a { padding: 6px 12px; border-radius: 999px; color: var(--ink); text-decoration: none; font-size: 13px; border: 1px solid var(--line); background: var(--card); }
+  nav a:hover { border-color: var(--code); color: var(--code); }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; padding: 14px 32px 0; font-size: 13px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 14px; height: 14px; border-radius: 4px; border: 2px solid; display: inline-block; }
+  main { padding: 8px 32px 48px; display: grid; gap: 22px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px; scroll-margin-top: 70px; }
+  section h2 { margin: 0 0 4px; font-size: 18px; }
+  section .desc { margin: 0 0 14px; color: var(--muted); max-width: 900px; }
+  .diagram { overflow-x: auto; padding: 8px 0; text-align: center; }
+  .diagram svg { max-width: none !important; height: auto; }
+  .hint { font-size: 12px; color: var(--muted); margin: 0 0 6px; }
+  ul.notes { margin: 12px 0 0; padding-left: 20px; color: var(--muted); font-size: 14px; }
+  ul.notes li { margin: 2px 0; }
+  code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: #eef1f6; padding: 1px 5px; border-radius: 4px; }
+  #err { display: none; margin: 16px 32px; padding: 12px 16px; border-radius: 8px; background: #fef2f2; color: var(--stop); border: 1px solid #fecaca; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AI Patient Assistant — Sơ đồ kiến trúc</h1>
+  <p>Trực quan hóa <code>ARCHITECTURE.md</code> (Draft v2) và FR v0.3: graph chính, subgraph báo cáo, subgraph đặt lịch, validation và luồng gọi end-to-end.</p>
+</header>
+<nav>
+  <a href="#overview">1. Tổng thể hệ thống</a>
+  <a href="#main">2. Graph chính</a>
+  <a href="#report">3. report_flow</a>
+  <a href="#booking">4. booking_flow</a>
+  <a href="#validation">5. Validation &amp; routing</a>
+  <a href="#seq">6. Đặt lịch bằng giọng nói (sequence)</a>
+  <a href="#data">7. Dữ liệu</a>
+</nav>
+<div class="legend">
+  <span><i style="border-color:var(--code);background:#eaf1fd"></i>Code (quyết định)</span>
+  <span><i style="border-color:var(--llm);background:#f3edff"></i>LLM (đề xuất)</span>
+  <span><i style="border-color:var(--hitl);background:#fff4e0"></i>Chờ người dùng — <code>interrupt()</code></span>
+  <span><i style="border-color:var(--tool);background:#e6f6ef"></i>Tool / backend</span>
+  <span><i style="border-color:var(--stop);background:#fdecec"></i>Dừng an toàn / handoff</span>
+</div>
+<p class="hint" style="padding:8px 32px 0">Sơ đồ hiển thị đúng kích thước thật; cuộn ngang trong từng khung nếu màn hình hẹp.</p>
+<div id="err">Không tải được thư viện Mermaid (cần kết nối tới cdn.jsdelivr.net). Mã nguồn sơ đồ vẫn có trong file HTML này.</div>
+
+<main>
+
+<section id="overview">
+  <h2>1. Tổng thể hệ thống</h2>
+  <p class="desc">STT chạy ngoài graph để người dùng duyệt transcript trước. Text và transcript đã duyệt đi vào cùng một LangGraph. LLM chỉ được gọi qua <code>LLMProvider</code>; tool ghi chỉ do code gọi.</p>
+  <div class="diagram"><pre class="mermaid">
+flowchart TB
+  U(["👤 Người dùng"]):::user
+  subgraph UI["UI (Streamlit)"]
+    direction TB
+    ui1["Chat"]
+    ui2["Duyệt / sửa transcript"]
+    ui3["Chọn slot · Xác nhận bản nháp"]
+  end
+  subgraph API["FastAPI"]
+    direction TB
+    a1["POST /stt/transcribe"]
+    a2["POST /chat/{thread_id}/messages"]
+    a3["POST /chat/{thread_id}/resume"]
+    a4["GET /reports · GET /appointments"]
+  end
+  STT["stt/<br/>faster-whisper (CPU, int8)<br/>+ cờ độ tin cậy"]:::code
+  subgraph AG["agent/ — LangGraph"]
+    direction TB
+    G["Graph chính"]:::code
+    RF[["report_flow"]]:::code
+    BF[["booking_flow"]]:::code
+    G --> RF
+    G --> BF
+  end
+  LLM["llm/<br/>LLMProvider → Claude Opus 5.5<br/>AWS Bedrock (IAM)"]:::llm
+  VAL["validators/<br/>6 lớp · vi_numbers · vi_dates"]:::code
+  TOOLS["tools/<br/>ToolResult chuẩn hóa"]:::tool
+  SVC["services/ + repositories/<br/>quyền · nghiệp vụ · idempotency"]:::tool
+  DB[("PostgreSQL<br/>reports · appointments · slots<br/>agent_attempts · tool_calls<br/>LangGraph checkpoints")]:::db
+
+  U <--> UI
+  UI <--> API
+  a1 --> STT
+  a2 --> AG
+  a3 --> AG
+  AG --> LLM
+  AG --> VAL
+  AG --> TOOLS
+  TOOLS --> SVC
+  SVC --> DB
+  AG -. "checkpoint" .-> DB
+  a4 --> SVC
+
+  classDef code fill:#eaf1fd,stroke:#2f6fde,color:#1d2433
+  classDef llm fill:#f3edff,stroke:#8b5cf6,color:#1d2433
+  classDef tool fill:#e6f6ef,stroke:#059669,color:#1d2433
+  classDef db fill:#f1f5f9,stroke:#475569,color:#1d2433
+  classDef user fill:#fff,stroke:#1d2433,color:#1d2433
+  </pre></div>
+</section>
+
+<section id="main">
+  <h2>2. Graph chính</h2>
+  <p class="desc">Chặn an toàn và phân loại intent trước, sau đó chuyển sang subgraph. Mỗi lượt xử lý một intent chính; việc còn lại (<code>pending_intents</code>) được hỏi ở bước <code>respond</code>.</p>
+  <div class="diagram"><pre class="mermaid">
+flowchart TD
+  S(["START"]) --> ingest["ingest<br/><small>chuẩn hóa input · stt_flags · now</small>"]:::code
+  ingest --> guard{"guard_input<br/><small>luật an toàn</small>"}:::code
+  guard -->|"cấp cứu · chẩn đoán · thuốc"| safe["Phản hồi an toàn cố định<br/><small>không qua LLM</small>"]:::stop
+  guard -->|"ok"| classify{"classify<br/><small>rule trước → LLM khi chưa chắc</small>"}:::code
+  classify -->|"create_report"| RF[["report_flow"]]:::code
+  classify -->|"book_appointment"| BF[["booking_flow"]]:::code
+  classify -->|"list_appointments"| FA["fetch_appts<br/><small>list_my_appointments</small>"]:::tool
+  classify -->|"get_report_history"| FH["fetch_history<br/><small>get_report_history</small>"]:::tool
+  classify -->|"answer_faq"| RAG["rag_answer<br/><small>LLM + tool đọc, ≤ 4 lần gọi</small>"]:::llm
+  classify -->|"unknown"| CL["clarify ⏸"]:::hitl
+  CL -->|"resume"| classify
+  RF --> respond
+  BF --> respond
+  FA --> respond
+  FH --> respond
+  RAG --> respond
+  respond["respond<br/><small>template + LLM diễn đạt<br/>dữ liệu đã xác minh</small>"]:::llm --> E(["END"])
+  safe --> E
+
+  classDef code fill:#eaf1fd,stroke:#2f6fde,color:#1d2433
+  classDef llm fill:#f3edff,stroke:#8b5cf6,color:#1d2433
+  classDef tool fill:#e6f6ef,stroke:#059669,color:#1d2433
+  classDef hitl fill:#fff4e0,stroke:#d97706,color:#1d2433
+  classDef stop fill:#fdecec,stroke:#dc2626,color:#1d2433
+  </pre></div>
+</section>
+
+<section id="report">
+  <h2>3. Subgraph <code>report_flow</code> — báo cáo theo dõi</h2>
+  <p class="desc">Self-correction chỉ chạy cho lỗi do LLM trích xuất sai và tối đa 2 lần. Lỗi do dữ liệu người dùng thì hỏi lại. Tool ghi chỉ chạy khi validation đạt <b>và</b> người dùng xác nhận.</p>
+  <div class="diagram"><pre class="mermaid">
+flowchart TD
+  IN(["từ classify"]) --> X["extract<br/><small>messages.parse → ReportExtraction<br/>mỗi trường kèm evidence</small>"]:::llm
+  X --> V{"validate<br/><small>6 lớp, thuần code</small>"}:::code
+  V -->|"pass"| PD["present_draft ⏸<br/><small>bản nháp + giải thích từng trường</small>"]:::hitl
+  V -->|"llm_fixable<br/>& correction_count < 2"| C["correct<br/><small>gửi lại lỗi cụ thể</small>"]:::llm
+  C --> V
+  V -->|"ask_user"| Q["clarify ⏸<br/><small>câu hỏi từ template</small>"]:::hitl
+  Q -->|"resume"| X
+  V -->|"hết lượt sửa · block"| H["handoff<br/><small>needs_human_review</small>"]:::stop
+  PD -->|"edit"| AE["apply_user_edits<br/><small>source = user_edit</small>"]:::code
+  AE --> V
+  PD -->|"confirm"| SV["save<br/><small>save_patient_report<br/>+ idempotency_key</small>"]:::tool
+  PD -->|"cancel"| OUT
+  SV --> VS{"verify_save<br/><small>status ok + report_id đọc lại được</small>"}:::code
+  VS -->|"ok"| OUT(["→ respond"])
+  VS -->|"lỗi"| OUT
+  H --> OUT
+
+  classDef code fill:#eaf1fd,stroke:#2f6fde,color:#1d2433
+  classDef llm fill:#f3edff,stroke:#8b5cf6,color:#1d2433
+  classDef tool fill:#e6f6ef,stroke:#059669,color:#1d2433
+  classDef hitl fill:#fff4e0,stroke:#d97706,color:#1d2433
+  classDef stop fill:#fdecec,stroke:#dc2626,color:#1d2433
+  </pre></div>
+</section>
+
+<section id="booking">
+  <h2>4. Subgraph <code>booking_flow</code> — đặt lịch khám</h2>
+  <p class="desc">LLM chỉ trích nguyên văn cụm thời gian; code quy đổi ra ngày. Slot chỉ lấy từ backend; câu chọn slot được code ghép với danh sách đã đưa ra. Có ba điểm dừng chờ người dùng: hỏi lại, chọn slot, xác nhận.</p>
+  <div class="diagram"><pre class="mermaid">
+flowchart TD
+  IN(["từ classify"]) --> EB["extract_booking<br/><small>BookingRequest: khoa, date_expression,<br/>time_expression, bác sĩ, lý do + evidence</small>"]:::llm
+  EB --> RD["resolve_datetime<br/><small>vi_dates + now → ResolvedWindow</small>"]:::code
+  RD --> VB{"validate_booking<br/><small>schema · nghiệp vụ · grounding<br/>thứ↔ngày · ngày lễ · an toàn</small>"}:::code
+  VB -->|"ask_user<br/>mơ hồ · ngày đã qua · thứ≠ngày"| Q["clarify ⏸"]:::hitl
+  Q -->|"resume"| EB
+  VB -->|"llm_fixable"| CB["correct"]:::llm
+  CB --> RD
+  VB -->|"block · hết lượt"| H["handoff"]:::stop
+  VB -->|"pass"| SS["search_slots<br/><small>get_available_slots, ≤ N kết quả</small>"]:::tool
+  SS -->|"không có slot"| OA["offer_alternatives<br/><small>nới ±7 ngày / bỏ ràng buộc bác sĩ</small>"]:::tool
+  OA -->|"có phương án"| PSO
+  OA -->|"vẫn không có"| H
+  SS -->|"có slot"| PSO["present_slot_options ⏸<br/><small>1. Thứ Ba 03/11/2026 09:00 – BS. A …</small>"]:::hitl
+  PSO -->|"giờ / ngày khác<br/>search_rounds < 3"| EB
+  PSO -->|"người dùng chọn"| MS{"match_selection<br/><small>số thứ tự · giờ · tên bác sĩ</small>"}:::code
+  MS -->|"mơ hồ / không khớp"| PSO
+  MS -->|"khớp đúng 1 slot"| PBD["present_booking_draft ⏸<br/><small>đọc lại khoa, bác sĩ,<br/>thứ, ngày, giờ</small>"]:::hitl
+  PBD -->|"edit"| EB
+  PBD -->|"cancel"| OUT
+  PBD -->|"confirm rõ ràng"| CA["create_booking<br/><small>create_appointment(slot_id)<br/>+ idempotency_key</small>"]:::tool
+  CA --> VK{"verify_booking<br/><small>appointment_id đọc lại được<br/>slot & giờ khớp bản đã xác nhận</small>"}:::code
+  VK -->|"ok"| OUT(["→ respond"])
+  VK -->|"conflict · retry < 1"| SS
+  VK -->|"lỗi khác"| OUT
+  H --> OUT
+
+  classDef code fill:#eaf1fd,stroke:#2f6fde,color:#1d2433
+  classDef llm fill:#f3edff,stroke:#8b5cf6,color:#1d2433
+  classDef tool fill:#e6f6ef,stroke:#059669,color:#1d2433
+  classDef hitl fill:#fff4e0,stroke:#d97706,color:#1d2433
+  classDef stop fill:#fdecec,stroke:#dc2626,color:#1d2433
+  </pre></div>
+  <ul class="notes">
+    <li><code>slot_id</code> chọn được phải thuộc <code>offered_slots</code>; điều này được kiểm tra lại trước <code>create_booking</code>.</li>
+    <li>Backend kiểm tra lại toàn bộ quy tắc trong transaction (khóa slot); index <code>UNIQUE (slot_id) WHERE status='booked'</code> chặn đặt trùng.</li>
+  </ul>
+</section>
+
+<section id="validation">
+  <h2>5. Validation 6 lớp &amp; quyết định sửa / hỏi / dừng</h2>
+  <p class="desc">Validator (code) gán <code>resolution</code> cho từng lỗi. Routing là hàm thuần dựa trên <code>resolution</code> và số lần đã sửa, không để LLM tự quyết.</p>
+  <div class="diagram"><pre class="mermaid">
+flowchart TD
+  D["Draft từ LLM<br/><small>ReportExtraction / BookingRequest</small>"]:::llm --> L1
+  subgraph PIPE["validators/pipeline.py — thuần code"]
+    direction LR
+    L1["1 · Schema<br/><small>Pydantic</small>"] --> L2["2 · Business<br/><small>0–10 · 0–7 · giờ làm việc · ngày lễ</small>"]
+    L2 --> L3["3 · Grounding<br/><small>evidence có trong transcript<br/>giá trị parse lại khớp</small>"]
+    L3 --> L4["4 · Consistency<br/><small>mâu thuẫn chéo trường<br/>thứ↔ngày</small>"]
+    L4 --> L6["6 · Safety<br/><small>chẩn đoán · thuốc · cấp cứu</small>"]
+  end
+  L6 --> I["list[ValidationIssue]<br/><small>field · layer · code · suggestion · resolution</small>"]:::code
+  I --> R{"route_after_validate"}:::code
+  R -->|"không có issue"| P["present_draft ⏸"]:::hitl
+  R -->|"có ask_user"| A["clarify ⏸"]:::hitl
+  R -->|"toàn llm_fixable<br/>& count < max"| C["correct"]:::llm
+  R -->|"còn lại"| H["handoff"]:::stop
+  C -.->|"validate lại toàn bộ"| L1
+  T["5 · Tool / result<br/><small>chạy sau tool call:<br/>status ok + ID đọc lại được</small>"]:::tool
+
+  classDef code fill:#eaf1fd,stroke:#2f6fde,color:#1d2433
+  classDef llm fill:#f3edff,stroke:#8b5cf6,color:#1d2433
+  classDef tool fill:#e6f6ef,stroke:#059669,color:#1d2433
+  classDef hitl fill:#fff4e0,stroke:#d97706,color:#1d2433
+  classDef stop fill:#fdecec,stroke:#dc2626,color:#1d2433
+  style PIPE fill:#f8fafc,stroke:#2f6fde
+  </pre></div>
+  <ul class="notes">
+    <li>Ví dụ <code>llm_fixable</code>: sai kiểu dữ liệu, evidence không có trong transcript, "bốn ngày" nhưng trả về 5.</li>
+    <li>Ví dụ <code>ask_user</code>: thiếu trường, người dùng nói "đau 12/10", STT gắn cờ, "thứ Hai ngày 5/11" (05/11/2026 là thứ Năm).</li>
+  </ul>
+</section>
+
+<section id="seq">
+  <h2>6. Đặt lịch bằng giọng nói — luồng end-to-end</h2>
+  <p class="desc">Mỗi lần <code>interrupt()</code> trả về UI rồi kết thúc request; checkpoint lưu trong Postgres. Lựa chọn của người dùng đi vào lại qua <code>POST /resume</code> với <code>Command(resume=...)</code>.</p>
+  <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  actor U as Người dùng
+  participant UI as UI
+  participant API as FastAPI
+  participant STT as faster-whisper
+  participant G as LangGraph
+  participant L as Claude (Bedrock)
+  participant DB as Backend / Postgres
+
+  U->>UI: 🎙 "Đặt lịch khoa PHCN<br/>thứ Ba tuần sau buổi sáng"
+  UI->>API: POST /stt/transcribe (audio)
+  API->>STT: transcribe(vi)
+  STT-->>API: text + xác suất<br/>từng từ + cờ
+  API-->>UI: transcript, tô sáng đoạn nghi ngờ
+  U->>UI: duyệt / sửa transcript
+  UI->>API: POST /chat/{thread}/messages
+  API->>G: ainvoke(transcript đã duyệt)
+  G->>G: ingest → guard_input<br/>→ classify = book_appointment
+  G->>L: extract_booking (structured output)
+  L-->>G: BookingRequest + evidence
+  G->>G: resolve_datetime → 03/11/2026 sáng<br/>validate_booking ✓
+  G->>DB: get_available_slots(khoa, 03/11 sáng)
+  DB-->>G: 3 slot (slot_id do backend sinh)
+  G-->>API: interrupt(present_slot_options)
+  API-->>UI: danh sách slot đánh số
+  U->>UI: 🎙 "cái thứ hai"
+  UI->>API: POST /resume {selection}
+  API->>G: Command(resume=...)
+  G->>G: match_selection → option 2 ∈ offered_slots ✓
+  G-->>API: interrupt(present_booking_draft)
+  API-->>UI: bản đọc lại: "Thứ Ba, 03/11/2026,<br/>09:30 – BS. … – Khoa PHCN"
+  U->>UI: "xác nhận"
+  UI->>API: POST /resume {confirm}
+  API->>G: Command(resume=confirm)
+  G->>DB: create_appointment(slot_id, idempotency_key)
+  alt slot vừa bị người khác đặt
+    DB-->>G: error conflict
+    G->>DB: search_slots lại (tối đa 1 lần)
+  else thành công
+    DB-->>G: ok, appointment_id
+    G->>DB: đọc lại appointment
+    DB-->>G: khớp slot & giờ ✓
+  end
+  G->>L: respond (chỉ diễn đạt<br/>dữ liệu đã xác minh)
+  G-->>API: kết quả + căn cứ
+  API-->>UI: "Đã đặt lịch … (mã lịch hẹn …)"
+  </pre></div>
+</section>
+
+<section id="data">
+  <h2>7. Dữ liệu (PostgreSQL)</h2>
+  <p class="desc">ID và timestamp do database sinh. Hai bảng ghi đều có <code>idempotency_key UNIQUE</code>; <code>appointments</code> thêm partial unique index trên <code>slot_id</code>.</p>
+  <div class="diagram"><pre class="mermaid">
+erDiagram
+  PATIENTS ||--o{ PATIENT_PLANS : has
+  PATIENTS ||--o{ REPORTS : submits
+  PATIENTS ||--o{ APPOINTMENTS : books
+  DEPARTMENTS ||--o{ DOCTORS : has
+  DOCTORS ||--o{ SLOTS : offers
+  SLOTS ||--o| APPOINTMENTS : "booked by (≤1 active)"
+  PATIENT_PLANS }o--|| DEPARTMENTS : "follow-up at"
+
+  REPORTS {
+    uuid id PK
+    string patient_id FK
+    string reporting_period
+    int pain_level
+    int exercise_days
+    jsonb evidence
+    string idempotency_key UK
+    timestamptz created_at
+  }
+  APPOINTMENTS {
+    uuid id PK
+    string patient_id FK
+    string slot_id FK
+    string status
+    jsonb evidence
+    string idempotency_key UK
+    timestamptz created_at
+  }
+  SLOTS {
+    string slot_id PK
+    string doctor_id FK
+    string department_code FK
+    timestamptz start_at
+    timestamptz end_at
+  }
+  AGENT_ATTEMPTS {
+    string thread_id
+    int attempt_no
+    string kind
+    jsonb draft_json
+    jsonb issues_json
+    int latency_ms
+  }
+  TOOL_CALLS {
+    string tool_name
+    string called_by
+    string status
+    string error_code
+    int latency_ms
+  }
+  </pre></div>
+</section>
+
+</main>
+
+<script type="module">
+  try {
+    const { default: mermaid } = await import("https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs");
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: "base",
+      securityLevel: "loose",
+      flowchart: { curve: "basis", htmlLabels: true, nodeSpacing: 36, rankSpacing: 46, useMaxWidth: false },
+      sequence: { useMaxWidth: false, mirrorActors: false },
+      er: { useMaxWidth: false },
+      themeVariables: { fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif", fontSize: "14px", lineColor: "#64748b", primaryColor: "#eaf1fd", primaryBorderColor: "#2f6fde" }
+    });
+    await mermaid.run({ querySelector: ".mermaid" });
+    window.__diagramsReady = true;
+  } catch (e) {
+    document.getElementById("err").style.display = "block";
+    console.error(e);
+  }
+</script>
+</body>
+</html>
