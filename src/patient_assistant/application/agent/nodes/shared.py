@@ -53,6 +53,7 @@ def tool_record(state: AgentState, result: ToolResult, called_by: str = "code") 
             status=result.status,
             error_code=result.error.code.value if result.error else None,
             latency_ms=result.latency_ms,
+            source_ids=result.source_ids,
         ),
     ]
 

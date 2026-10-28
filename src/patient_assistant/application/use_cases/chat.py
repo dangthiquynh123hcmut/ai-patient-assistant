@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from langgraph.types import Command
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from patient_assistant.application.agent.state import (
     AgentResponse,
@@ -13,6 +13,7 @@ from patient_assistant.application.agent.state import (
     InterruptPayload,
     UserDecision,
 )
+from patient_assistant.application.agent.trace import StepTrace, describe_interrupt, describe_step
 from patient_assistant.application.ports.clock import Clock
 from patient_assistant.domain.common import SttFlag
 
@@ -22,6 +23,10 @@ class TurnResult(BaseModel):
     status: Literal["waiting_user", "done"]
     interrupt: InterruptPayload | None = None
     response: AgentResponse | None = None
+    steps: list[StepTrace] = Field(default_factory=list)  # các node đã chạy trong lượt này, kèm diễn giải
+
+
+SUBGRAPH_NODES = ("report_flow", "booking_flow")
 
 
 class NoPendingQuestion(Exception):
@@ -54,16 +59,30 @@ class ChatUseCase:
             raw_input=text,
             stt_flags=stt_flags or [],
         )
-        await self._graph.ainvoke(fresh.model_dump(), self._config(thread_id))
-        return await self._result(thread_id)
+        steps = await self._run(fresh.model_dump(), thread_id)
+        return await self._result(thread_id, steps)
 
     async def resume(self, thread_id: str, patient_id: str, decision: UserDecision) -> TurnResult:
         config = self._config(thread_id)
         snapshot = await self._graph.aget_state(config)
         if not snapshot or not _pending(snapshot) or snapshot.values.get("patient_id") != patient_id:
             raise NoPendingQuestion(thread_id)
-        await self._graph.ainvoke(Command(resume=decision.model_dump(mode="json")), config)
-        return await self._result(thread_id)
+        steps = await self._run(Command(resume=decision.model_dump(mode="json")), thread_id)
+        return await self._result(thread_id, steps)
+
+    async def _run(self, graph_input: Any, thread_id: str) -> list[StepTrace]:
+        """Chạy graph và ghi lại từng node đã chạy (kể cả trong subgraph) để giải thích quyết định."""
+        steps: list[StepTrace] = []
+        async for namespace, chunk in self._graph.astream(
+            graph_input, self._config(thread_id), stream_mode="updates", subgraphs=True
+        ):
+            for node, update in chunk.items():
+                if node == "__interrupt__":
+                    if not namespace:  # interrupt được phát cả ở subgraph lẫn graph cha -> chỉ lấy một lần
+                        steps += [describe_interrupt(len(steps), i.value) for i in update]
+                elif not (not namespace and node in SUBGRAPH_NODES):  # bỏ bản gộp state khi subgraph kết thúc
+                    steps.append(describe_step(len(steps), namespace, node, update))
+        return steps
 
     async def inspect_state(self, thread_id: str) -> AgentState | None:
         """State hiện tại của thread, kể cả khi đang dừng trong subgraph (debug, evaluation).
@@ -80,17 +99,20 @@ class ChatUseCase:
                 values.update(sub.values)
         return AgentState.model_validate(values)
 
-    async def _result(self, thread_id: str) -> TurnResult:
+    async def _result(self, thread_id: str, steps: list[StepTrace]) -> TurnResult:
         snapshot = await self._graph.aget_state(self._config(thread_id))
         pending = _pending(snapshot)
         if pending:
             return TurnResult(
-                thread_id=thread_id, status="waiting_user", interrupt=InterruptPayload.model_validate(pending[0])
+                thread_id=thread_id,
+                status="waiting_user",
+                interrupt=InterruptPayload.model_validate(pending[0]),
+                steps=steps,
             )
         response = snapshot.values.get("response")
         if isinstance(response, dict):
             response = AgentResponse.model_validate(response)
-        return TurnResult(thread_id=thread_id, status="done", response=response)
+        return TurnResult(thread_id=thread_id, status="done", response=response, steps=steps)
 
 
 def _pending(snapshot: Any) -> list[Any]:

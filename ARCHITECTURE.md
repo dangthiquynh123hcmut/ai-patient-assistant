@@ -611,6 +611,7 @@ src/patient_assistant/
       nodes/  common.py  report.py  booking.py  shared.py
       flows/  report_flow.py  booking_flow.py      # subgraph
       graph.py                 # graph chính
+      trace.py                 # diễn giải từng node đã chạy (từ LangGraph stream) cho UI
     use_cases/  chat.py  transcribe.py             # ẩn LangGraph (Command, interrupt) khỏi API
   infrastructure/
     llm/  bedrock.py  offline.py  schema.py  prompts/*.md
@@ -618,6 +619,7 @@ src/patient_assistant/
     persistence/  memory.py  seed.py  sql/{models,repositories,setup}.py
     calendar/vn_holidays.py  clock.py  audit.py
   interface/api/  app.py  schemas.py
+  interface/web/  index.html  styles.css  app.js     # UI tĩnh: chat + panel "cách agent ra quyết định"
   evaluation/                  # lớp ngoài cùng, giống interface: cases, harness, metrics, report, runner, datasets/
   config.py                    # Settings (env PA_*)
   container.py                 # composition root: nơi duy nhất chọn implementation

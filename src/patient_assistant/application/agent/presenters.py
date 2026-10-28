@@ -111,7 +111,7 @@ def report_explanations(
     for name in REPORT_FIELDS:
         value: Any = getattr(draft, name)
         field_issues = [i for i in issues if i.field == name]
-        quote = evidence_for(draft.evidence, name)
+        quote = None if name in edited else evidence_for(draft.evidence, name)  # giá trị sửa tay không còn trích dẫn
         origin = Origin.USER_EDIT if name in edited else Origin.USER_SAID
         if name == "reporting_period" and value is None:
             out.append(

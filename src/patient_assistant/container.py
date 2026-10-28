@@ -35,6 +35,7 @@ class Container:
     transcribe: TranscribeUseCase
     toolbox: Toolbox
     clock: Clock
+    settings: Settings
 
 
 def checkpoint_serde() -> JsonPlusSerializer:
@@ -146,6 +147,7 @@ def assemble(
         transcribe=TranscribeUseCase(stt, settings.stt_confidence_threshold),
         toolbox=toolbox,
         clock=clock,
+        settings=settings,
     )
 
 

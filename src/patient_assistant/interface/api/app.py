@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from patient_assistant.application.agent.state import UserDecision
 from patient_assistant.application.ports.stt import STTError
@@ -17,6 +20,11 @@ from patient_assistant.container import Container, build_container
 from patient_assistant.interface.api.schemas import MessageIn, ResumeIn
 
 MAX_AUDIO_BYTES = 10 * 1024 * 1024
+WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+DEMO_PATIENTS = [
+    {"id": "patient-demo-001", "label": "Bệnh nhân demo (có kế hoạch theo dõi khoa PHCN)"},
+    {"id": "patient-no-plan", "label": "Bệnh nhân chưa có kế hoạch theo dõi"},
+]
 
 
 def _container(request: Request) -> Container:
@@ -43,6 +51,39 @@ def create_app(container_factory: Callable[[], AbstractAsyncContextManager[Conta
             yield
 
     app = FastAPI(title="AI Patient Assistant", version="0.1.0", lifespan=lifespan)
+
+    @app.get("/", include_in_schema=False)
+    async def index() -> RedirectResponse:
+        return RedirectResponse("/ui/")
+
+    @app.get("/v1/meta")
+    async def meta(c: C) -> dict[str, Any]:
+        """Cấu hình đang chạy và dữ liệu giả lập — để UI hiển thị gợi ý."""
+        departments, doctors = await c.toolbox.catalog()
+        s = c.settings
+        return {
+            "llm_provider": s.llm_provider,
+            "llm_model": s.llm_model_id if s.llm_provider == "bedrock" else "offline-rules",
+            "stt_enabled": s.stt_enabled,
+            "stt_model": s.stt_model if s.stt_enabled else None,
+            "now": c.clock.now().isoformat(),
+            "patients": DEMO_PATIENTS,
+            "departments": [d.model_dump() for d in departments],
+            "doctors": [d.model_dump() for d in doctors],
+            "limits": {
+                "max_corrections": s.max_corrections,
+                "max_clarify_rounds": s.max_clarify_rounds,
+                "max_slot_search_rounds": s.max_slot_search_rounds,
+            },
+        }
+
+    @app.get("/v1/chat/{thread_id}/state")
+    async def chat_state(thread_id: str, c: C, pid: P) -> Any:
+        """State hiện tại của hội thoại (dữ liệu giả lập) — để xem chi tiết cách agent ra quyết định."""
+        state = await c.chat.inspect_state(thread_id)
+        if state is None or state.patient_id != pid:
+            raise HTTPException(404, "Không có hội thoại này")
+        return state.model_dump(mode="json", exclude={"now"})
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -83,6 +124,8 @@ def create_app(container_factory: Callable[[], AbstractAsyncContextManager[Conta
             raise HTTPException(503, "Không đọc được báo cáo")
         return result.data
 
+    if WEB_DIR.is_dir():
+        app.mount("/ui", StaticFiles(directory=WEB_DIR, html=True), name="ui")
     return app
 
 

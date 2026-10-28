@@ -31,6 +31,20 @@ Tùy chọn: `.[postgres]` (Postgres + checkpointer Postgres), `.[stt]` (faster-
 
 Lệnh trên chạy 60 case JSONL qua agent thật, rồi xuất báo cáo vào `eval_reports/`. Báo cáo gồm field accuracy, tool call, FP/FN của validator, self-correction, tỷ lệ hỏi lại, và ba metric bắt buộc bằng 0: false-success, slot hallucination, double-booking. Định nghĩa từng metric ở [docs/EVALUATION.md](docs/EVALUATION.md). Thêm `--llm bedrock` để đo với Claude thật (tốn phí).
 
+## Giao diện (UI)
+
+Chạy server (mục **Chạy API** bên dưới), rồi mở **http://127.0.0.1:8000/**.
+
+- **Bên trái — hội thoại.** Gõ hoặc chọn câu mẫu. Bấm 🎙 để ghi âm, hoặc ⤒ để tải file audio (cần bật STT). Transcript được hiện ra để bạn sửa trước khi gửi; các từ nhận dạng kém được tô vàng.
+- **Khi agent hỏi lại hoặc cần xác nhận,** câu hỏi hiện thành thẻ có nút bấm: chọn slot, xác nhận, sửa bản nháp, hủy. Bạn cũng có thể trả lời tự do như khi nói, ví dụ "cái thứ hai" hay "đổi sang buổi chiều".
+- **Bên phải — "Cách agent ra quyết định":**
+  - *Diễn biến:* từng node đã chạy trong mỗi lượt, tô màu theo loại (code, LLM, chờ người dùng, tool, dừng an toàn) kèm lý do; bấm vào một bước để xem dữ liệu chi tiết.
+  - *Kiểm tra & sửa lỗi:* các lần trích xuất và sửa, lỗi validator, ai xử lý lỗi, bộ đếm giới hạn, cách quy đổi ngày giờ, cờ STT.
+  - *Tool:* tool nào đã được gọi, do code hay LLM gọi, kết quả.
+  - *State:* toàn bộ state của hội thoại.
+
+UI là file tĩnh trong `src/patient_assistant/interface/web/` (HTML/CSS/JS thuần, không cần build) và gọi các API `/v1/chat/...`, `/v1/meta`, `/v1/chat/{thread_id}/state`.
+
 ## Chạy API
 
 Mặc định dùng LLM offline (theo luật) và dữ liệu in-memory, không cần AWS:

@@ -6,6 +6,12 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "http.server", "8765", "--directory", "docs"],
       "port": 8765
+    },
+    {
+      "name": "app",
+      "runtimeExecutable": ".venv/bin/uvicorn",
+      "runtimeArgs": ["patient_assistant.interface.api.app:app", "--factory", "--port", "8000"],
+      "port": 8000
     }
   ]
 }

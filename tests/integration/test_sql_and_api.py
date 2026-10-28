@@ -80,3 +80,39 @@ async def test_http_api_round_trip(make_app: Any) -> None:
         assert (await client.post("/v1/chat/api-1/messages", json={"text": "hi"})).status_code == 422
         stt = await client.post("/v1/stt/transcribe", headers=headers, files={"audio": ("a.wav", b"123")})
         assert stt.status_code == 503
+
+
+async def test_ui_and_decision_trace_endpoints(make_app: Any) -> None:
+    container = make_app()
+    app = create_app()
+    app.state.container = container
+    headers = {"X-Patient-Id": PATIENT}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        assert (await client.get("/")).headers["location"] == "/ui/"
+        page = await client.get("/ui/")
+        assert page.status_code == 200 and "Cách agent ra quyết định" in page.text
+        assert (await client.get("/ui/app.js")).status_code == 200
+
+        meta = (await client.get("/v1/meta")).json()
+        assert meta["llm_model"] == "offline-rules" and meta["limits"]["max_corrections"] == 2
+        assert {d["code"] for d in meta["departments"]} == {"PHCN", "CXK", "NOI"}
+
+        turn = (
+            await client.post(
+                "/v1/chat/ui-1/messages",
+                headers=headers,
+                json={"text": "Cho tôi đặt lịch khoa phục hồi chức năng thứ ba tuần sau buổi sáng"},
+            )
+        ).json()
+        nodes = [(s["flow"], s["node"], s["kind"]) for s in turn["steps"]]
+        assert nodes[:3] == [("main", "ingest", "code"), ("main", "guard_input", "code"), ("main", "classify", "code")]
+        assert ("booking_flow", "extract_booking", "llm") in nodes
+        assert nodes[-1] == ("main", "interrupt", "hitl")  # interrupt chỉ xuất hiện một lần
+        resolve_step = next(s for s in turn["steps"] if s["node"] == "resolve_datetime")
+        assert "2026-11-03" in resolve_step["summary"] and "next_week_weekday" in resolve_step["summary"]
+
+        state = (await client.get("/v1/chat/ui-1/state", headers=headers)).json()
+        assert state["intent"] == "book_appointment" and len(state["offered_slots"]) == 3
+        assert state["attempts"][0]["passed"] is True
+        # Người khác không xem được state của hội thoại này.
+        assert (await client.get("/v1/chat/ui-1/state", headers={"X-Patient-Id": "other"})).status_code == 404

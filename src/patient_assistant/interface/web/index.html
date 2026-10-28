@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trợ lý bệnh nhân AI</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">✚</span>
+      <div>
+        <h1>Trợ lý bệnh nhân AI</h1>
+        <p class="sub">Dữ liệu giả lập · dự án học tập · không chẩn đoán</p>
+      </div>
+    </div>
+    <div class="badges" id="badges"></div>
+    <div class="controls">
+      <label class="field">
+        <span>Bệnh nhân</span>
+        <select id="patient"></select>
+      </label>
+      <button id="new-thread" class="btn ghost" type="button">Hội thoại mới</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- ============ Hội thoại ============ -->
+    <section class="panel chat" aria-label="Hội thoại">
+      <div class="panel-head">
+        <h2>Hội thoại</h2>
+        <span class="muted" id="thread-label"></span>
+      </div>
+      <div class="messages" id="messages" aria-live="polite">
+        <div class="empty" id="empty-state">
+          <p class="empty-title">Bắt đầu bằng một câu nói hoặc chọn câu mẫu bên dưới.</p>
+          <p class="muted">Agent sẽ hỏi lại khi thiếu thông tin, đưa bản nháp để bạn xác nhận trước khi lưu,
+            và panel bên phải cho thấy từng bước nó đã quyết định thế nào.</p>
+        </div>
+      </div>
+
+      <div class="samples" id="samples"></div>
+
+      <form class="composer" id="composer" autocomplete="off">
+        <div class="pending-hint" id="pending-hint" hidden></div>
+        <div class="composer-row">
+          <textarea id="input" rows="2" placeholder="Ví dụ: Cho tôi đặt lịch khoa phục hồi chức năng thứ ba tuần sau buổi sáng"></textarea>
+          <div class="composer-actions">
+            <button class="btn icon" id="mic" type="button" title="Ghi âm (STT)">🎙</button>
+            <label class="btn icon" title="Tải file audio">
+              ⤒<input type="file" id="audio-file" accept="audio/*" hidden>
+            </label>
+            <button class="btn primary" id="send" type="submit">Gửi</button>
+          </div>
+        </div>
+        <div class="recording" id="recording" hidden><span class="dot"></span> Đang ghi âm… bấm 🎙 lần nữa để dừng</div>
+      </form>
+    </section>
+
+    <!-- ============ Quyết định của agent ============ -->
+    <section class="panel inspector" aria-label="Cách agent ra quyết định">
+      <div class="panel-head">
+        <h2>Cách agent ra quyết định</h2>
+        <div class="legend">
+          <span><i class="k code"></i>Code</span>
+          <span><i class="k llm"></i>LLM</span>
+          <span><i class="k hitl"></i>Chờ người dùng</span>
+          <span><i class="k tool"></i>Tool / backend</span>
+          <span><i class="k stop"></i>Dừng an toàn</span>
+        </div>
+      </div>
+      <nav class="tabs" role="tablist">
+        <button class="tab active" data-tab="timeline" role="tab">Diễn biến</button>
+        <button class="tab" data-tab="validation" role="tab">Kiểm tra &amp; sửa lỗi</button>
+        <button class="tab" data-tab="tools" role="tab">Tool</button>
+        <button class="tab" data-tab="state" role="tab">State</button>
+      </nav>
+      <div class="tab-body" id="tab-timeline"><p class="muted pad">Chưa có lượt nào.</p></div>
+      <div class="tab-body" id="tab-validation" hidden></div>
+      <div class="tab-body" id="tab-tools" hidden></div>
+      <div class="tab-body" id="tab-state" hidden></div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>
