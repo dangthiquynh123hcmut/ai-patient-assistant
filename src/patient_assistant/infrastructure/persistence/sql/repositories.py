@@ -19,6 +19,7 @@ from patient_assistant.domain.booking.models import (
     Slot,
 )
 from patient_assistant.domain.common import Evidence
+from patient_assistant.domain.patient import PatientProfile
 from patient_assistant.domain.report.models import Report, SymptomChange
 from patient_assistant.domain.text.normalize import tokens
 from patient_assistant.infrastructure.persistence.sql.models import (
@@ -27,6 +28,7 @@ from patient_assistant.infrastructure.persistence.sql.models import (
     DoctorRow,
     KnowledgeDocRow,
     PatientPlanRow,
+    PatientRow,
     ReportRow,
     SlotRow,
 )
@@ -97,6 +99,16 @@ class SqlCatalogRepository:
         async with self._sessions() as session:
             rows = await session.scalars(select(DoctorRow).order_by(DoctorRow.id))
             return [Doctor(id=r.id, name=r.name, department_code=r.department_code) for r in rows]
+
+
+class SqlPatientRepository:
+    def __init__(self, sessions: Sessions) -> None:
+        self._sessions = sessions
+
+    async def get_profile(self, patient_id: str) -> PatientProfile | None:
+        async with self._sessions() as session:
+            row = await session.get(PatientRow, patient_id)
+            return PatientProfile(id=row.id, display_name=row.display_name) if row else None
 
 
 class SqlPlanRepository:

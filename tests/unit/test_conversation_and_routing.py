@@ -27,7 +27,13 @@ from tests.conftest import NOW
         ("Cho xem các báo cáo trước", Intent.GET_REPORT_HISTORY, []),
         ("Báo cáo tuần: đau mức 3, và đặt lịch tái khám", Intent.CREATE_REPORT, [Intent.BOOK_APPOINTMENT]),
         ("Chườm lạnh bao lâu là đủ", Intent.ANSWER_FAQ, []),
-        ("xin chào", None, []),
+        ("xin chào", Intent.SMALL_TALK, []),
+        ("hello", Intent.SMALL_TALK, []),
+        ("cảm ơn bạn nhiều", Intent.SMALL_TALK, []),
+        ("bạn là ai vậy", Intent.SMALL_TALK, []),
+        ("chào bạn, cho tôi đặt lịch khám", Intent.BOOK_APPOINTMENT, []),
+        ("hi, chườm lạnh bao lâu là đủ", Intent.ANSWER_FAQ, []),
+        ("abc xyz", None, []),
     ],
 )
 def test_rule_intents(text: str, primary: Intent | None, secondary: list[Intent]) -> None:
@@ -95,3 +101,35 @@ def test_present_report_routing() -> None:
         routing.after_present_report(_state(decision=UserDecision(action="edit", fields={"pain_level": 4})))
         == "apply_edits"
     )
+
+
+@pytest.mark.parametrize(
+    ("text", "current", "kind"),
+    [
+        ("tập được 4 ngày", Intent.CREATE_REPORT, "answer"),
+        ("thứ năm", Intent.BOOK_APPOINTMENT, "answer"),
+        ("xác nhận", Intent.CREATE_REPORT, "answer"),
+        ("à nhầm, đau mức 8", Intent.CREATE_REPORT, "answer"),
+        ("bạn có biết tôi là ai đâu mà hỏi rồi lưu dữ liệu vào đâu", Intent.CREATE_REPORT, "aside"),
+        ("cảm ơn nhé", Intent.BOOK_APPOINTMENT, "aside"),
+        ("tôi muốn tra cứu thông tin bệnh nhân", Intent.CREATE_REPORT, "switch"),
+        ("xem lịch hẹn của tôi", Intent.CREATE_REPORT, "switch"),
+        ("đặt lịch khám khác", Intent.BOOK_APPOINTMENT, "answer"),
+        ("xem lịch hẹn của tôi", Intent.UNKNOWN, "answer"),  # đang hỏi rõ yêu cầu: để classify xử lý
+    ],
+)
+async def test_reply_triage(text: str, current: Intent, kind: str) -> None:
+    from patient_assistant.application.agent.side_talk import SideTalk
+    from patient_assistant.infrastructure.llm.offline import OfflineRuleLLM
+
+    assert (await SideTalk(OfflineRuleLLM(), None).triage(text, current)).value == kind  # type: ignore[arg-type]
+
+
+def test_continuation_and_context_phrases() -> None:
+    from patient_assistant.domain.conversation import asks_about_assistant_context, is_continuation
+
+    assert is_continuation("vậy giờ bạn lưu đi")
+    assert is_continuation("làm tiếp báo cáo lúc nãy")
+    assert not is_continuation("tập 4 ngày")
+    assert asks_about_assistant_context("dữ liệu của tôi lưu ở đâu")
+    assert not asks_about_assistant_context("tôi đau mức 3")

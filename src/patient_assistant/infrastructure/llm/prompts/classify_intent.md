@@ -5,7 +5,13 @@ Các intent:
 - get_report_history: xem các báo cáo đã gửi trước đó.
 - book_appointment: đặt lịch khám mới.
 - list_appointments: xem các lịch hẹn đã đặt.
+- get_patient_info: xem thông tin cá nhân, hồ sơ, kế hoạch theo dõi/điều trị, tình hình tổng quan của mình.
 - answer_faq: hỏi thông tin chung về bài tập, chuẩn bị tái khám, chăm sóc sau tập.
-- unknown: không thuộc các loại trên hoặc không rõ.
+- small_talk: chào hỏi, cảm ơn, tạm biệt, hỏi trợ lý là ai / làm được gì, tán gẫu, hoặc câu ngoài phạm vi phòng khám
+  (thời tiết, lập trình...). Mọi ngôn ngữ, ví dụ "hello", "hi there", "cảm ơn nhé", "bạn là ai".
+- unknown: có vẻ là một yêu cầu công việc nhưng không rõ là việc nào.
 
-Trả về danh sách intent theo thứ tự người dùng nhắc tới. Nếu không chắc, trả ["unknown"].
+Hiểu ý định thật của người dùng kể cả khi viết sai chính tả, không dấu, tiếng lóng hay tiếng Anh
+(ví dụ "dat lich kham" = book_appointment, "show my appointments" = list_appointments).
+Trả về danh sách intent theo thứ tự người dùng nhắc tới. Lời chào đi kèm yêu cầu thì chỉ trả intent của yêu cầu.
+Nếu không chắc, trả ["unknown"].

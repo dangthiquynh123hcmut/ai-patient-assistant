@@ -21,8 +21,10 @@ def after_classify(state: AgentState) -> str:
         Intent.CREATE_REPORT: "report_flow",
         Intent.BOOK_APPOINTMENT: "booking_flow",
         Intent.LIST_APPOINTMENTS: "fetch_appointments",
+        Intent.GET_PATIENT_INFO: "fetch_patient_info",
         Intent.GET_REPORT_HISTORY: "fetch_history",
         Intent.ANSWER_FAQ: "rag_answer",
+        Intent.SMALL_TALK: "converse",
     }.get(state.intent or Intent.UNKNOWN, "clarify_intent")
 
 

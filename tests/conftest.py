@@ -71,13 +71,16 @@ class FailingLLM(OfflineRuleLLM):
     async def answer_question(self, question: str, tools: list[ToolSpec], max_tool_calls: int) -> GroundedAnswer:
         raise LLMError("unavailable", "down")
 
+    async def converse(self, text: str, context: str | None = None) -> str:
+        raise LLMError("unavailable", "down")
+
 
 @pytest.fixture
 def make_app() -> Callable[..., Container]:
     def _make(llm: Any = None, repos: dict[str, Any] | None = None, **settings: Any) -> Container:
         clock = FixedClock(NOW)
         container = assemble(
-            Settings(**settings),
+            Settings(_env_file=None, **settings),  # type: ignore[call-arg]
             repos or in_memory_repositories(clock),
             llm or OfflineRuleLLM(),
             UnavailableSTT(),
@@ -100,3 +103,26 @@ def done(result: TurnResult, kind: str) -> TurnResult:
     assert result.status == "done", result
     assert result.response is not None and result.response.kind.value == kind, result.response
     return result
+
+
+DEMO_PASSWORD = "demo1234"
+
+
+def api_client(container: Container) -> Any:
+    """Client HTTP gọi thẳng app ASGI, dùng container đã lắp sẵn (bỏ qua lifespan)."""
+    import httpx
+
+    from patient_assistant.interface.api.app import create_app
+
+    app = create_app()
+    app.state.container = container
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+
+
+async def login(client: Any, username: str, password: str = DEMO_PASSWORD) -> dict[str, str]:
+    """Đăng nhập, trả header Bearer cho các request sau."""
+    r = await client.post("/v1/auth/login", json={"username": username, "password": password})
+    assert r.status_code == 200, r.text
+    token = r.cookies.get("pa_session")
+    client.cookies.clear()  # mỗi request tự chọn danh tính qua header, không dính cookie của lần đăng nhập trước
+    return {"Authorization": f"Bearer {token}"}

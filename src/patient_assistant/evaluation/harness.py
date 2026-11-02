@@ -98,12 +98,15 @@ class ScriptedLLM:
     async def answer_question(self, question: str, tools: list[ToolSpec], max_tool_calls: int) -> GroundedAnswer:
         return await self._inner.answer_question(question, tools, max_tool_calls)
 
+    async def converse(self, text: str, context: str | None = None) -> str:
+        return await self._inner.converse(text, context)
+
 
 class UnavailableLLM:
     async def _fail(self, *_: Any, **__: Any) -> Any:
         raise LLMError("unavailable", "injected fault", retryable=True)
 
-    classify_intent = extract_report = extract_booking = choose_slot = answer_question = _fail
+    classify_intent = extract_report = extract_booking = choose_slot = answer_question = converse = _fail
 
 
 async def _raise_unavailable(*_: Any, **__: Any) -> Any:
@@ -152,7 +155,13 @@ class CaseRunner:
             UnavailableLLM() if case.faults.llm_unavailable else ScriptedLLM(self._llm_factory(), case.llm_script)
         )
         container = assemble(
-            Settings(), repos, llm, UnavailableSTT(), clock, memory_checkpointer(), audit=InMemoryAuditLog()
+            Settings(_env_file=None),
+            repos,
+            llm,
+            UnavailableSTT(),
+            clock,
+            memory_checkpointer(),
+            audit=InMemoryAuditLog(),
         )
         return container, repos
 

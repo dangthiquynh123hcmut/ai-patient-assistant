@@ -1,0 +1,7 @@
+{
+  "_comment": "Slot được sinh lại mỗi lần khởi động, tính từ hôm nay. Mỗi bác sĩ làm các ngày working_weekdays (0 = Thứ Hai ... 6 = Chủ Nhật).",
+  "days_ahead": 35,
+  "working_weekdays": [0, 1, 2, 3, 4, 5],
+  "slot_minutes": 30,
+  "start_times": ["08:00", "08:30", "09:00", "09:30", "10:00", "10:30", "14:00", "14:30", "15:00", "15:30"]
+}

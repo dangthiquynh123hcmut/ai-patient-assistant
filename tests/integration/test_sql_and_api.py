@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-import httpx
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -11,8 +10,7 @@ from patient_assistant.application.services.booking_service import BookingServic
 from patient_assistant.domain.booking.policy import BookingPolicy
 from patient_assistant.infrastructure.persistence.sql import repositories as sql
 from patient_assistant.infrastructure.persistence.sql.setup import create_schema, make_engine, seed_demo_data
-from patient_assistant.interface.api.app import create_app
-from tests.conftest import NOW, PATIENT, TZ
+from tests.conftest import NOW, PATIENT, TZ, api_client, login
 
 
 @pytest.fixture
@@ -53,11 +51,8 @@ async def test_sql_slot_search_excludes_booked(sessions: Any) -> None:
 
 
 async def test_http_api_round_trip(make_app: Any) -> None:
-    container = make_app()
-    app = create_app()
-    app.state.container = container  # bỏ qua lifespan, tiêm container đã lắp sẵn
-    headers = {"X-Patient-Id": PATIENT}
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with api_client(make_app()) as client:
+        headers = await login(client, "benhnhan1")
         r = await client.post(
             "/v1/chat/api-1/messages",
             headers=headers,
@@ -77,23 +72,19 @@ async def test_http_api_round_trip(make_app: Any) -> None:
         assert (
             await client.post("/v1/chat/api-1/resume", headers=headers, json={"action": "confirm"})
         ).status_code == 409
-        assert (await client.post("/v1/chat/api-1/messages", json={"text": "hi"})).status_code == 422
+        assert (await client.post("/v1/chat/api-1/messages", headers=headers, json={})).status_code == 422
+        assert (await client.post("/v1/chat/api-1/messages", json={"text": "hi"})).status_code == 401
         stt = await client.post("/v1/stt/transcribe", headers=headers, files={"audio": ("a.wav", b"123")})
         assert stt.status_code == 503
 
 
-async def test_ui_and_decision_trace_endpoints(make_app: Any) -> None:
-    container = make_app()
-    app = create_app()
-    app.state.container = container
-    headers = {"X-Patient-Id": PATIENT}
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        assert (await client.get("/")).headers["location"] == "/ui/"
-        page = await client.get("/ui/")
-        assert page.status_code == 200 and "Cách agent ra quyết định" in page.text
-        assert (await client.get("/ui/app.js")).status_code == 200
+async def test_meta_and_decision_trace_endpoints(make_app: Any) -> None:
+    async with api_client(make_app()) as client:
+        headers = await login(client, "benhnhan1")
+        assert (await client.get("/health")).json() == {"status": "ok"}
 
-        meta = (await client.get("/v1/meta")).json()
+        meta = (await client.get("/v1/meta", headers=headers)).json()
+        assert meta["user"]["patient_id"] == PATIENT and meta["patients"] == []  # bệnh nhân không thấy danh sách
         assert meta["llm_model"] == "offline-rules" and meta["limits"]["max_corrections"] == 2
         assert {d["code"] for d in meta["departments"]} == {"PHCN", "CXK", "NOI"}
 
@@ -115,4 +106,18 @@ async def test_ui_and_decision_trace_endpoints(make_app: Any) -> None:
         assert state["intent"] == "book_appointment" and len(state["offered_slots"]) == 3
         assert state["attempts"][0]["passed"] is True
         # Người khác không xem được state của hội thoại này.
-        assert (await client.get("/v1/chat/ui-1/state", headers={"X-Patient-Id": "other"})).status_code == 404
+        other = await login(client, "benhnhan2")
+        assert (await client.get("/v1/chat/ui-1/state", headers=other)).status_code == 404
+
+
+async def test_sql_seed_with_history(tmp_path: Any) -> None:
+    engine = make_engine(f"sqlite+aiosqlite:///{tmp_path / 'hist.db'}")
+    await create_schema(engine)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    await seed_demo_data(factory, NOW.date(), TZ, with_history=True)
+    await seed_demo_data(factory, NOW.date(), TZ, with_history=True)  # chạy lại không nhân đôi dữ liệu
+    reports = await sql.SqlReportRepository(factory).list_by_patient(PATIENT, 10)
+    appointments = await sql.SqlAppointmentRepository(factory, TZ).list_for_patient(PATIENT)
+    assert [r.pain_level for r in reports] == [5, 6, 7]  # mới nhất trước
+    assert len(appointments) == 1 and appointments[0].slot.start_at.tzinfo is not None
+    await engine.dispose()

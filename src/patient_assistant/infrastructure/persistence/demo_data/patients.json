@@ -1,0 +1,5 @@
+[
+  {"id": "patient-demo-001", "display_name": "Bệnh nhân Demo 1", "label": "Bệnh nhân demo (có kế hoạch theo dõi khoa PHCN, có lịch sử)"},
+  {"id": "patient-demo-002", "display_name": "Bệnh nhân Demo 2", "label": "Bệnh nhân demo 2 (kế hoạch theo dõi khoa Cơ xương khớp)"},
+  {"id": "patient-no-plan", "display_name": "Bệnh nhân Demo 3", "label": "Bệnh nhân chưa có kế hoạch theo dõi"}
+]

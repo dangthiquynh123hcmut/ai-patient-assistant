@@ -18,6 +18,7 @@ from patient_assistant.application.ports.llm import ToolSpec
 from patient_assistant.application.ports.repositories import (
     CatalogRepository,
     KnowledgeRepository,
+    PatientRepository,
     PlanRepository,
 )
 from patient_assistant.application.services.booking_service import BookingService
@@ -68,6 +69,7 @@ class Toolbox:
         catalog: CatalogRepository,
         plans: PlanRepository,
         knowledge: KnowledgeRepository,
+        patients: PatientRepository,
         slot_limit: int = 3,
     ) -> None:
         self._reports = reports
@@ -75,6 +77,7 @@ class Toolbox:
         self._catalog = catalog
         self._plans = plans
         self._knowledge = knowledge
+        self._patients = patients
         self._slot_limit = slot_limit
 
     @property
@@ -94,6 +97,38 @@ class Toolbox:
             return ToolResult.success("get_patient_plan", plan.model_dump(mode="json"), [plan.plan_id])
 
         return await _guarded("get_patient_plan", call)
+
+    async def get_patient_summary(self, patient_id: str, now: datetime) -> ToolResult:
+        """Tổng hợp thông tin của CHÍNH bệnh nhân đang đăng nhập: hồ sơ, kế hoạch, báo cáo gần đây, lịch hẹn.
+
+        Chỉ đọc; ghép nhiều nguồn backend bằng code. patient_id luôn lấy từ phiên đăng nhập.
+        """
+
+        async def call() -> ToolResult:
+            profile = await self._patients.get_profile(patient_id)
+            if profile is None:
+                return ToolResult.failure("get_patient_summary", ToolErrorCode.NOT_FOUND, "Không có hồ sơ bệnh nhân.")
+            plan = await self._plans.get_active_plan(patient_id)
+            departments = {d.code: d.name for d in await self._catalog.list_departments()}
+            reports = (await self._reports.history(patient_id, 4)).data or []
+            upcoming = (await self._booking.upcoming(patient_id, now)).data or []
+            data = {
+                "profile": profile.model_dump(),
+                "plan": plan.model_dump() | {"department_name": departments.get(plan.department_code)}
+                if plan
+                else None,
+                "recent_reports": reports,
+                "upcoming_appointments": upcoming,
+            }
+            ids = [
+                profile.id,
+                *([plan.plan_id] if plan else []),
+                *[r["id"] for r in reports],
+                *[a["id"] for a in upcoming],
+            ]
+            return ToolResult.success("get_patient_summary", data, ids)
+
+        return await _guarded("get_patient_summary", call)
 
     async def get_report_history(self, patient_id: str, limit: int = 5) -> ToolResult:
         return await _guarded("get_report_history", lambda: self._reports.history(patient_id, limit))
@@ -169,6 +204,9 @@ class Toolbox:
         async def appointments(_: BaseModel) -> dict[str, Any]:
             return (await self.list_my_appointments(patient_id, now)).model_dump(mode="json")
 
+        async def summary(_: BaseModel) -> dict[str, Any]:
+            return (await self.get_patient_summary(patient_id, now)).model_dump(mode="json")
+
         return [
             ToolSpec(
                 "search_approved_knowledge",
@@ -184,6 +222,12 @@ class Toolbox:
                 "Xem slot khám còn trống theo khoa và khoảng ngày cụ thể (chỉ để tham khảo, không đặt lịch).",
                 SlotsInput,
                 slots,
+            ),
+            ToolSpec(
+                "get_patient_summary",
+                "Tổng hợp hồ sơ, kế hoạch theo dõi, báo cáo gần đây và lịch hẹn của bệnh nhân đang đăng nhập.",
+                EmptyInput,
+                summary,
             ),
             ToolSpec(
                 "list_my_appointments",

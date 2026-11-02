@@ -1,0 +1,7 @@
+[
+  {"username": "benhnhan1", "display_name": "Bệnh nhân Demo 1", "role": "patient", "patient_id": "patient-demo-001"},
+  {"username": "benhnhan2", "display_name": "Bệnh nhân Demo 2", "role": "patient", "patient_id": "patient-demo-002"},
+  {"username": "benhnhan3", "display_name": "Bệnh nhân Demo 3", "role": "patient", "patient_id": "patient-no-plan"},
+  {"username": "bacsi", "display_name": "BS. Trần Văn An", "role": "staff"},
+  {"username": "admin", "display_name": "Quản trị viên", "role": "admin"}
+]

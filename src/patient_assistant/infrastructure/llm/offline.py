@@ -18,7 +18,7 @@ from patient_assistant.application.ports.llm import (
     ToolSpec,
 )
 from patient_assistant.domain.booking.models import SlotOption
-from patient_assistant.domain.conversation import Intent
+from patient_assistant.domain.conversation import Intent, rank_intents
 from patient_assistant.domain.report.models import SymptomChange
 from patient_assistant.domain.report.phrases import symptom_direction
 from patient_assistant.domain.report.rules import REQUIRED_FIELDS
@@ -44,8 +44,33 @@ _TIME_PATTERNS = [
     re.compile(r"(?:buổi )?(?:sáng|chiều|trưa|tối)"),
     re.compile(rf"(?:khoảng )?{_NUM_WORD} ?(?:giờ|h)(?: ?(?:rưỡi|\d{{1,2}}))?"),
 ]
-_DOCTOR = re.compile(r"(?:bác sĩ|bs) ([a-zà-ỹ]+)")
+_DOCTOR = re.compile(r"(?:bác sĩ|bs) (\w+)")
+# Từ hay đứng sau "bác sĩ" nhưng không phải tên ("gặp bác sĩ khám", "bác sĩ nào").
+_NOT_A_NAME = {"khám", "nào", "ạ", "của", "giỏi", "đó", "nữa", "được", "không", "gì", "tư", "điều", "trực", "ơi"}
 _REASON = re.compile(r"(?:vì|do|để) ([^,.;]+)")
+
+
+# Trò chuyện offline: câu mẫu theo loại, cụm khớp trước được ưu tiên.
+_CHAT_REPLIES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (
+        ("cảm ơn", "cám ơn", "thanks", "thank you"),
+        "Không có gì đâu bạn! Khi nào cần gửi báo cáo theo dõi hay đặt lịch khám, cứ nhắn mình nhé.",
+    ),
+    (
+        ("tạm biệt", "bye"),
+        "Tạm biệt bạn, chúc bạn tập luyện đều và mau hồi phục! Cần gì cứ quay lại nhắn mình nhé.",
+    ),
+    (
+        ("bạn là ai", "bạn tên gì", "bạn làm được gì", "bạn giúp được gì", "bạn có thể làm gì", "bạn có thể giúp gì"),
+        "Mình là trợ lý ảo của phòng khám. Mình giúp bạn gửi báo cáo theo dõi hằng tuần, xem lại báo cáo và "
+        "thông tin điều trị, đặt hoặc xem lịch khám, và trả lời câu hỏi về bài tập, chăm sóc sau tập. "
+        "Bạn muốn bắt đầu với việc nào?",
+    ),
+)
+_CHAT_GREETING = (
+    "Chào bạn! Mình là trợ lý ảo của phòng khám. Hôm nay bạn cần gì nào: gửi báo cáo theo dõi tuần này, "
+    "đặt lịch tái khám, hay hỏi về bài tập?"
+)
 
 
 def _clauses(text: str) -> list[str]:
@@ -63,7 +88,13 @@ def _span(text: str, patterns: list[re.Pattern[str]]) -> str | None:
 
 class OfflineRuleLLM:
     async def classify_intent(self, text: str) -> list[Intent]:
-        return []
+        """Phân loại lỏng bằng điểm từ khóa: chỉ kết luận khi một intent vượt hẳn các intent khác."""
+        ranked = rank_intents(text)
+        if not ranked or ranked[0][1] < 2:
+            return []
+        if len(ranked) > 1 and ranked[1][1] >= ranked[0][1]:
+            return []  # hòa điểm -> không tự đoán, để agent hỏi lại kèm gợi ý
+        return [ranked[0][0]]
 
     async def extract_report(self, prompt: ReportPrompt) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -118,7 +149,7 @@ class OfflineRuleLLM:
                 found["date_expression"] = _span(text, _DATE_PATTERNS)
             if found["time_expression"] is None:
                 found["time_expression"] = _span(text, _TIME_PATTERNS)
-            if found["doctor_name"] is None and (m := _DOCTOR.search(text)):
+            if found["doctor_name"] is None and (m := _DOCTOR.search(text)) and m.group(1) not in _NOT_A_NAME:
                 found["doctor_name"] = m.group(0)
             if found["reason"] is None and (m := _REASON.search(text)):
                 found["reason"] = m.group(1).strip()
@@ -133,6 +164,10 @@ class OfflineRuleLLM:
 
     async def choose_slot(self, reply: str, options: list[SlotOption]) -> int | None:
         return None
+
+    async def converse(self, text: str, context: str | None = None) -> str:
+        default = "Mình đây! Mình vẫn đang chờ bạn ở bước dưới nhé." if context else _CHAT_GREETING
+        return next((reply for phrases, reply in _CHAT_REPLIES if contains_phrase(text, phrases)), default)
 
     async def answer_question(self, question: str, tools: list[ToolSpec], max_tool_calls: int) -> GroundedAnswer:
         search = next((t for t in tools if t.name == "search_approved_knowledge"), None)

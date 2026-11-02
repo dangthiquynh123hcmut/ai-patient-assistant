@@ -1,0 +1,6 @@
+[
+  {"plan_id": "plan-knee-01", "patient_id": "patient-demo-001", "department_code": "PHCN",
+   "summary": "Phục hồi sau mổ dây chằng gối: tập gập/duỗi gối 5 ngày/tuần, báo cáo mức đau hằng tuần."},
+  {"plan_id": "plan-shoulder-02", "patient_id": "patient-demo-002", "department_code": "CXK",
+   "summary": "Theo dõi viêm quanh khớp vai: tập xoay vai nhẹ 4 ngày/tuần, báo cáo mức đau hằng tuần."}
+]

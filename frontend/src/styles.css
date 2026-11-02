@@ -202,3 +202,41 @@ table.grid td { padding: 6px; border-bottom: 1px solid var(--line); vertical-ali
   position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: #1f2937; color: #fff;
   padding: 10px 16px; border-radius: 10px; font-size: 13px; max-width: 90vw; z-index: 10;
 }
+
+/* ---------------- lựa chọn nhanh khi agent hỏi lại */
+.choices { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.btn.suggested { border-color: var(--primary); color: var(--primary); font-weight: 600; }
+
+/* ---------------- đăng nhập */
+.auth-page { flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.auth-box { width: 100%; max-width: 400px; padding: 24px; gap: 18px; height: auto; }
+.auth-form { display: flex; flex-direction: column; gap: 12px; }
+.auth-form input, .staff-form input, .staff-form select, .filter select {
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink); font-size: 15px;
+}
+.auth-error { margin: 0; color: var(--bad); font-size: 13px; }
+.auth-demo summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.auth-demo ul { padding-left: 18px; margin: 6px 0 0; line-height: 1.6; }
+.userbox { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.userbox .role { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--soft); border: 1px solid var(--line); }
+.loading { margin: auto; color: var(--muted); }
+
+/* ---------------- trang nhân viên / quản trị */
+.top-nav { display: flex; gap: 2px; flex: 1; }
+.top-nav a { padding: 8px 12px; color: var(--muted); text-decoration: none; border-bottom: 2px solid transparent; }
+.top-nav a.active { color: var(--ink); border-bottom-color: var(--primary); font-weight: 600; }
+.staff-layout { display: grid; grid-template-columns: minmax(280px, 380px) 1fr; gap: 14px; padding: 14px; flex: 1; min-height: 0; }
+.staff-layout.single { grid-template-columns: 1fr; }
+@media (max-width: 900px) { .staff-layout { grid-template-columns: 1fr; } }
+.conv-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; }
+.conv-list li button { all: unset; display: block; width: 100%; box-sizing: border-box; padding: 10px 14px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.conv-list li button:hover, .conv-list li.active button { background: var(--soft); }
+.conv-list .title { font-weight: 600; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filter { display: flex; gap: 8px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.filter select { flex: 1; }
+.msg .intent { font-size: 11px; margin-left: 6px; opacity: .8; }
+.users-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.users-table th, .users-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.users-table tr.inactive td { color: var(--muted); }
+.users-table td .btn { margin-right: 6px; padding: 4px 10px; font-size: 13px; }
+.staff-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; padding: 14px; align-items: end; }

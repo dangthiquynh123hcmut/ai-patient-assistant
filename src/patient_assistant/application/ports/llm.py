@@ -79,3 +79,10 @@ class LLMPort(Protocol):
         ...
 
     async def answer_question(self, question: str, tools: list[ToolSpec], max_tool_calls: int) -> GroundedAnswer: ...
+
+    async def converse(self, text: str, context: str | None = None) -> str:
+        """Trả lời tự nhiên câu chào hỏi/trò chuyện, không gọi tool, không đụng dữ liệu bệnh nhân.
+
+        `context`: mô tả việc đang làm dở (do code soạn) khi người dùng hỏi chen giữa chừng.
+        """
+        ...

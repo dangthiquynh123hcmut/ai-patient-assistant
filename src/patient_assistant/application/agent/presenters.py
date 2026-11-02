@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from patient_assistant.application.agent.state import FieldExplanation, Outcome, OutcomeKind
+from patient_assistant.application.agent.state import Choice, FieldExplanation, Outcome, OutcomeKind
 from patient_assistant.domain.booking.models import BookingRequest, Department, Slot, SlotOption
 from patient_assistant.domain.common import Origin, Resolution, ValidationIssue, evidence_for
 from patient_assistant.domain.conversation import Intent, SafetyKind
@@ -35,6 +35,7 @@ INTENT_LABELS = {
     Intent.CREATE_REPORT: "gửi báo cáo theo dõi",
     Intent.BOOK_APPOINTMENT: "đặt lịch khám",
     Intent.LIST_APPOINTMENTS: "xem lịch hẹn",
+    Intent.GET_PATIENT_INFO: "xem thông tin của bạn",
     Intent.GET_REPORT_HISTORY: "xem các báo cáo trước",
     Intent.ANSWER_FAQ: "hỏi thông tin",
 }
@@ -93,6 +94,59 @@ def clarify_question(issues: list[ValidationIssue], departments: list[Department
         if line not in lines:
             lines.append(line)
     return " ".join(lines[:2]) or "Bạn nói rõ hơn giúp mình được không?"
+
+
+# Gợi ý trả lời nhanh cho từng intent: (nhãn nút, câu gửi đi — câu này khớp luật phân loại).
+INTENT_CHOICES: dict[Intent, tuple[str, str]] = {
+    Intent.GET_PATIENT_INFO: ("Xem thông tin của tôi", "xem thông tin của tôi"),
+    Intent.BOOK_APPOINTMENT: ("Đặt lịch khám", "tôi muốn đặt lịch khám"),
+    Intent.LIST_APPOINTMENTS: ("Xem lịch hẹn", "xem lịch hẹn của tôi"),
+    Intent.GET_REPORT_HISTORY: ("Xem báo cáo trước", "xem các báo cáo trước"),
+    Intent.CREATE_REPORT: ("Gửi báo cáo theo dõi", "tôi muốn gửi báo cáo theo dõi"),
+}
+
+
+def intent_choices(ranked: list[Intent]) -> list[Choice]:
+    """Các intent đoán được xếp trước, rồi tới các lựa chọn còn lại."""
+    order = [*ranked, *(i for i in INTENT_CHOICES if i not in ranked)]
+    return [Choice(label=INTENT_CHOICES[i][0], text=INTENT_CHOICES[i][1]) for i in order if i in INTENT_CHOICES]
+
+
+def intent_question(user_text: str, ranked: list[Intent]) -> str:
+    if ranked:
+        guesses = " hoặc ".join(INTENT_LABELS[i] for i in ranked[:2])
+        return (
+            f"Mình chưa chắc ý bạn trong câu “{user_text}”. Có phải bạn muốn {guesses}? "
+            "Bấm một lựa chọn bên dưới, hoặc nói rõ hơn — ví dụ hỏi về bài tập, chăm sóc sau tập."
+        )
+    return (
+        f"Mình chưa rõ ý bạn trong câu “{user_text}”. Bạn muốn làm việc nào dưới đây? Bạn cũng có thể "
+        "hỏi mình về bài tập hay cách chăm sóc sau tập."
+    )
+
+
+CHAT_FALLBACK = (
+    "Chào bạn! Mình là trợ lý ảo của phòng khám. Mình có thể giúp bạn gửi báo cáo theo dõi, "
+    "xem lại báo cáo, đặt hoặc xem lịch khám, và trả lời câu hỏi từ tài liệu hướng dẫn. Bạn cần gì nào?"
+)
+
+
+ASIDE_FALLBACK = "Mình ghi nhận câu của bạn rồi."
+
+
+def assistant_context_text(display_name: str | None, patient_id: str, task: str | None) -> str:
+    """Trả lời bằng code (không qua LLM) câu hỏi "bạn có biết tôi là ai", "dữ liệu lưu ở đâu"."""
+    who = (
+        f"Bạn đang đăng nhập với tài khoản bệnh nhân {display_name} (mã {patient_id})"
+        if display_name
+        else f"Bạn đang đăng nhập với mã bệnh nhân {patient_id}"
+    )
+    doing = f" Thông tin cho việc {task} sẽ" if task else " Báo cáo và lịch hẹn sẽ"
+    return (
+        f"{who}, nên mình chỉ xem và ghi dữ liệu của chính tài khoản này.{doing} được lưu vào hồ sơ theo dõi "
+        "của bạn trong hệ thống phòng khám, và chỉ sau khi bạn xem bản nháp và bấm xác nhận. Hiện chưa có gì "
+        "được lưu. (Bản demo: dữ liệu là giả lập.)"
+    )
 
 
 INTENT_QUESTION = (
@@ -334,10 +388,14 @@ def final_text(outcome: Outcome, safety: SafetyKind, pending: list[Intent]) -> s
             if data
             else "Bạn chưa có lịch hẹn nào sắp tới."
         )
+    elif kind == OutcomeKind.PATIENT_INFO:
+        text = patient_info_text(data, own_only=outcome.code == "own_data_only")
     elif kind == OutcomeKind.ANSWER:
         text = str(data)
         if outcome.source_ids:
             text += f"\n\nNguồn: {', '.join(outcome.source_ids)}"
+    elif kind == OutcomeKind.CHAT:
+        text = str(data)
     elif kind == OutcomeKind.CANCELLED:
         text = "Đã dừng theo yêu cầu của bạn. Chưa có dữ liệu nào được lưu."
     elif kind == OutcomeKind.HANDOFF:
@@ -351,6 +409,61 @@ def final_text(outcome: Outcome, safety: SafetyKind, pending: list[Intent]) -> s
         todo = ", ".join(INTENT_LABELS.get(i, i.value) for i in pending)
         text += f"\n\nBạn cũng nhắc tới việc {todo} — nhắn tiếp để mình làm nhé."
     return text
+
+
+_TREND = {"down": "giảm", "up": "tăng", "flat": "không đổi"}
+
+
+def pain_trend(reports: list[dict[str, Any]]) -> str | None:
+    """Mô tả xu hướng mức đau từ các báo cáo (cũ -> mới). Chỉ mô tả số liệu, không diễn giải y khoa."""
+    if len(reports) < 2:
+        return None
+    ordered = sorted(reports, key=lambda r: r["reporting_period"])
+    first, last = ordered[0]["pain_level"], ordered[-1]["pain_level"]
+    direction = "down" if last < first else "up" if last > first else "flat"
+    return (
+        f"mức đau {_TREND[direction]} từ {first}/10 ({ordered[0]['reporting_period']}) xuống {last}/10"
+        if direction == "down"
+        else f"mức đau {_TREND[direction]}: {first}/10 → {last}/10"
+    )
+
+
+def patient_info_text(data: dict[str, Any], own_only: bool = False) -> str:
+    lines = []
+    if own_only:
+        lines.append("Mình chỉ có thể hiển thị thông tin của chính tài khoản đang đăng nhập.")
+    profile = data["profile"]
+    lines.append(f"Thông tin của {profile['display_name']} (mã {profile['id']}):")
+    plan = data.get("plan")
+    if plan:
+        lines.append(
+            f"- Kế hoạch theo dõi: {plan['department_name'] or plan['department_code']} — {plan['summary']}"
+            f" (mã {plan['plan_id']})"
+        )
+    else:
+        lines.append("- Chưa có kế hoạch theo dõi.")
+    reports = data.get("recent_reports") or []
+    if reports:
+        latest = max(reports, key=lambda r: r["reporting_period"])
+        lines.append(
+            f"- Báo cáo gần nhất {latest['reporting_period']}: đau {latest['pain_level']}/10, "
+            f"tập {latest['exercise_days']} ngày."
+        )
+        trend = pain_trend(reports)
+        if trend:
+            lines.append(f"- {len(reports)} báo cáo gần đây: {trend}.")
+    else:
+        lines.append("- Chưa có báo cáo nào.")
+    upcoming = data.get("upcoming_appointments") or []
+    if upcoming:
+        lines.append(
+            "- Lịch hẹn sắp tới: "
+            + "; ".join(f"{Slot.model_validate(a['slot']).label()} (mã {a['id']})" for a in upcoming)
+        )
+    else:
+        lines.append("- Chưa có lịch hẹn sắp tới.")
+    lines.append("Số liệu lấy trực tiếp từ hệ thống (dữ liệu giả lập); đây không phải đánh giá y khoa.")
+    return "\n".join(lines)
 
 
 def weekday_name(dt: datetime) -> str:

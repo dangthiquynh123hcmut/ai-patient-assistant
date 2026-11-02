@@ -21,7 +21,11 @@ NODES: dict[str, tuple[str, StepKind]] = {
     "clarify_intent": ("Hỏi rõ yêu cầu", "hitl"),
     "fetch_history": ("Lấy báo cáo trước", "tool"),
     "fetch_appointments": ("Lấy lịch hẹn", "tool"),
+    "fetch_patient_info": ("Tổng hợp thông tin bệnh nhân", "tool"),
     "rag_answer": ("Trả lời từ tài liệu đã duyệt", "llm"),
+    "converse": ("Trò chuyện tự nhiên", "llm"),
+    "side_reply": ("Trả lời câu hỏi phụ", "llm"),
+    "switch_task": ("Đổi sang việc mới", "code"),
     "respond": ("Soạn câu trả lời", "code"),
     # report_flow
     "extract": ("LLM trích xuất báo cáo", "llm"),
@@ -47,7 +51,11 @@ NODES: dict[str, tuple[str, StepKind]] = {
 }
 
 _RESOLUTION = {"llm_fixable": "LLM sửa", "ask_user": "hỏi người dùng", "block": "chặn"}
-_INTENT_SOURCE = {"rule": "theo luật (code)", "llm": "bởi LLM vì luật không kết luận được"}
+_INTENT_SOURCE = {
+    "rule": "theo luật (code)",
+    "llm": "bởi LLM vì luật không kết luận được",
+    "context": "nối lại việc dang dở ở lượt trước (người dùng nói tiếp/lưu đi)",
+}
 _REPORT_LABELS = {
     "pain_level": "đau",
     "exercise_days": "số ngày tập",
@@ -173,10 +181,22 @@ def _summary(node: str, u: dict[str, Any]) -> str:  # noqa: C901 - một nhánh 
         if u.get("selected_slot_id"):
             return f"Khớp đúng 1 slot trong danh sách đã đưa: {u['selected_slot_id']}."
         return f"Chưa xác định được: {u.get('notice')} → hỏi lại."
+    if node == "fetch_patient_info":
+        o = u.get("outcome") or {}
+        if o.get("kind") != "patient_info":
+            return _outcome(u) or ""
+        note = (
+            " Người dùng hỏi về người khác → chỉ trả thông tin của tài khoản đang đăng nhập."
+            if o.get("code") == "own_data_only"
+            else ""
+        )
+        return f"Ghép hồ sơ + kế hoạch + báo cáo gần đây + lịch hẹn từ backend (bằng code).{note}"
     if node == "rag_answer":
         if outcome and u["outcome"].get("source_ids"):
             return f"Trả lời dựa trên tài liệu: {', '.join(u['outcome']['source_ids'])}."
         return outcome or ""
+    if node == "converse":
+        return "Câu chào hỏi/trò chuyện → LLM trả lời tự nhiên, không gọi tool, không đọc dữ liệu bệnh nhân."
     if node == "respond":
         response = u.get("response") or {}
         return f"Câu trả lời dựng bằng template từ kết quả đã xác minh (kind={response.get('kind')})."

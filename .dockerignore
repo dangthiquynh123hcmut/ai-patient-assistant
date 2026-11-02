@@ -1,0 +1,26 @@
+# Context build của backend: chỉ cần pyproject, src, alembic.ini, migrations.
+.git
+.venv
+venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.hypothesis
+frontend
+tests
+docs
+data
+models
+eval_reports
+*.db
+.env
+.env.*
+!.env.example
+.claude
+.mcp.json
+*.wav
+*.mp3
+*.m4a
+*.webm

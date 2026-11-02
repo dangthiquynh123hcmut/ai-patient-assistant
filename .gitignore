@@ -11,6 +11,7 @@ __pycache__/
 
 # Dữ liệu sinh ra khi chạy
 *.db
+data/
 eval_reports/
 
 # Bí mật / cấu hình máy cá nhân
@@ -27,3 +28,4 @@ models/
 *.mp3
 *.m4a
 *.webm
+demo_dump.json

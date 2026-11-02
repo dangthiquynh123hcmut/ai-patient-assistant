@@ -1,0 +1,17 @@
+{
+  "_comment": "Lịch sử demo, tính tương đối theo hôm nay để không bị cũ. weeks_ago=1 là tuần trước. Lịch hẹn rơi vào ngày nghỉ sẽ được dời sang ngày làm việc kế tiếp.",
+  "reports": [
+    {"patient_id": "patient-demo-001", "weeks_ago": 3, "pain_level": 7, "exercise_days": 3, "symptom_change": "worse_during_activity",
+     "triggering_activity": "gập gối", "evidence": [{"field": "pain_level", "quote": "đau mức 7"}, {"field": "exercise_days", "quote": "tập 3 ngày"}]},
+    {"patient_id": "patient-demo-001", "weeks_ago": 2, "pain_level": 6, "exercise_days": 4, "symptom_change": "no_change",
+     "triggering_activity": null, "evidence": [{"field": "pain_level", "quote": "đau mức 6"}, {"field": "exercise_days", "quote": "tập 4 ngày"}]},
+    {"patient_id": "patient-demo-001", "weeks_ago": 1, "pain_level": 5, "exercise_days": 5, "symptom_change": "better",
+     "triggering_activity": null, "evidence": [{"field": "pain_level", "quote": "đau mức 5"}, {"field": "exercise_days", "quote": "tập 5 ngày"}]},
+    {"patient_id": "patient-demo-002", "weeks_ago": 1, "pain_level": 4, "exercise_days": 3, "symptom_change": "better",
+     "triggering_activity": "xoay vai", "evidence": [{"field": "pain_level", "quote": "đau mức 4"}, {"field": "exercise_days", "quote": "tập 3 ngày"}]}
+  ],
+  "appointments": [
+    {"patient_id": "patient-demo-001", "doctor_id": "doc-an", "days_from_today": 9, "time": "09:00", "reason": "tái khám định kỳ"},
+    {"patient_id": "patient-demo-002", "doctor_id": "doc-cuong", "days_from_today": 5, "time": "14:30", "reason": "đánh giá lại khớp vai"}
+  ]
+}

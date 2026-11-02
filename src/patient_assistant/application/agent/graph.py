@@ -26,7 +26,9 @@ def build_agent_graph(deps: AgentDeps, checkpointer: BaseCheckpointSaver[Any]) -
     g.add_node("booking_flow", build_booking_flow(deps))
     g.add_node("fetch_history", common.fetch_history)
     g.add_node("fetch_appointments", common.fetch_appointments)
+    g.add_node("fetch_patient_info", common.fetch_patient_info)
     g.add_node("rag_answer", common.rag_answer)
+    g.add_node("converse", common.converse)
     g.add_node("respond", common.respond)
 
     g.add_edge(START, "ingest")
@@ -44,14 +46,24 @@ def build_agent_graph(deps: AgentDeps, checkpointer: BaseCheckpointSaver[Any]) -
             "report_flow",
             "booking_flow",
             "fetch_appointments",
+            "fetch_patient_info",
             "fetch_history",
             "rag_answer",
+            "converse",
             "clarify_intent",
             "respond",
         ],
     )
     g.add_conditional_edges("clarify_intent", routing.after_clarify_intent, ["classify", "respond"])
-    for node in ("report_flow", "booking_flow", "fetch_history", "fetch_appointments", "rag_answer"):
+    for node in (
+        "report_flow",
+        "booking_flow",
+        "fetch_history",
+        "fetch_appointments",
+        "fetch_patient_info",
+        "rag_answer",
+        "converse",
+    ):
         g.add_edge(node, "respond")
     g.add_edge("respond", END)
     return g.compile(checkpointer=checkpointer)

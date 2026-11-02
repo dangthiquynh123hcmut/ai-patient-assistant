@@ -142,8 +142,13 @@ async def test_safety_and_other_intents(make_app: Any) -> None:
     assert "chẩn đoán" in advice.response.text
     faq = done(await app.chat.send_message("t13", PATIENT, "sau khi tập gập gối có nên chườm lạnh bao lâu"), "answer")
     assert faq.response.source_ids
-    unknown = waiting(await app.chat.send_message("t14", PATIENT, "xin chào"), "clarify")
-    assert "Bạn muốn làm gì" in unknown.interrupt.message
+    hello = done(await app.chat.send_message("t14a", PATIENT, "hello"), "chat")
+    assert hello.response.text.startswith("Chào bạn")
+    thanks = done(await app.chat.send_message("t14b", PATIENT, "cảm ơn nhé"), "chat")
+    assert "Không có gì" in thanks.response.text
+    unknown = waiting(await app.chat.send_message("t14", PATIENT, "abc xyz"), "clarify")
+    assert "abc xyz" in unknown.interrupt.message  # hỏi lại có nhắc đúng câu người dùng
+    assert "Xem thông tin của tôi" in [c.label for c in unknown.interrupt.choices]
     done(await app.chat.resume("t14", PATIENT, UserDecision(action="reply", text="xem các báo cáo trước")), "history")
 
 

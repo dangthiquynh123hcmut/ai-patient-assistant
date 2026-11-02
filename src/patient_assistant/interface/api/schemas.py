@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from patient_assistant.domain.account import MIN_PASSWORD_LENGTH
 from patient_assistant.domain.common import SttFlag
 
 
@@ -22,3 +23,13 @@ class ResumeIn(BaseModel):
     text: str | None = Field(None, max_length=2000)
     fields: dict[str, Any] = Field(default_factory=dict)
     option_no: int | None = None
+
+
+class LoginIn(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=128)
+
+
+class UserUpdateIn(BaseModel):
+    active: bool | None = None
+    password: str | None = Field(None, min_length=MIN_PASSWORD_LENGTH, max_length=128)

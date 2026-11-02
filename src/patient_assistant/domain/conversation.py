@@ -16,13 +16,26 @@ class Intent(StrEnum):
     GET_REPORT_HISTORY = "get_report_history"
     BOOK_APPOINTMENT = "book_appointment"
     LIST_APPOINTMENTS = "list_appointments"
+    GET_PATIENT_INFO = "get_patient_info"
     ANSWER_FAQ = "answer_faq"
+    SMALL_TALK = "small_talk"  # chào hỏi, cảm ơn, hỏi trợ lý là ai — trả lời tự nhiên, không chạy nghiệp vụ
     UNKNOWN = "unknown"
 
 
 # ---------------------------------------------------------------- intent (rule trước, LLM sau)
 
 _INTENT_PHRASES: dict[Intent, tuple[str, ...]] = {
+    Intent.GET_PATIENT_INFO: (
+        "thông tin bệnh nhân",
+        "thông tin của tôi",
+        "thông tin cá nhân",
+        "tra cứu thông tin",
+        "hồ sơ",
+        "kế hoạch theo dõi",
+        "kế hoạch điều trị",
+        "tình hình của tôi",
+        "tổng quan",
+    ),
     Intent.LIST_APPOINTMENTS: ("lịch hẹn của tôi", "xem lịch hẹn", "lịch đã đặt", "tôi có lịch hẹn", "các lịch hẹn"),
     Intent.GET_REPORT_HISTORY: ("báo cáo trước", "lịch sử báo cáo", "các báo cáo", "xem báo cáo", "báo cáo cũ"),
     Intent.BOOK_APPOINTMENT: (
@@ -58,7 +71,134 @@ _INTENT_PHRASES: dict[Intent, tuple[str, ...]] = {
         "bao nhiêu",
         "ở đâu",
     ),
+    Intent.SMALL_TALK: (
+        "xin chào",
+        "chào",
+        "hello",
+        "hi",
+        "hey",
+        "alo",
+        "cảm ơn",
+        "cám ơn",
+        "thanks",
+        "thank you",
+        "tạm biệt",
+        "bye",
+        "bạn là ai",
+        "bạn tên gì",
+        "bạn làm được gì",
+        "bạn giúp được gì",
+        "bạn có thể làm gì",
+        "bạn có thể giúp gì",
+    ),
 }
+
+
+# Từ khóa lỏng để XẾP HẠNG intent khi luật cụm từ không kết luận được (gợi ý cho người dùng chọn).
+_INTENT_KEYWORDS: dict[Intent, tuple[str, ...]] = {
+    Intent.GET_PATIENT_INFO: (
+        "thông tin",
+        "hồ sơ",
+        "cá nhân",
+        "kế hoạch",
+        "tra cứu",
+        "bệnh nhân",
+        "tình hình",
+        "tóm tắt",
+        "của tôi",
+    ),
+    Intent.BOOK_APPOINTMENT: ("đặt", "hẹn", "khám", "bác sĩ", "tái khám", "gặp", "lịch"),
+    Intent.LIST_APPOINTMENTS: ("lịch hẹn", "đã đặt", "sắp tới", "lịch khám", "lịch"),
+    Intent.GET_REPORT_HISTORY: ("báo cáo", "lịch sử", "trước", "cũ", "tiến triển"),
+    Intent.CREATE_REPORT: ("đau", "tập", "mức", "triệu chứng", "báo cáo", "gửi"),
+    Intent.ANSWER_FAQ: ("hỏi", "cách", "nên", "hướng dẫn", "chườm", "bài tập", "tại sao", "gì"),
+}
+
+
+# Các việc nhiều bước, có hỏi lại và có thể dang dở giữa chừng.
+FLOW_INTENTS = frozenset({Intent.CREATE_REPORT, Intent.BOOK_APPOINTMENT})
+# Các việc thật sự (không phải trò chuyện / hỏi đáp chung).
+TASK_INTENTS = frozenset(
+    {
+        Intent.CREATE_REPORT,
+        Intent.BOOK_APPOINTMENT,
+        Intent.LIST_APPOINTMENTS,
+        Intent.GET_PATIENT_INFO,
+        Intent.GET_REPORT_HISTORY,
+    }
+)
+
+# Người dùng hỏi về chính cuộc trò chuyện: trợ lý có biết họ là ai, dữ liệu lưu ở đâu, sao lại hỏi.
+_ASSISTANT_CONTEXT = (
+    "tôi là ai",
+    "biết tôi là ai",
+    "biết tôi không",
+    "lưu vào đâu",
+    "lưu ở đâu",
+    "lưu dữ liệu",
+    "dữ liệu lưu",
+    "dữ liệu của tôi",
+    "ai xem được",
+    "có bảo mật",
+    "bảo mật không",
+    "sao lại hỏi",
+    "hỏi làm gì",
+    "tại sao hỏi",
+    "sao bạn hỏi",
+)
+
+
+def asks_about_assistant_context(text: str) -> bool:
+    return contains_phrase(text, _ASSISTANT_CONTEXT) is not None
+
+
+# "lưu đi", "làm tiếp": nối lại việc dang dở ở lượt trước.
+_CONTINUE = (
+    "lưu đi",
+    "lưu lại",
+    "lưu giúp",
+    "lưu báo cáo",
+    "lưu giùm",
+    "tiếp tục",
+    "làm tiếp",
+    "tiếp đi",
+    "đặt tiếp",
+    "đặt đi",
+    "quay lại",
+    "lúc nãy",
+    "hồi nãy",
+)
+
+
+def is_continuation(text: str) -> bool:
+    return contains_phrase(text, _CONTINUE) is not None
+
+
+def rank_intents(text: str) -> list[tuple[Intent, float]]:
+    """Xếp hạng intent theo số từ khóa xuất hiện (cụm nhiều từ nặng hơn). Rỗng nếu không có từ khóa nào."""
+    norm = f" {normalize(text)} "
+    scores: dict[Intent, float] = {}
+    for intent, words in _INTENT_KEYWORDS.items():
+        score = sum(1.0 + 0.5 * (len(w.split()) - 1) for w in words if f" {w} " in norm)
+        if score:
+            scores[intent] = score
+    return sorted(scores.items(), key=lambda kv: -kv[1])
+
+
+_OTHER_PATIENT = (
+    "bệnh nhân khác",
+    "người khác",
+    "của mẹ tôi",
+    "của bố tôi",
+    "của chồng tôi",
+    "của vợ tôi",
+    "của con tôi",
+    "mã bệnh nhân",
+)
+
+
+def asks_about_other_patient(text: str) -> bool:
+    return contains_phrase(text, _OTHER_PATIENT) is not None
 
 
 # "đau 5/10", "tập 3 ngày": có số mới tính là báo cáo — "gối tôi đau, đặt lịch" không phải báo cáo.
@@ -87,6 +227,9 @@ def classify_by_rules(text: str) -> IntentGuess:
         positions.pop(Intent.BOOK_APPOINTMENT, None)
     if Intent.GET_REPORT_HISTORY in positions:
         positions.pop(Intent.CREATE_REPORT, None)
+    # "chào bạn, cho tôi đặt lịch": lời chào đi kèm yêu cầu thì làm yêu cầu.
+    if Intent.SMALL_TALK in positions and len(positions) > 1:
+        positions.pop(Intent.SMALL_TALK)
     if Intent.ANSWER_FAQ in positions and len(positions) > 1:
         positions.pop(Intent.ANSWER_FAQ)
     ordered = sorted(positions, key=positions.__getitem__)

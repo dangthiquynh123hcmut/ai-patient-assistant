@@ -7,15 +7,19 @@ from typing import Any, Literal
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
+from patient_assistant.application.agent.side_talk import ReplyKind, SideTalk
 from patient_assistant.application.agent.state import (
     AgentResponse,
     AgentState,
+    Carryover,
     InterruptPayload,
+    OutcomeKind,
     UserDecision,
 )
-from patient_assistant.application.agent.trace import StepTrace, describe_interrupt, describe_step
+from patient_assistant.application.agent.trace import NODES, StepTrace, describe_interrupt, describe_step
 from patient_assistant.application.ports.clock import Clock
 from patient_assistant.domain.common import SttFlag
+from patient_assistant.domain.conversation import FLOW_INTENTS
 
 
 class TurnResult(BaseModel):
@@ -34,10 +38,11 @@ class NoPendingQuestion(Exception):
 
 
 class ChatUseCase:
-    def __init__(self, graph: Any, clock: Clock, recursion_limit: int) -> None:
+    def __init__(self, graph: Any, clock: Clock, recursion_limit: int, side_talk: SideTalk | None = None) -> None:
         self._graph = graph
         self._clock = clock
         self._recursion_limit = recursion_limit
+        self._side_talk = side_talk
 
     def _config(self, thread_id: str) -> dict[str, Any]:
         return {"configurable": {"thread_id": thread_id}, "recursion_limit": self._recursion_limit}
@@ -50,7 +55,8 @@ class ChatUseCase:
         input_source: Literal["text", "voice"] = "text",
         stt_flags: list[SttFlag] | None = None,
     ) -> TurnResult:
-        """Bắt đầu một lượt mới. Toàn bộ state của lượt được đặt lại (mỗi lượt một intent chính)."""
+        """Bắt đầu một lượt mới. State của lượt được đặt lại (mỗi lượt một intent chính); chỉ giữ việc dang dở
+        của lượt trước để người dùng có thể nói "lưu đi", "làm tiếp" mà không phải kể lại từ đầu."""
         fresh = AgentState(
             thread_id=thread_id,
             patient_id=patient_id,
@@ -58,6 +64,7 @@ class ChatUseCase:
             input_source=input_source,
             raw_input=text,
             stt_flags=stt_flags or [],
+            carryover=_carryover(await self.inspect_state(thread_id), patient_id),
         )
         steps = await self._run(fresh.model_dump(), thread_id)
         return await self._result(thread_id, steps)
@@ -67,6 +74,35 @@ class ChatUseCase:
         snapshot = await self._graph.aget_state(config)
         if not snapshot or not _pending(snapshot) or snapshot.values.get("patient_id") != patient_id:
             raise NoPendingQuestion(thread_id)
+        if self._side_talk and decision.action == "reply" and decision.text:
+            state = await self.inspect_state(thread_id)
+            assert state is not None
+            kind = await self._side_talk.triage(decision.text, state.intent)
+            if kind == ReplyKind.SWITCH:
+                switched = await self.send_message(thread_id, patient_id, decision.text)
+                note = _step(
+                    "switch_task",
+                    "Câu trả lời là một yêu cầu khác → bắt đầu việc mới; việc đang làm được "
+                    "giữ lại, nói “làm tiếp” hoặc “lưu đi” để quay lại.",
+                )
+                steps = [note, *switched.steps]
+                return switched.model_copy(
+                    update={"steps": [s.model_copy(update={"index": i}) for i, s in enumerate(steps)]}
+                )
+            if kind == ReplyKind.ASIDE:
+                pending = InterruptPayload.model_validate(_pending(snapshot)[0])
+                reply = await self._side_talk.answer(decision.text, state, pending.message)
+                note = _step(
+                    "side_reply",
+                    "Câu người dùng là câu hỏi chen ngang, không phải câu trả lời → trả lời "
+                    "riêng, không đưa vào dữ liệu, không tính lượt hỏi lại, rồi hỏi lại đúng câu đang chờ.",
+                )
+                return TurnResult(
+                    thread_id=thread_id,
+                    status="waiting_user",
+                    interrupt=pending.model_copy(update={"message": f"{reply}\n\n{pending.message}"}),
+                    steps=[note],
+                )
         steps = await self._run(Command(resume=decision.model_dump(mode="json")), thread_id)
         return await self._result(thread_id, steps)
 
@@ -113,6 +149,23 @@ class ChatUseCase:
         if isinstance(response, dict):
             response = AgentResponse.model_validate(response)
         return TurnResult(thread_id=thread_id, status="done", response=response, steps=steps)
+
+
+def _step(node: str, summary: str) -> StepTrace:
+    title, kind = NODES[node]
+    return StepTrace(index=0, flow="main", node=node, title=title, kind=kind, summary=summary)
+
+
+def _carryover(previous: AgentState | None, patient_id: str) -> Carryover | None:
+    """Việc nhiều bước của lượt trước còn dang dở: bị bỏ giữa chừng (đổi việc) hoặc chuyển nhân viên vì
+    hỏi lại quá nhiều. Việc đã lưu, đã hủy hay lỗi thì không nối lại. Qua các lượt việc khác thì vẫn giữ."""
+    if previous is None or previous.patient_id != patient_id:
+        return None
+    if previous.intent in FLOW_INTENTS:
+        if previous.outcome is None or previous.outcome.kind == OutcomeKind.HANDOFF:
+            return Carryover(intent=previous.intent, sources=previous.sources())
+        return None
+    return previous.carryover.model_copy(update={"just_left": False}) if previous.carryover else None
 
 
 def _pending(snapshot: Any) -> list[Any]:

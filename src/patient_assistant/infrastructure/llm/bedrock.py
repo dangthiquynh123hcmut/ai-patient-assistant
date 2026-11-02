@@ -1,13 +1,24 @@
-"""Adapter LLMPort gọi Claude trên Amazon Bedrock qua Anthropic SDK (client Bedrock Mantle, xác thực IAM).
+"""Adapter LLMPort gọi Claude trên Amazon Bedrock qua Anthropic SDK (xác thực IAM).
 
-Ghi chú cho Claude Opus 5.5: không gửi temperature/top_p; không tắt được thinking — điều khiển bằng
-`output_config.effort`; không dùng tool_choice any/tool; luôn kiểm tra stop_reason trước khi đọc nội dung.
+Hai endpoint, chọn theo dạng model ID:
+- Mantle (Messages API): `anthropic.claude-opus-5-5`.
+- bedrock-runtime (InvokeModel): ID có hậu tố phiên bản hoặc tiền tố inference profile,
+  ví dụ `global.anthropic.claude-opus-4-6-v1`, `anthropic.claude-haiku-4-5-20251001-v1:0`.
+
+Ghi chú: không gửi temperature/top_p; không dùng tool_choice any/tool; effort `xhigh` chỉ có từ Opus 4.7;
+cache_control đặt trên từng block (bedrock-runtime với Opus 4.6 trở về trước từ chối cache_control cấp
+request); luôn kiểm tra stop_reason trước khi đọc nội dung.
+
+SDK mặc định gửi API version `2026-10-21`; trên bedrock-runtime version này chỉ nhận Claude 4.7 trở lên,
+nên đường bedrock-runtime ghim `anthropic_version=bedrock-2023-05-31` (mọi model đều nhận). Code này không gửi
+temperature/top_p/top_k nên hai version cho cùng hành vi.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import Callable
 from datetime import datetime
 from importlib import resources
@@ -54,6 +65,15 @@ def _render_feedback(feedback: CorrectionFeedback | None) -> str:
     )
 
 
+_RUNTIME_API_VERSION = "bedrock-2023-05-31"
+_RUNTIME_MODEL_ID = re.compile(r"^(global|us|eu|apac|jp|au|ca)\.|-v\d+(:\d+)?$")
+
+
+def uses_bedrock_runtime(model_id: str) -> bool:
+    """ID dạng inference profile / có phiên bản chỉ chạy trên bedrock-runtime, không chạy trên Mantle."""
+    return bool(_RUNTIME_MODEL_ID.search(model_id))
+
+
 class _IntentList(BaseModel):
     intents: list[Intent]
 
@@ -70,23 +90,41 @@ class AnthropicBedrockLLM:
         effort_extract: str = "medium",
         effort_light: str = "low",
         max_tokens: int = 8000,
+        extra_body: dict[str, Any] | None = None,
     ) -> None:
         self._client = client_factory()
         self._model = model_id
+        self._extra_body = extra_body
         self._effort_extract = effort_extract
         self._effort_light = effort_light
         self._max_tokens = max_tokens
 
     @classmethod
-    def from_region(cls, aws_region: str, model_id: str, **kwargs: Any) -> AnthropicBedrockLLM:
-        return cls(lambda: anthropic.AnthropicBedrockMantle(aws_region=aws_region), model_id, **kwargs)
+    def from_region(
+        cls, aws_region: str | None, model_id: str, aws_profile: str | None = None, **kwargs: Any
+    ) -> AnthropicBedrockLLM:
+        """Xác thực bằng IAM qua chuỗi credential chuẩn của AWS (profile, SSO, assumed role, biến môi trường).
+
+        Quyền IAM cần có: `bedrock:InvokeModel` (bedrock-runtime) hoặc `bedrock-mantle:CreateInference` (Mantle)
+        trên model được phép; model phải được bật trong Amazon Bedrock > Model access.
+        """
+        if uses_bedrock_runtime(model_id):
+            client_cls: Any = anthropic.AnthropicBedrock
+            kwargs.setdefault("extra_body", {"anthropic_version": _RUNTIME_API_VERSION})
+        else:
+            client_cls = anthropic.AnthropicBedrockMantle
+        return cls(lambda: client_cls(aws_region=aws_region, aws_profile=aws_profile), model_id, **kwargs)
 
     # ------------------------------------------------------------------ hạ tầng gọi API
 
     async def _create(self, **params: Any) -> Any:
         try:
             response = await asyncio.to_thread(
-                self._client.messages.create, model=self._model, max_tokens=self._max_tokens, **params
+                self._client.messages.create,
+                model=self._model,
+                max_tokens=self._max_tokens,
+                extra_body=self._extra_body,
+                **params,
             )
         except anthropic.RateLimitError as exc:
             raise LLMError("unavailable", "rate limited", retryable=True) from exc
@@ -116,7 +154,24 @@ class AnthropicBedrockLLM:
             raise LLMError("invalid_output", "structured output is not an object")
         return value
 
+    async def ping(self) -> tuple[str, int, int]:
+        """Gọi thử tối thiểu để kiểm tra credential/quyền/model. Trả (text, input_tokens, output_tokens)."""
+        response = await self._create(
+            messages=[{"role": "user", "content": "Trả lời đúng một từ: ok"}], output_config={"effort": "low"}
+        )
+        text = "".join(b.text for b in response.content if b.type == "text").strip()
+        return text, response.usage.input_tokens, response.usage.output_tokens
+
     # ------------------------------------------------------------------ LLMPort
+
+    async def converse(self, text: str, context: str | None = None) -> str:
+        content = f"<boi_canh>\n{context}\n</boi_canh>\n\n{text}" if context else text
+        response = await self._create(
+            system=[{"type": "text", "text": _prompt("converse"), "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": content}],
+            output_config={"effort": self._effort_light},
+        )
+        return "".join(b.text for b in response.content if b.type == "text").strip()
 
     async def classify_intent(self, text: str) -> list[Intent]:
         raw = await self._structured(_prompt("classify_intent"), text, strict_schema(_IntentList), self._effort_light)

@@ -1,0 +1,5 @@
+[
+  {"code": "PHCN", "name": "Phục hồi chức năng", "aliases": ["phcn", "vật lý trị liệu", "tập phục hồi"]},
+  {"code": "CXK", "name": "Cơ xương khớp", "aliases": ["xương khớp", "khoa khớp"]},
+  {"code": "NOI", "name": "Nội tổng quát", "aliases": ["khoa nội", "nội khoa"]}
+]

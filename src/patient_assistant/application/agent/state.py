@@ -22,7 +22,9 @@ class OutcomeKind(StrEnum):
     APPOINTMENT_BOOKED = "appointment_booked"
     HISTORY = "history"
     APPOINTMENTS = "appointments"
+    PATIENT_INFO = "patient_info"
     ANSWER = "answer"
+    CHAT = "chat"
     CANCELLED = "cancelled"
     HANDOFF = "handoff"
     SAFETY = "safety"
@@ -58,11 +60,19 @@ class FieldExplanation(BaseModel):
     explanation: str
 
 
+class Choice(BaseModel):
+    """Gợi ý trả lời nhanh: UI hiển thị nút `label`, bấm thì gửi `text` như một câu trả lời."""
+
+    label: str
+    text: str
+
+
 class InterruptPayload(BaseModel):
     kind: Literal["clarify", "confirm_report", "choose_slot", "confirm_booking"]
     message: str
     explanations: list[FieldExplanation] = Field(default_factory=list)
     options: list[SlotOption] = Field(default_factory=list)
+    choices: list[Choice] = Field(default_factory=list)
     allowed_actions: list[str]
 
 
@@ -85,6 +95,14 @@ class AttemptRecord(BaseModel):
     passed: bool
 
 
+class Carryover(BaseModel):
+    """Việc nhiều bước bị bỏ dở ở lượt trước (đổi việc giữa chừng, hoặc hỏi lại quá nhiều lần)."""
+
+    intent: Intent
+    sources: list[str]
+    just_left: bool = True  # vừa bỏ dở ở lượt ngay trước -> nhắc người dùng một lần
+
+
 class AgentState(BaseModel):
     # -- định danh lượt
     thread_id: str
@@ -99,8 +117,12 @@ class AgentState(BaseModel):
     # -- phân loại
     intent: Intent | None = None
     pending_intents: list[Intent] = Field(default_factory=list)
-    intent_source: Literal["rule", "llm"] | None = None
+    intent_source: Literal["rule", "llm", "context"] | None = None
     safety: SafetyKind = SafetyKind.OK
+
+    # -- ngữ cảnh từ lượt trước của cùng thread
+    carryover: Carryover | None = None
+    context_sources: list[str] = Field(default_factory=list)  # lời người dùng ở việc dang dở đã nối lại
 
     # -- dùng chung cho các flow
     user_replies: list[str] = Field(default_factory=list)
@@ -137,8 +159,8 @@ class AgentState(BaseModel):
     response: AgentResponse | None = None
 
     def sources(self) -> list[str]:
-        """Nguồn để đối chiếu evidence: lời người dùng ban đầu + các câu trả lời bổ sung."""
-        return [self.raw_input, *self.user_replies]
+        """Nguồn để đối chiếu evidence: lời người dùng ở việc dang dở (nếu nối lại) + lời ban đầu + trả lời bổ sung."""
+        return [*self.context_sources, self.raw_input, *self.user_replies]
 
 
 AgentGraph = CompiledStateGraph[AgentState, None, AgentState, AgentState]

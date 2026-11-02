@@ -35,7 +35,7 @@
 | Agent orchestration | **langgraph** (StateGraph, `interrupt`, `Command`) | Graph có state, routing có điều kiện, HITL native. |
 | Checkpointer | **langgraph-checkpoint-postgres** (`AsyncPostgresSaver`) | Lưu state theo `thread_id`, resume sau interrupt, xem lại lịch sử từng bước (time travel) để debug. |
 | Schema / validation | **pydantic v2**, **pydantic-settings** | Lớp 1 validation (FR-04.1) + config qua env. |
-| LLM | **anthropic** (`anthropic[bedrock]`, client `AnthropicBedrockMantle`) | SDK chính thức, xác thực bằng IAM của AWS, có `messages.parse(output_format=PydanticModel)` cho structured output và `strict: true` cho tool. |
+| LLM | **anthropic** (`anthropic[bedrock]`, client `AnthropicBedrock` cho bedrock-runtime / `AnthropicBedrockMantle` cho Mantle, chọn theo dạng model ID) | SDK chính thức, xác thực bằng IAM của AWS, có `messages.parse(output_format=PydanticModel)` cho structured output và `strict: true` cho tool. |
 | Database | **PostgreSQL 16**, **SQLAlchemy 2.0 (async)** + **asyncpg**, **Alembic** | Một Postgres dùng cho cả dữ liệu nghiệp vụ, checkpoint LangGraph và (sau này) pgvector. |
 | STT | **faster-whisper** (CTranslate2, `int8` trên CPU) | Chạy local trên CPU (FR-01.6), trả xác suất theo từng từ để phát hiện đoạn nhận dạng kém (FR-01.4). |
 | Xử lý audio | **ffmpeg** (hệ thống) / **soundfile** | Chuẩn hóa về 16kHz mono trước khi đưa vào STT. |
@@ -75,7 +75,7 @@ Nếu sau này muốn dùng hệ sinh thái LangChain (`ToolNode`, `with_structu
 
 ### 1.5 Ghi chú về model Claude trên Bedrock
 
-- Model mặc định: **Claude Opus 5.5**, model ID trên Bedrock có tiền tố `anthropic.` → `anthropic.claude-opus-5-5`. Đặt qua env (`LLM_MODEL_ID`) và kiểm tra lại ID/region khả dụng trong Bedrock console của tài khoản.
+- Model mặc định: **Claude Opus 4.6** qua inference profile `global.anthropic.claude-opus-4-6-v1` (bedrock-runtime). ID dạng `anthropic.claude-opus-5-5` sẽ đi qua Mantle. Đặt qua env (`LLM_MODEL_ID`) và kiểm tra lại ID/region khả dụng trong Bedrock console của tài khoản.
 - Có thể cấu hình model riêng theo từng node (`LLM_MODEL_EXTRACT`, `LLM_MODEL_RESPOND`…) để sau này thử model rẻ hơn cho bước đơn giản — chỉ đổi khi bộ eval chứng minh chất lượng giữ nguyên.
 - Những điểm khác API cần biết khi viết code cho Opus 5.5:
   - Không gửi `temperature`/`top_p`/`top_k` (bị từ chối). Tính ổn định đến từ schema + validator, không đến từ temperature.
@@ -617,12 +617,17 @@ src/patient_assistant/
     llm/  bedrock.py  offline.py  schema.py  prompts/*.md
     stt/  faster_whisper.py
     persistence/  memory.py  seed.py  sql/{models,repositories,setup}.py
+                  demo_data/*.json   # khoa, bác sĩ, lịch làm việc, bệnh nhân, kế hoạch, tài liệu, lịch sử demo
     calendar/vn_holidays.py  clock.py  audit.py
   interface/api/  app.py  schemas.py
-  interface/web/  index.html  styles.css  app.js     # UI tĩnh: chat + panel "cách agent ra quyết định"
+  interface/cli/  dump.py  seed.py  check_llm.py     # xuất dữ liệu; seed dữ liệu demo; kiểm tra Bedrock
   evaluation/                  # lớp ngoài cùng, giống interface: cases, harness, metrics, report, runner, datasets/
   config.py                    # Settings (env PA_*)
   container.py                 # composition root: nơi duy nhất chọn implementation
+migrations/                    # Alembic: env.py (async), versions/0001_initial.py
+frontend/                      # React 19 + TypeScript (Vite); nginx/ (proxy /v1, security header); Dockerfile
+  src/api/  auth/  components/  features/{chat,inspector,staff}/  lib/
+Dockerfile  docker-compose.yml # backend image; compose: db (Postgres) + migrate + backend + frontend
 tests/
   unit/                        # vi_dates, vi_numbers, validators, selection, routing, schema, kiến trúc
   integration/                 # graph thật qua interrupt; SQL (SQLite) đặt trùng đồng thời; HTTP API;
@@ -649,7 +654,13 @@ tests/
 | `knowledge_docs` | `doc_id`, `title`, `content`, `tsvector` (FTS); sau thêm cột `embedding vector`. |
 | `agent_attempts` | `thread_id`, `turn_id`, `attempt_no`, `kind` (extract/correct), `draft_json`, `issues_json`, `model_id`, `latency_ms`, `tokens` (FR-06.6). |
 | `tool_calls` | `tool_name`, `args_json` (đã che PII), `status`, `error_code`, `latency_ms`, `called_by` (llm/code). |
-| `checkpoints*` | Do `AsyncPostgresSaver.setup()` tạo. |
+| `users` | Tài khoản: `username UNIQUE`, `role` (patient/staff/admin), `patient_id` (bắt buộc với patient), `password_hash` (scrypt), `active`, `failed_logins`, `locked_until`. |
+| `sessions` | Phiên đăng nhập: `token_hash` (SHA-256 của token, không lưu bản rõ), `user_id`, `expires_at`. |
+| `conversations` | Một dòng mỗi hội thoại: `thread_id`, `patient_id` (chủ sở hữu), `title`, `message_count`, `last_kind`, `updated_at`. |
+| `chat_messages` | Mọi câu bệnh nhân gửi và câu trợ lý trả lời: `seq` (thứ tự), `thread_id`, `role`, `action`, `text`, `intent`, `created_at`. |
+| `checkpoints*` | Do `AsyncPostgresSaver.setup()` tạo — chạy trong bước seed (`cli/seed.py`), không chạy lúc backend khởi động. |
+
+Schema do **Alembic** quản lý (`migrations/`, `alembic upgrade head`); `create_all` chỉ còn dùng cho dev/test (`PA_AUTO_CREATE_SCHEMA=true`). Hai bảng `agent_attempts` và `tool_calls` hiện ghi qua `AuditLog` (structlog), chưa thành bảng.
 
 ---
 

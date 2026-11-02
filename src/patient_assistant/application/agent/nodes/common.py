@@ -8,7 +8,14 @@ from pydantic import BaseModel
 
 from patient_assistant.application.agent.deps import AgentDeps
 from patient_assistant.application.agent.nodes.shared import ask_user, is_cancel, tool_record
-from patient_assistant.application.agent.presenters import INTENT_QUESTION, final_text
+from patient_assistant.application.agent.presenters import (
+    CHAT_FALLBACK,
+    INTENT_CHOICES,
+    INTENT_LABELS,
+    final_text,
+    intent_choices,
+    intent_question,
+)
 from patient_assistant.application.agent.state import (
     AgentResponse,
     AgentState,
@@ -21,9 +28,12 @@ from patient_assistant.application.tools.result import ToolCallRecord
 from patient_assistant.domain.conversation import (
     Intent,
     SafetyKind,
+    asks_about_other_patient,
     check_input_safety,
     classify_by_rules,
+    is_continuation,
     output_is_safe,
+    rank_intents,
 )
 
 NO_SOURCE_ANSWER = (
@@ -82,12 +92,23 @@ class CommonNodes:
                 "outcome": Outcome(kind=OutcomeKind.SAFETY, code=verdict.kind.value),
             }
         guess = classify_by_rules(text)
+        carry = state.carryover
+        if carry and guess.primary in (None, carry.intent, Intent.SMALL_TALK) and is_continuation(text):
+            return {
+                "intent": carry.intent,
+                "intent_source": "context",
+                "context_sources": carry.sources,
+                "carryover": None,
+                "notice": f"Mình tiếp tục việc {INTENT_LABELS[carry.intent]} lúc nãy (chưa có gì được lưu).",
+            }
         if guess.primary:
             return {"intent": guess.primary, "pending_intents": guess.secondary, "intent_source": "rule"}
         try:
             intents = [i for i in await self.deps.llm.classify_intent(text) if i != Intent.UNKNOWN]
         except LLMError:
             intents = []
+        if len(intents) > 1:
+            intents = [i for i in intents if i != Intent.SMALL_TALK]
         if not intents:
             return {"intent": Intent.UNKNOWN, "intent_source": "llm"}
         return {"intent": intents[0], "pending_intents": intents[1:], "intent_source": "llm"}
@@ -95,8 +116,16 @@ class CommonNodes:
     async def clarify_intent(self, state: AgentState) -> dict[str, Any]:
         if state.clarify_rounds >= self.deps.limits.max_clarify_rounds:
             return {"outcome": Outcome(kind=OutcomeKind.HANDOFF, code="too_many_rounds")}
+        # Đoán intent gần nhất bằng từ khóa để hỏi lại có trọng tâm, kèm nút chọn nhanh — thay vì menu chung.
+        said = state.user_replies[-1] if state.user_replies else state.raw_input
+        ranked = [i for i, _ in rank_intents(said) if i in INTENT_CHOICES]
         decision = ask_user(
-            InterruptPayload(kind="clarify", message=INTENT_QUESTION, allowed_actions=["reply", "cancel"])
+            InterruptPayload(
+                kind="clarify",
+                message=intent_question(said, ranked),
+                choices=intent_choices(ranked),
+                allowed_actions=["reply", "cancel"],
+            )
         )
         if is_cancel(decision):
             return {"decision": decision, "outcome": Outcome(kind=OutcomeKind.CANCELLED)}
@@ -114,6 +143,25 @@ class CommonNodes:
             else Outcome(kind=OutcomeKind.ERROR, code="tool_unavailable")
         )
         return {"tool_calls": tool_record(state, result), "outcome": outcome}
+
+    async def fetch_patient_info(self, state: AgentState) -> dict[str, Any]:
+        """Chỉ trả thông tin của bệnh nhân đang đăng nhập — kể cả khi người dùng hỏi về người khác."""
+        result = await self.deps.tools.get_patient_summary(state.patient_id, state.now)
+        if not result.ok:
+            return {
+                "tool_calls": tool_record(state, result),
+                "outcome": Outcome(kind=OutcomeKind.ERROR, code="tool_unavailable"),
+            }
+        other = any(asks_about_other_patient(text) for text in state.sources())
+        return {
+            "tool_calls": tool_record(state, result),
+            "outcome": Outcome(
+                kind=OutcomeKind.PATIENT_INFO,
+                code="own_data_only" if other else None,
+                data=result.data,
+                source_ids=result.source_ids,
+            ),
+        }
 
     async def fetch_appointments(self, state: AgentState) -> dict[str, Any]:
         result = await self.deps.tools.list_my_appointments(state.patient_id, state.now)
@@ -152,15 +200,32 @@ class CommonNodes:
             "outcome": Outcome(kind=OutcomeKind.ANSWER, data=answer.text, source_ids=sources),
         }
 
+    async def converse(self, state: AgentState) -> dict[str, Any]:
+        text = state.user_replies[-1] if state.user_replies else state.raw_input
+        try:
+            reply = (await self.deps.llm.converse(text)).strip()
+        except LLMError:
+            reply = ""
+        # Câu trò chuyện vẫn qua cùng bộ lọc đầu ra; lỗi hay rỗng thì dùng câu chào cố định.
+        if not reply or not output_is_safe(reply):
+            reply = CHAT_FALLBACK
+        return {"outcome": Outcome(kind=OutcomeKind.CHAT, data=reply)}
+
     async def respond(self, state: AgentState) -> dict[str, Any]:
         outcome = state.outcome or Outcome(kind=OutcomeKind.ERROR, code="no_outcome")
+        text = final_text(
+            outcome,
+            state.safety,
+            state.pending_intents if outcome.kind not in (OutcomeKind.SAFETY, OutcomeKind.ERROR) else [],
+        )
+        if state.carryover and state.carryover.just_left and outcome.kind != OutcomeKind.SAFETY:
+            text += (
+                f"\n\nViệc {INTENT_LABELS[state.carryover.intent]} lúc nãy chưa xong và chưa được lưu — "
+                "nhắn “làm tiếp” khi bạn muốn quay lại."
+            )
         response = AgentResponse(
             kind=outcome.kind,
-            text=final_text(
-                outcome,
-                state.safety,
-                state.pending_intents if outcome.kind not in (OutcomeKind.SAFETY, OutcomeKind.ERROR) else [],
-            ),
+            text=text,
             source_ids=outcome.source_ids,
             data=outcome.data,
         )

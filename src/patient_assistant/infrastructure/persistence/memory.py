@@ -7,7 +7,13 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from patient_assistant.application.ports.repositories import KnowledgeDoc, NewReport, SlotTakenError
+from patient_assistant.application.ports.repositories import (
+    KnowledgeDoc,
+    NewReport,
+    SlotTakenError,
+    UsernameTakenError,
+)
+from patient_assistant.domain.account import ChatMessage, ConversationSummary, User
 from patient_assistant.domain.booking.models import (
     Appointment,
     AppointmentStatus,
@@ -16,13 +22,14 @@ from patient_assistant.domain.booking.models import (
     PatientPlan,
     Slot,
 )
+from patient_assistant.domain.patient import PatientProfile
 from patient_assistant.domain.report.models import Report
 from patient_assistant.domain.text.normalize import tokens
 
 
 class InMemoryReportRepository:
-    def __init__(self) -> None:
-        self._rows: dict[str, Report] = {}
+    def __init__(self, initial: list[Report] | None = None) -> None:
+        self._rows: dict[str, Report] = {r.id: r for r in initial or []}
 
     async def add(self, report: NewReport) -> Report:
         if any(r.idempotency_key == report.idempotency_key for r in self._rows.values()):
@@ -59,6 +66,14 @@ class InMemoryCatalogRepository:
         return list(self._doctors)
 
 
+class InMemoryPatientRepository:
+    def __init__(self, patients: list[PatientProfile]) -> None:
+        self._patients = {p.id: p for p in patients}
+
+    async def get_profile(self, patient_id: str) -> PatientProfile | None:
+        return self._patients.get(patient_id)
+
+
 class InMemoryPlanRepository:
     def __init__(self, plans: list[PatientPlan]) -> None:
         self._plans = {p.patient_id: p for p in plans}
@@ -70,9 +85,9 @@ class InMemoryPlanRepository:
 class InMemoryBookingStore:
     """Slot + lịch hẹn chung một store để thao tác `book` nguyên tử (giống unique index ở DB)."""
 
-    def __init__(self, slots: list[Slot]) -> None:
+    def __init__(self, slots: list[Slot], appointments: list[Appointment] | None = None) -> None:
         self._slots = {s.slot_id: s for s in slots}
-        self._appointments: dict[str, Appointment] = {}
+        self._appointments: dict[str, Appointment] = {a.id: a for a in appointments or []}
         self._lock = asyncio.Lock()
 
     def all_appointments(self) -> list[Appointment]:
@@ -169,3 +184,103 @@ class InMemoryAuditLog:
 
     async def record(self, kind: str, thread_id: str, payload: dict[str, Any]) -> None:
         self.events.append({"kind": kind, "thread_id": thread_id, **payload})
+
+
+class InMemoryUserRepository:
+    def __init__(self, initial: list[tuple[User, str]] | None = None) -> None:
+        self._rows: dict[str, tuple[User, str]] = {u.id: (u, h) for u, h in initial or []}
+
+    async def add(self, user: User, password_hash: str) -> User:
+        if any(u.username == user.username for u, _ in self._rows.values()):
+            raise UsernameTakenError(user.username)
+        self._rows[user.id] = (user, password_hash)
+        return user
+
+    async def get(self, user_id: str) -> User | None:
+        row = self._rows.get(user_id)
+        return row[0] if row else None
+
+    async def get_credentials(self, username: str) -> tuple[User, str] | None:
+        return next((row for row in self._rows.values() if row[0].username == username), None)
+
+    async def list(self) -> list[User]:
+        return sorted((u for u, _ in self._rows.values()), key=lambda u: u.created_at)
+
+    async def update(
+        self, user_id: str, *, active: bool | None = None, password_hash: str | None = None
+    ) -> User | None:
+        row = self._rows.get(user_id)
+        if row is None:
+            return None
+        user = row[0].model_copy(update={"active": active}) if active is not None else row[0]
+        self._rows[user_id] = (user, password_hash or row[1])
+        return user
+
+    async def count(self) -> int:
+        return len(self._rows)
+
+    async def set_login_state(self, user_id: str, failed_logins: int, locked_until: datetime | None) -> None:
+        user, password_hash = self._rows[user_id]
+        update = {"failed_logins": failed_logins, "locked_until": locked_until}
+        self._rows[user_id] = (user.model_copy(update=update), password_hash)
+
+
+class InMemorySessionRepository:
+    def __init__(self) -> None:
+        self._rows: dict[str, tuple[str, datetime]] = {}
+
+    async def add(self, token_hash: str, user_id: str, expires_at: datetime) -> None:
+        self._rows[token_hash] = (user_id, expires_at)
+
+    async def get(self, token_hash: str) -> tuple[str, datetime] | None:
+        return self._rows.get(token_hash)
+
+    async def delete(self, token_hash: str) -> None:
+        self._rows.pop(token_hash, None)
+
+    async def delete_for_user(self, user_id: str) -> None:
+        self._rows = {k: v for k, v in self._rows.items() if v[0] != user_id}
+
+
+class InMemoryConversationLog:
+    def __init__(self) -> None:
+        self._conversations: dict[str, ConversationSummary] = {}
+        self._messages: dict[str, list[ChatMessage]] = {}
+
+    async def open(self, thread_id: str, user_id: str, patient_id: str, title: str, now: datetime) -> str:
+        found = self._conversations.get(thread_id)
+        if found is None:
+            found = ConversationSummary(
+                thread_id=thread_id,
+                patient_id=patient_id,
+                user_id=user_id,
+                title=title,
+                message_count=0,
+                last_kind=None,
+                created_at=now,
+                updated_at=now,
+            )
+            self._conversations[thread_id] = found
+        return found.patient_id
+
+    async def owner(self, thread_id: str) -> str | None:
+        found = self._conversations.get(thread_id)
+        return found.patient_id if found else None
+
+    async def add_message(self, message: ChatMessage) -> None:
+        self._messages.setdefault(message.thread_id, []).append(message)
+        conv = self._conversations[message.thread_id]
+        self._conversations[message.thread_id] = conv.model_copy(
+            update={
+                "message_count": conv.message_count + 1,
+                "updated_at": message.created_at,
+                "last_kind": message.action if message.role == "assistant" else conv.last_kind,
+            }
+        )
+
+    async def list_conversations(self, patient_id: str | None, limit: int) -> list[ConversationSummary]:
+        rows = [c for c in self._conversations.values() if patient_id is None or c.patient_id == patient_id]
+        return sorted(rows, key=lambda c: c.updated_at, reverse=True)[:limit]
+
+    async def list_messages(self, thread_id: str) -> list[ChatMessage]:
+        return list(self._messages.get(thread_id, []))

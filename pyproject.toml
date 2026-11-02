@@ -12,6 +12,8 @@ dependencies = [
     "python-multipart>=0.0.9",
     "anthropic[bedrock]>=0.70",
     "sqlalchemy[asyncio]>=2.0",
+    "aiosqlite>=0.20",
+    "alembic>=1.13",
     "structlog>=24.1",
     "holidays>=0.60",
 ]
@@ -31,7 +33,6 @@ dev = [
     "pytest-asyncio>=0.24",
     "hypothesis>=6.100",
     "httpx>=0.27",
-    "aiosqlite>=0.20",
     "ruff>=0.6",
     "mypy>=1.11",
 ]
@@ -70,5 +71,10 @@ module = ["patient_assistant.domain.*"]
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["faster_whisper", "langgraph.checkpoint.postgres.*"]
+module = ["faster_whisper", "langgraph.checkpoint.postgres.*", "boto3", "boto3.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Chỉ có khi cài extra `postgres` (image Docker có; môi trường dev/test có thể không).
+module = ["psycopg", "psycopg.*", "psycopg_pool", "langgraph.checkpoint.postgres.*"]
 ignore_missing_imports = true

@@ -1,0 +1,6 @@
+[
+  {"id": "doc-an", "name": "BS. Trần Văn An", "department_code": "PHCN"},
+  {"id": "doc-binh", "name": "BS. Lê Thị Bình", "department_code": "PHCN"},
+  {"id": "doc-cuong", "name": "BS. Phạm Quốc Cường", "department_code": "CXK"},
+  {"id": "doc-dung", "name": "BS. Nguyễn Thu Dung", "department_code": "NOI"}
+]
