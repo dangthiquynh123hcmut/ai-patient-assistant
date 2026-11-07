@@ -624,7 +624,7 @@ src/patient_assistant/
   evaluation/                  # lớp ngoài cùng, giống interface: cases, harness, metrics, report, runner, datasets/
   config.py                    # Settings (env PA_*)
   container.py                 # composition root: nơi duy nhất chọn implementation
-migrations/                    # Alembic: env.py (async), versions/0001_initial.py
+src/.../persistence/sql/migrations/  # Alembic trong package: env.py (async), versions/0001_initial.py
 frontend/                      # React 19 + TypeScript (Vite); nginx/ (proxy /v1, security header); Dockerfile
   src/api/  auth/  components/  features/{chat,inspector,staff}/  lib/
 Dockerfile  docker-compose.yml # backend image; compose: db (Postgres) + migrate + backend + frontend
@@ -660,7 +660,7 @@ tests/
 | `chat_messages` | Mọi câu bệnh nhân gửi và câu trợ lý trả lời: `seq` (thứ tự), `thread_id`, `role`, `action`, `text`, `intent`, `created_at`. |
 | `checkpoints*` | Do `AsyncPostgresSaver.setup()` tạo — chạy trong bước seed (`cli/seed.py`), không chạy lúc backend khởi động. |
 
-Schema do **Alembic** quản lý (`migrations/`, `alembic upgrade head`); `create_all` chỉ còn dùng cho dev/test (`PA_AUTO_CREATE_SCHEMA=true`). Hai bảng `agent_attempts` và `tool_calls` hiện ghi qua `AuditLog` (structlog), chưa thành bảng.
+Schema chỉ do **Alembic** quản lý (`persistence/sql/migrations/`, `alembic upgrade head`), không dùng `create_all` ở đâu cả: dev (`PA_AUTO_CREATE_SCHEMA=true` chạy `upgrade head` lúc khởi động), test và eval (mỗi schema riêng chạy migration) và production (service `migrate`) dùng cùng một lịch sử schema. Hai bảng `agent_attempts` và `tool_calls` hiện ghi qua `AuditLog` (structlog), chưa thành bảng.
 
 ---
 

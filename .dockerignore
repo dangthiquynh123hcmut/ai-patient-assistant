@@ -1,4 +1,4 @@
-# Context build của backend: chỉ cần pyproject, src, alembic.ini, migrations.
+# Context build của backend: chỉ cần pyproject, src (kể cả migration), alembic.ini.
 .git
 .venv
 venv

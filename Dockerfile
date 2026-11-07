@@ -24,8 +24,8 @@ RUN useradd --create-home --uid 1000 app \
     && mkdir -p /home/app/.cache/huggingface && chown -R app:app /home/app/.cache
 COPY --from=build /opt/venv /opt/venv
 WORKDIR /app
+# Migration nằm trong package (đã cài vào venv); alembic.ini chỉ để chạy lệnh `alembic` ở /app.
 COPY alembic.ini ./
-COPY migrations ./migrations
 USER app
 EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \

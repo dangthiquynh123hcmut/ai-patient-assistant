@@ -1,11 +1,19 @@
-"""Tạo engine/schema và nạp dữ liệu giả lập. Production nên dùng Alembic thay cho `create_all`."""
+"""Engine, migration (Alembic) và nạp dữ liệu giả lập.
+
+Bảng chỉ được tạo/đổi qua migration Alembic (`sql/migrations/`), không dùng `metadata.create_all`, nên
+database của dev, test, eval và production luôn đúng cùng một lịch sử schema.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import re
+import threading
 from datetime import date
 from zoneinfo import ZoneInfo
 
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -13,7 +21,6 @@ from sqlalchemy.pool import NullPool
 from patient_assistant.infrastructure.persistence import seed
 from patient_assistant.infrastructure.persistence.sql.models import (
     AppointmentRow,
-    Base,
     DepartmentRow,
     DoctorRow,
     KnowledgeDocRow,
@@ -55,9 +62,31 @@ async def _execute(url: str, statement: str) -> None:
         await engine.dispose()
 
 
-async def create_schema(engine: AsyncEngine) -> None:
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+MIGRATIONS = "patient_assistant.infrastructure.persistence.sql:migrations"
+# Alembic giữ trạng thái chạy migration ở biến toàn cục của module -> chỉ cho một migration chạy mỗi lúc
+# trong một tiến trình (eval chạy nhiều case song song, mỗi case một schema).
+_MIGRATION_LOCK = threading.Lock()
+
+
+def alembic_config(url: str, schema: str | None = None) -> Config:
+    """Cấu hình Alembic dựng bằng code (không cần alembic.ini): migration nằm trong package nên dùng được ở mọi nơi."""
+    config = Config()
+    config.set_main_option("script_location", MIGRATIONS)
+    config.set_main_option("sqlalchemy.url", url.replace("%", "%%"))  # configparser coi % là cú pháp nội suy
+    if schema:
+        config.set_main_option("pa_schema", _checked(schema))
+    return config
+
+
+async def migrate(url: str, schema: str | None = None) -> None:
+    """`alembic upgrade head` — tạo bảng mới hoặc nâng schema lên bản mới nhất (thay cho `create_all`)."""
+
+    def upgrade() -> None:
+        with _MIGRATION_LOCK:
+            command.upgrade(alembic_config(url, schema), "head")
+
+    # env.py tự chạy event loop riêng (asyncio.run) nên phải chạy ở thread khác, ngoài loop hiện tại.
+    await asyncio.to_thread(upgrade)
 
 
 async def ensure_slots(sessions: async_sessionmaker[AsyncSession], today: date, tz: ZoneInfo) -> int:

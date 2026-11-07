@@ -39,9 +39,9 @@ from patient_assistant.infrastructure.persistence.sql import accounts
 from patient_assistant.infrastructure.persistence.sql import repositories as sql
 from patient_assistant.infrastructure.persistence.sql.setup import (
     create_db_schema,
-    create_schema,
     drop_db_schema,
     make_engine,
+    migrate,
     seed_demo_data,
 )
 
@@ -227,8 +227,9 @@ async def open_storage(
     """Postgres là nơi lưu trữ duy nhất: dữ liệu nghiệp vụ (asyncpg) và state hội thoại (checkpointer, psycopg).
 
     `schema`: tạo một schema riêng và xóa nó khi đóng `stack`. Test và eval dùng để mỗi lượt chạy có dữ liệu
-    sạch, không đụng nhau dù chạy song song trên cùng database. Schema riêng luôn mới tinh nên luôn tạo bảng
-    và nạp dữ liệu demo, bất kể `auto_create_schema` / `seed_demo_data` (vốn dành cho database chính).
+    sạch, không đụng nhau dù chạy song song trên cùng database. Schema riêng luôn mới tinh nên luôn chạy
+    migration và nạp dữ liệu demo, bất kể `auto_create_schema` / `seed_demo_data` (vốn dành cho database chính).
+    Bảng luôn được tạo bằng migration Alembic (`alembic upgrade head`), không dùng `create_all`.
     """
     if not settings.database_url:
         raise ValueError("PA_DATABASE_URL là bắt buộc (postgresql+asyncpg://user:pass@host:5432/db)")
@@ -239,7 +240,7 @@ async def open_storage(
     engine = make_engine(settings.database_url, schema)
     stack.push_async_callback(engine.dispose)
     if create:
-        await create_schema(engine)
+        await migrate(settings.database_url, schema)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     now = clock.now()
     if settings.seed_demo_data or schema is not None:

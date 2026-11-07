@@ -27,7 +27,7 @@ Agent LangGraph hỗ trợ bệnh nhân (dữ liệu giả lập, dự án học
 
 - **frontend/** — React 19 + TypeScript, build bằng Vite thành file tĩnh; nginx phục vụ và proxy `/v1/` về backend nên trình duyệt chỉ thấy một origin (cookie phiên HttpOnly, không cần CORS). nginx đặt CSP và các security header.
 - **backend** — chỉ là API. Không giữ state trong RAM: hội thoại đang chờ người dùng trả lời nằm trong checkpoint Postgres, khóa đăng nhập nằm trong bảng `users`, nên chạy nhiều worker/instance được.
-- **migrate** — schema do Alembic quản lý ([migrations/](migrations/)); seed idempotent (danh mục, tài khoản demo, bổ sung slot khám cho đủ số ngày tới, bảng checkpoint).
+- **migrate** — schema do Alembic quản lý ([sql/migrations/](src/patient_assistant/infrastructure/persistence/sql/migrations/)); seed idempotent (danh mục, tài khoản demo, bổ sung slot khám cho đủ số ngày tới, bảng checkpoint).
 - Container backend chạy bằng user thường (uid 1000), Postgres không mở cổng ra ngoài.
 
 ## Chạy bằng Docker
@@ -106,7 +106,7 @@ Chạy một file: `docker compose run --rm test pytest -q tests/integration/tes
 Muốn chạy pytest trực tiếp trên máy thì đặt `PA_TEST_DATABASE_URL=postgresql+asyncpg://...` trỏ tới Postgres.
 
 ```bash
-.venv/bin/ruff check src tests migrations && .venv/bin/mypy
+.venv/bin/ruff check src tests && .venv/bin/mypy
 ```
 
 ```bash
@@ -143,8 +143,9 @@ File được kiểm tra khi khởi động: sai định dạng, hoặc tham chi
 **Database:**
 - Chỉ dùng **PostgreSQL**, chạy bằng service `db` của Docker compose (`docker compose up -d db`); `PA_DATABASE_URL` là bắt buộc. Cả dữ liệu nghiệp vụ lẫn state hội thoại của LangGraph (checkpointer) đều nằm trong database này. Không còn chế độ in-memory hay SQLite.
 - Cổng của `db` chỉ mở cho localhost (`127.0.0.1:${DB_PORT:-5432}`), để dùng `psql`/công cụ DB hoặc chạy backend ngoài Docker. Dữ liệu nằm trong volume `pgdata`; `docker compose down -v` để làm lại từ đầu.
-- Chạy backend trực tiếp (không qua compose): lần chạy đầu tự tạo bảng, nạp dữ liệu JSON và tài khoản demo; các lần sau giữ nguyên dữ liệu. Trong compose, đặt `PA_AUTO_CREATE_SCHEMA=false` và `PA_SEED_DEMO_DATA=false`, schema do `alembic upgrade head` quản lý và dữ liệu do `python -m patient_assistant.interface.cli.seed` nạp (service `migrate` làm sẵn).
-- Đổi `sql/models.py` thì sinh migration mới: `alembic revision --autogenerate -m "mô tả"`, đọc lại file sinh ra, rồi `alembic upgrade head`.
+- Bảng **chỉ** được tạo/đổi bằng migration Alembic, không dùng `metadata.create_all`. Migration nằm trong package ([sql/migrations/](src/patient_assistant/infrastructure/persistence/sql/migrations/)) nên được cài cùng code: server, test, eval và service `migrate` đều chạy cùng một lịch sử schema.
+- Chạy backend trực tiếp (không qua compose): lần chạy đầu tự chạy `alembic upgrade head`, nạp dữ liệu JSON và tài khoản demo; các lần sau giữ nguyên dữ liệu. Trong compose, đặt `PA_AUTO_CREATE_SCHEMA=false` và `PA_SEED_DEMO_DATA=false`, schema do `alembic upgrade head` quản lý và dữ liệu do `python -m patient_assistant.interface.cli.seed` nạp (service `migrate` làm sẵn).
+- Đổi `sql/models.py` thì sinh migration mới (chạy ở thư mục gốc, có `alembic.ini`, cần `PA_DATABASE_URL` trỏ tới DB đã ở bản mới nhất): `alembic revision --autogenerate -m "mô tả"`, đọc lại file sinh ra, rồi `alembic upgrade head`. Không sửa bảng bằng tay hay bằng `create_all`: `test_migrations.py` sẽ báo lệch giữa models và migration.
 
 Test và eval chạy mỗi test/case trong một schema Postgres riêng, bắt đầu sạch (không nạp `history.json`) để kết quả tái lập được; schema bị xóa khi chạy xong.
 

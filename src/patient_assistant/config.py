@@ -24,7 +24,8 @@ class Settings(BaseSettings):
     # Lưu trữ: chỉ PostgreSQL (dữ liệu nghiệp vụ + state hội thoại của LangGraph), bắt buộc.
     # postgresql+asyncpg://user:pass@localhost:5432/patient_assistant — checkpointer dùng cùng database này.
     database_url: str | None = None
-    # Dev/test: server tự tạo bảng và nạp dữ liệu demo lúc khởi động. Production (docker compose): tắt cả hai —
+    # Dev/test: server tự chạy migration Alembic (`upgrade head`) và nạp dữ liệu demo lúc khởi động.
+    # Production (docker compose): tắt cả hai —
     # schema do `alembic upgrade head` quản lý, dữ liệu demo do `python -m patient_assistant.interface.cli.seed`.
     auto_create_schema: bool = True
     checkpointer_pool_size: int = 10

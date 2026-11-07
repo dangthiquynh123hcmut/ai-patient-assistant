@@ -17,7 +17,7 @@ target_metadata = Base.metadata
 
 
 def _url() -> str:
-    # Test truyền URL (và schema riêng) qua config; còn lại đọc PA_DATABASE_URL giống app.
+    # App/test truyền URL (và schema riêng) qua config (`setup.alembic_config`); CLI thì đọc PA_DATABASE_URL.
     url = config.get_main_option("sqlalchemy.url") or Settings().database_url
     if not url:
         raise SystemExit("PA_DATABASE_URL chưa đặt")
