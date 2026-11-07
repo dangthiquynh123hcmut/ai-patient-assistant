@@ -17,7 +17,7 @@ target_metadata = Base.metadata
 
 
 def _url() -> str:
-    # Test truyền URL qua config; còn lại đọc PA_DATABASE_URL giống app.
+    # Test truyền URL (và schema riêng) qua config; còn lại đọc PA_DATABASE_URL giống app.
     url = config.get_main_option("sqlalchemy.url") or Settings().database_url
     if not url:
         raise SystemExit("PA_DATABASE_URL chưa đặt")
@@ -25,13 +25,7 @@ def _url() -> str:
 
 
 def _configure(**kwargs: object) -> None:
-    url = _url()
-    context.configure(
-        target_metadata=target_metadata,
-        compare_type=True,
-        render_as_batch=url.startswith("sqlite"),  # SQLite không ALTER được nhiều thứ -> batch mode
-        **kwargs,  # type: ignore[arg-type]
-    )
+    context.configure(target_metadata=target_metadata, compare_type=True, **kwargs)  # type: ignore[arg-type]
 
 
 def run_offline() -> None:
@@ -48,7 +42,9 @@ def _run(connection: Connection) -> None:
 
 
 async def run_online() -> None:
-    engine = create_async_engine(_url(), poolclass=NullPool)
+    schema = config.get_main_option("pa_schema")
+    connect_args = {"server_settings": {"search_path": schema}} if schema else {}
+    engine = create_async_engine(_url(), poolclass=NullPool, connect_args=connect_args)
     async with engine.connect() as connection:
         await connection.run_sync(_run)
     await engine.dispose()

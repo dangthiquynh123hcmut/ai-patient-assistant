@@ -21,7 +21,7 @@ from patient_assistant.application.use_cases.conversation import NotAllowed
 from patient_assistant.application.use_cases.transcribe import TranscriptReview
 from patient_assistant.config import Settings
 from patient_assistant.container import Container, build_container
-from patient_assistant.domain.account import ChatMessage, ConversationSummary, NewUser, User
+from patient_assistant.domain.account import ChatMessage, ConversationSummary, NewUser, Registration, User
 from patient_assistant.interface.api.schemas import LoginIn, MessageIn, ResumeIn, UserUpdateIn
 
 MAX_AUDIO_BYTES = 10 * 1024 * 1024
@@ -91,12 +91,7 @@ def create_app(container_factory: Callable[[], AbstractAsyncContextManager[Conta
 
     # ------------------------------------------------------------------ đăng nhập
 
-    @app.post("/v1/auth/login")
-    async def login(body: LoginIn, response: Response, c: C) -> User:
-        try:
-            token, user = await c.auth.login(body.username, body.password)
-        except AuthError as exc:
-            raise HTTPException(401, str(exc)) from exc
+    def set_session(response: Response, c: Container, token: str) -> None:
         response.set_cookie(
             SESSION_COOKIE,
             token,
@@ -106,6 +101,34 @@ def create_app(container_factory: Callable[[], AbstractAsyncContextManager[Conta
             secure=c.settings.cookie_secure,
             path="/",
         )
+
+    @app.get("/v1/auth/options")
+    async def auth_options(c: C) -> dict[str, bool]:
+        """Công khai (chưa đăng nhập): trang đăng nhập dùng để biết có hiện nút đăng ký không."""
+        return {"allow_registration": c.settings.allow_registration}
+
+    @app.post("/v1/auth/login")
+    async def login(body: LoginIn, response: Response, c: C) -> User:
+        try:
+            token, user = await c.auth.login(body.username, body.password)
+        except AuthError as exc:
+            raise HTTPException(401, str(exc)) from exc
+        set_session(response, c, token)
+        return user
+
+    @app.post("/v1/auth/register", status_code=201)
+    async def register(body: Registration, response: Response, c: C) -> User:
+        """Tự tạo tài khoản bệnh nhân (kèm hồ sơ bệnh nhân mới) rồi đăng nhập luôn."""
+        if not c.settings.allow_registration:
+            raise HTTPException(403, "Hệ thống đang tắt chức năng tự đăng ký")
+        try:
+            await c.auth.register(body)
+            token, user = await c.auth.login(body.username, body.password)
+        except UsernameTakenError as exc:
+            raise HTTPException(409, "Tên đăng nhập đã có người dùng") from exc
+        except AuthError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        set_session(response, c, token)
         return user
 
     @app.post("/v1/auth/logout", status_code=204)
@@ -125,12 +148,14 @@ def create_app(container_factory: Callable[[], AbstractAsyncContextManager[Conta
         s = c.settings
         return {
             "user": user.model_dump(mode="json"),
-            "llm_provider": s.llm_provider,
-            "llm_model": s.llm_model_id if s.llm_provider == "bedrock" else "offline-rules",
+            "llm_model": s.llm_model_id,
             "stt_enabled": s.stt_enabled,
             "stt_model": s.stt_model if s.stt_enabled else None,
             "now": c.clock.now().isoformat(),
-            "patients": c.patients if user.can_view_conversations else [],
+            "patients": [
+                {"id": p.id, "label": c.patient_labels.get(p.id, p.display_name)}
+                for p in (await c.auth.list_patients() if user.can_view_conversations else [])
+            ],
             "departments": [d.model_dump() for d in departments],
             "doctors": [d.model_dump() for d in doctors],
             "limits": {

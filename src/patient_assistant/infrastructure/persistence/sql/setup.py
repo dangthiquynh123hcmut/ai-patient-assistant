@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from patient_assistant.infrastructure.persistence import seed
 from patient_assistant.infrastructure.persistence.sql.models import (
@@ -21,9 +23,36 @@ from patient_assistant.infrastructure.persistence.sql.models import (
     SlotRow,
 )
 
+_SCHEMA_NAME = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 
-def make_engine(url: str) -> AsyncEngine:
-    return create_async_engine(url, pool_pre_ping=True)
+
+def make_engine(url: str, schema: str | None = None) -> AsyncEngine:
+    """Engine Postgres (asyncpg). `schema`: mọi bảng được tạo/đọc trong schema đó (qua search_path)."""
+    connect_args = {"server_settings": {"search_path": _checked(schema)}} if schema else {}
+    return create_async_engine(url, pool_pre_ping=True, connect_args=connect_args)
+
+
+def _checked(schema: str) -> str:
+    if not _SCHEMA_NAME.match(schema):
+        raise ValueError(f"Tên schema không hợp lệ: {schema!r}")
+    return schema
+
+
+async def create_db_schema(url: str, schema: str) -> None:
+    await _execute(url, f'CREATE SCHEMA IF NOT EXISTS "{_checked(schema)}"')
+
+
+async def drop_db_schema(url: str, schema: str) -> None:
+    await _execute(url, f'DROP SCHEMA IF EXISTS "{_checked(schema)}" CASCADE')
+
+
+async def _execute(url: str, statement: str) -> None:
+    engine = create_async_engine(url, poolclass=NullPool)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text(statement))
+    finally:
+        await engine.dispose()
 
 
 async def create_schema(engine: AsyncEngine) -> None:

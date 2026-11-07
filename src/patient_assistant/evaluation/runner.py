@@ -1,7 +1,7 @@
 """CLI chạy bộ đánh giá.
 
-pa-eval                               # LLM offline, toàn bộ dataset
-pa-eval --llm bedrock --suite booking # Claude trên Bedrock (tốn phí), chỉ suite booking
+pa-eval                               # Claude trên Bedrock (tốn phí), toàn bộ dataset
+pa-eval --suite booking               # chỉ suite booking
 pa-eval --fail-on-hard-zero           # exit 1 nếu false-success / slot hallucination / double-booking > 0
 """
 
@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 from patient_assistant.config import Settings
-from patient_assistant.container import build_llm
+from patient_assistant.container import build_llm, require_llm
 from patient_assistant.evaluation.cases import load_cases
 from patient_assistant.evaluation.harness import run_cases
 from patient_assistant.evaluation.metrics import compute
@@ -24,7 +24,6 @@ from patient_assistant.evaluation.report import hard_zero_violations, to_json, t
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="pa-eval", description="Đánh giá AI Patient Assistant trên dataset JSONL")
-    p.add_argument("--llm", choices=["offline", "bedrock"], default="offline")
     p.add_argument("--dataset", type=Path, nargs="*", help="File JSONL (mặc định: dataset đóng gói kèm)")
     p.add_argument("--suite", choices=["report", "booking", "conversation"], action="append")
     p.add_argument("--case", action="append", help="Chỉ chạy case có id này (lặp được)")
@@ -43,18 +42,18 @@ async def main_async(args: argparse.Namespace) -> int:
     if not cases:
         print("Không có case nào khớp bộ lọc.", file=sys.stderr)
         return 2
-    settings = Settings(llm_provider=args.llm)
-    observations = await run_cases(cases, lambda: build_llm(settings), concurrency=args.concurrency)
+    settings = Settings()
+    await require_llm(build_llm(settings), settings)
+    observations = await run_cases(cases, lambda: build_llm(settings), settings, concurrency=args.concurrency)
     report = compute(cases, observations)
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     meta = {
         "run": stamp,
-        "llm": args.llm,
-        "model": settings.llm_model_id if args.llm == "bedrock" else "offline-rules",
+        "model": settings.llm_model_id,
         "cases": len(cases),
     }
-    out_dir = args.out / f"{stamp}-{args.llm}"
+    out_dir = args.out / stamp
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "report.md").write_text(to_markdown(report, meta), "utf-8")
     (out_dir / "report.json").write_text(

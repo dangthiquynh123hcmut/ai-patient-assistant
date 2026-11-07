@@ -9,6 +9,10 @@ __pycache__/
 .ruff_cache/
 .hypothesis/
 
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
 # Dữ liệu sinh ra khi chạy
 *.db
 data/

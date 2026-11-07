@@ -1,5 +1,7 @@
-import { useState, type FormEvent } from "react";
-import { Navigate, useLocation, useNavigate } from "react-router-dom";
+import { useEffect, useState, type FormEvent } from "react";
+import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
+
+import { api } from "../api/client";
 
 import { errorText } from "../components/Toast";
 import { homeFor, useAuth } from "./AuthProvider";
@@ -12,6 +14,14 @@ export function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [canRegister, setCanRegister] = useState(false);
+
+  useEffect(() => {
+    api
+      .authOptions()
+      .then((o) => setCanRegister(o.allow_registration))
+      .catch(() => setCanRegister(false));
+  }, []);
 
   if (user) return <Navigate to={homeFor(user)} replace />;
 
@@ -74,6 +84,11 @@ export function LoginPage() {
             {busy ? "Đang đăng nhập…" : "Đăng nhập"}
           </button>
         </form>
+        {canRegister && (
+          <p className="auth-switch">
+            Chưa có tài khoản? <Link to="/register">Đăng ký</Link>
+          </p>
+        )}
         <details className="auth-demo">
           <summary>Tài khoản demo</summary>
           <p className="muted">

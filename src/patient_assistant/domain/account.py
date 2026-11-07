@@ -45,6 +45,13 @@ class User(BaseModel):
         return self.active and self.role == Role.ADMIN
 
 
+def normalize_username(value: str) -> str:
+    value = value.strip().lower()
+    if not USERNAME.match(value):
+        raise ValueError("username: 3–32 ký tự a-z, 0-9, dấu chấm, gạch dưới, gạch ngang")
+    return value
+
+
 class NewUser(BaseModel):
     username: str
     display_name: str = Field(min_length=1, max_length=128)
@@ -52,19 +59,31 @@ class NewUser(BaseModel):
     patient_id: str | None = None
     password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=128)
 
-    @field_validator("username")
-    @classmethod
-    def _username(cls, value: str) -> str:
-        value = value.strip().lower()
-        if not USERNAME.match(value):
-            raise ValueError("username: 3–32 ký tự a-z, 0-9, dấu chấm, gạch dưới, gạch ngang")
-        return value
+    _username = field_validator("username")(normalize_username)
 
     @model_validator(mode="after")
     def _patient_link(self) -> NewUser:
         if (self.role == Role.PATIENT) != (self.patient_id is not None):
             raise ValueError("Tài khoản patient phải gắn đúng một mã bệnh nhân; staff/admin thì không")
         return self
+
+
+class Registration(BaseModel):
+    """Người dùng tự đăng ký. Không có trường vai trò: tài khoản tự tạo luôn là bệnh nhân."""
+
+    username: str
+    display_name: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=128)
+
+    _username = field_validator("username")(normalize_username)
+
+    @field_validator("display_name")
+    @classmethod
+    def _display_name(cls, value: str) -> str:
+        value = " ".join(value.split())
+        if not value:
+            raise ValueError("Họ tên không được để trống")
+        return value
 
 
 class ConversationSummary(BaseModel):

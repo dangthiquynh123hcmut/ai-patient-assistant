@@ -1,5 +1,7 @@
 # Backend: FastAPI + LangGraph. Build: docker build -t patient-assistant-backend .
-# EXTRAS: nhóm phụ thuộc tùy chọn trong pyproject.toml. Bật STT: --build-arg EXTRAS=postgres,stt (image lớn hơn nhiều).
+# EXTRAS: nhóm phụ thuộc tùy chọn trong pyproject.toml. Bật STT: --build-arg EXTRAS=stt (image lớn hơn nhiều;
+# với compose: đặt BACKEND_EXTRAS=stt trong .env);
+# image chạy test: EXTRAS=dev (service `test` trong docker-compose.yml).
 
 # ---- build: cài package vào virtualenv riêng
 FROM python:3.13-slim AS build
@@ -9,15 +11,17 @@ ENV PATH=/opt/venv/bin:$PATH
 WORKDIR /src
 COPY pyproject.toml README.md ./
 COPY src ./src
-ARG EXTRAS=postgres
-RUN pip install ".[${EXTRAS}]"
+ARG EXTRAS=
+RUN pip install ".${EXTRAS:+[$EXTRAS]}"
 
 # ---- runtime: chỉ venv + migration, chạy bằng user thường
 FROM python:3.13-slim
 ENV PATH=/opt/venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
-RUN useradd --create-home --uid 1000 app
+RUN useradd --create-home --uid 1000 app \
+    # Chỗ lưu model Whisper (volume `stt-models`); tạo sẵn để volume mới thuộc user app, ghi được.
+    && mkdir -p /home/app/.cache/huggingface && chown -R app:app /home/app/.cache
 COPY --from=build /opt/venv /opt/venv
 WORKDIR /app
 COPY alembic.ini ./

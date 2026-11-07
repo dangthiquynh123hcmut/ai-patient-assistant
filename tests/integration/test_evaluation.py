@@ -6,11 +6,13 @@ from typing import Any
 
 import pytest
 
+from patient_assistant.config import Settings
+from patient_assistant.container import build_llm
 from patient_assistant.evaluation.cases import EvalCase, load_cases
 from patient_assistant.evaluation.harness import AttemptView, CaseObservation, run_cases
 from patient_assistant.evaluation.metrics import compute, is_false_success
 from patient_assistant.evaluation.report import hard_zero_violations, to_markdown
-from patient_assistant.infrastructure.llm.offline import OfflineRuleLLM
+from tests.conftest import pg_settings
 
 
 def _case(**kw: Any) -> EvalCase:
@@ -94,22 +96,25 @@ def test_validator_confusion_matrix_and_self_correction() -> None:
     assert report.validator["issue_code_recall"] == 0.0
 
 
-async def test_full_offline_eval_has_no_crash_and_no_hard_zero_violation() -> None:
+def _bedrock() -> Any:
+    return build_llm(Settings())
+
+
+@pytest.mark.llm
+async def test_full_eval_has_no_crash_and_no_hard_zero_violation() -> None:
+    """Chạy toàn bộ dataset với Claude thật (tốn phí): `pytest -m llm`."""
     cases = load_cases()
-    observations = await run_cases(cases, OfflineRuleLLM)
-    report = compute(cases, observations)
+    report = compute(cases, await run_cases(cases, _bedrock, pg_settings()))
     assert report.crashed == 0
     assert hard_zero_violations(report) == []
-    assert report.case_pass_rate.numerator == report.case_pass_rate.denominator, [
-        (v.case_id, v.failures) for v in report.verdicts if not v.passed
-    ]
-    assert "## Metric bắt buộc bằng 0" in to_markdown(report, {"llm": "offline"})
+    assert "## Metric bắt buộc bằng 0" in to_markdown(report, {"model": Settings().llm_model_id})
 
 
+@pytest.mark.llm
 async def test_eval_catches_a_disabled_validator(monkeypatch: pytest.MonkeyPatch) -> None:
     """Mutation test: tắt validator báo cáo thì eval phải phát hiện (FN tăng, case thất bại)."""
     monkeypatch.setattr("patient_assistant.application.agent.nodes.report.validate_report", lambda *_: [])
     cases = [c for c in load_cases() if c.id in {"rep-inj-01", "rep-range-01", "rep-miss-01"}]
-    report = compute(cases, await run_cases(cases, OfflineRuleLLM))
+    report = compute(cases, await run_cases(cases, _bedrock, pg_settings()))
     assert report.validator["fn"] >= 2
     assert report.case_pass_rate.numerator < report.case_pass_rate.denominator

@@ -1,4 +1,4 @@
-"""Chạy graph thật (LangGraph + checkpointer) qua các interrupt, với repo in-memory và LLM giả."""
+"""Chạy graph thật (LangGraph + checkpointer Postgres) qua các interrupt, với repo Postgres và LLM giả."""
 
 from __future__ import annotations
 
@@ -6,9 +6,19 @@ from typing import Any
 
 from patient_assistant.application.agent.state import UserDecision
 from patient_assistant.application.ports.llm import LLMError
-from tests.conftest import PATIENT, FailingLLM, ScriptedLLM, done, waiting
+from tests.conftest import PATIENT, FailingLLM, ScriptedLLM, done, report_out, waiting
 
 GOOD = "Tuần này tôi đau mức 5 trên 10, đã tập 4 ngày, thấy đau tăng khi gập gối"
+GOOD_OUT = report_out(
+    pain=(5, "Tuần này tôi đau mức 5 trên 10"),
+    days=(4, "đã tập 4 ngày"),
+    change=("worse_during_activity", "thấy đau tăng khi gập gối"),
+    activity="gập gối",
+)
+
+
+async def _good_app(make_app: Any, times: int = 1) -> Any:
+    return await make_app(llm=ScriptedLLM(reports=[GOOD_OUT] * times))
 
 
 async def _history(app: Any) -> list[dict[str, Any]]:
@@ -16,7 +26,7 @@ async def _history(app: Any) -> list[dict[str, Any]]:
 
 
 async def test_happy_path_requires_confirmation_then_saves(make_app: Any) -> None:
-    app = make_app()
+    app = await _good_app(make_app)
     first = waiting(await app.chat.send_message("t1", PATIENT, GOOD), "confirm_report")
     fields = {e.field: e for e in first.interrupt.explanations}
     assert fields["pain_level"].value == 5 and fields["pain_level"].evidence == "Tuần này tôi đau mức 5 trên 10"
@@ -31,7 +41,9 @@ async def test_happy_path_requires_confirmation_then_saves(make_app: Any) -> Non
 
 
 async def test_missing_field_asks_user_then_continues(make_app: Any) -> None:
-    app = make_app()
+    pain = (3, "tuần này tôi đau mức 3")
+    llm = ScriptedLLM(reports=[report_out(pain=pain), report_out(pain=pain, days=(2, "tập được 2 ngày"))])
+    app = await make_app(llm=llm)
     ask = waiting(await app.chat.send_message("t2", PATIENT, "tuần này tôi đau mức 3"), "clarify")
     assert "bao nhiêu ngày" in ask.interrupt.message
     confirm = waiting(
@@ -42,7 +54,14 @@ async def test_missing_field_asks_user_then_continues(make_app: Any) -> None:
 
 
 async def test_out_of_range_value_is_asked_not_silently_fixed(make_app: Any) -> None:
-    app = make_app()
+    days = (3, "tập 3 ngày")
+    llm = ScriptedLLM(
+        reports=[
+            report_out(pain=(12, "tôi đau 12/10"), days=days),
+            report_out(pain=(8, "à nhầm, đau mức 8"), days=days),
+        ]
+    )
+    app = await make_app(llm=llm)
     ask = waiting(await app.chat.send_message("t3", PATIENT, "tôi đau 12/10, tập 3 ngày"), "clarify")
     assert "0–10" in ask.interrupt.message
     confirm = waiting(
@@ -69,7 +88,7 @@ def _wrong_then_right() -> list[dict[str, Any]]:
 
 async def test_self_correction_fixes_llm_error_and_is_recorded(make_app: Any) -> None:
     llm = ScriptedLLM(reports=_wrong_then_right())
-    app = make_app(llm=llm)
+    app = await make_app(llm=llm)
     confirm = waiting(await app.chat.send_message("t4", PATIENT, GOOD), "confirm_report")
     assert {e.field: e.value for e in confirm.interrupt.explanations}["exercise_days"] == 4
     # Lần sửa nhận đúng lỗi cụ thể từ validator (FR-06.1).
@@ -84,14 +103,14 @@ async def test_self_correction_fixes_llm_error_and_is_recorded(make_app: Any) ->
 
 async def test_correction_limit_hands_off_and_never_saves(make_app: Any) -> None:
     wrong = _wrong_then_right()[0]
-    app = make_app(llm=ScriptedLLM(reports=[wrong, wrong, wrong]))
+    app = await make_app(llm=ScriptedLLM(reports=[wrong, wrong, wrong]))
     final = done(await app.chat.send_message("t5", PATIENT, GOOD), "handoff")
     assert "nhân viên" in final.response.text
     assert await _history(app) == []
 
 
 async def test_cancel_and_unclear_confirmation(make_app: Any) -> None:
-    app = make_app()
+    app = await _good_app(make_app)
     waiting(await app.chat.send_message("t6", PATIENT, GOOD), "confirm_report")
     again = waiting(await app.chat.resume("t6", PATIENT, UserDecision(action="reply", text="ờ")), "confirm_report")
     assert "chưa rõ" in again.interrupt.message
@@ -100,7 +119,7 @@ async def test_cancel_and_unclear_confirmation(make_app: Any) -> None:
 
 
 async def test_user_edit_is_revalidated(make_app: Any) -> None:
-    app = make_app()
+    app = await _good_app(make_app)
     waiting(await app.chat.send_message("t7", PATIENT, GOOD), "confirm_report")
     bad = waiting(
         await app.chat.resume("t7", PATIENT, UserDecision(action="edit", fields={"pain_level": 15})), "clarify"
@@ -109,13 +128,13 @@ async def test_user_edit_is_revalidated(make_app: Any) -> None:
 
 
 async def test_llm_failure_is_reported_not_faked(make_app: Any) -> None:
-    app = make_app(llm=FailingLLM())
+    app = await make_app(llm=FailingLLM())
     final = done(await app.chat.send_message("t8", PATIENT, GOOD), "error")
     assert "Chưa có dữ liệu nào được lưu" in final.response.text
 
 
 async def test_backend_failure_on_save_is_not_reported_as_success(make_app: Any) -> None:
-    app = make_app()
+    app = await _good_app(make_app)
 
     async def broken(*_: Any, **__: Any) -> Any:
         raise ConnectionError("db down")
@@ -127,7 +146,7 @@ async def test_backend_failure_on_save_is_not_reported_as_success(make_app: Any)
 
 
 async def test_retry_with_same_content_does_not_duplicate(make_app: Any) -> None:
-    app = make_app()
+    app = await _good_app(make_app, times=2)
     for _ in range(2):
         waiting(await app.chat.send_message("t10", PATIENT, GOOD), "confirm_report")
         done(await app.chat.resume("t10", PATIENT, UserDecision(action="confirm")), "report_saved")
@@ -135,7 +154,11 @@ async def test_retry_with_same_content_does_not_duplicate(make_app: Any) -> None
 
 
 async def test_safety_and_other_intents(make_app: Any) -> None:
-    app = make_app()
+    llm = ScriptedLLM(
+        searches=["chườm lạnh"],
+        replies=["Chào bạn! Mình là trợ lý ảo của phòng khám.", "Không có gì đâu bạn!"],
+    )
+    app = await make_app(llm=llm)
     emergency = done(await app.chat.send_message("t11", PATIENT, "tôi đau ngực và khó thở"), "safety")
     assert "115" in emergency.response.text
     advice = done(await app.chat.send_message("t12", PATIENT, "tôi bị bệnh gì, có nên đổi thuốc không"), "safety")
@@ -154,5 +177,5 @@ async def test_safety_and_other_intents(make_app: Any) -> None:
 
 async def test_llm_errors_do_not_leak(make_app: Any) -> None:
     llm = ScriptedLLM(reports=[LLMError("max_tokens", "cut")])
-    final = done(await make_app(llm=llm).chat.send_message("t15", PATIENT, GOOD), "error")
+    final = done(await (await make_app(llm=llm)).chat.send_message("t15", PATIENT, GOOD), "error")
     assert final.response.kind.value == "error"

@@ -6,7 +6,7 @@ Chạy lại an toàn (idempotent):
 - danh mục khoa/bác sĩ/bệnh nhân/kế hoạch/tài liệu + lịch sử demo: chỉ nạp khi DB còn trống;
 - tài khoản demo (`demo_data/users.json`, mật khẩu PA_SEED_PASSWORD): chỉ tạo khi chưa có tài khoản nào;
 - slot khám: luôn bổ sung cho đủ `days_ahead` ngày tới, nên chạy mỗi lần deploy hoặc theo lịch hằng ngày;
-- PA_CHECKPOINTER=postgres: tạo/nâng cấp bảng checkpoint của LangGraph (một lần, trước khi backend chạy).
+- tạo/nâng cấp bảng checkpoint của LangGraph (một lần, trước khi backend chạy).
 """
 
 from __future__ import annotations
@@ -46,9 +46,8 @@ async def run(settings: Settings) -> None:
             timedelta(hours=settings.session_ttl_hours),
         )
         await auth.seed(seed.demo_accounts(settings.seed_password))
-        if settings.checkpointer == "postgres":
-            async with AsyncExitStack() as stack:
-                await (await postgres_checkpointer(stack, settings)).setup()
+        async with AsyncExitStack() as stack:
+            await (await postgres_checkpointer(stack, settings)).setup()
         print(f"Seed xong: thêm {added} slot mới.")
     finally:
         await engine.dispose()

@@ -120,9 +120,9 @@ def test_present_report_routing() -> None:
 )
 async def test_reply_triage(text: str, current: Intent, kind: str) -> None:
     from patient_assistant.application.agent.side_talk import SideTalk
-    from patient_assistant.infrastructure.llm.offline import OfflineRuleLLM
+    from tests.conftest import ScriptedLLM
 
-    assert (await SideTalk(OfflineRuleLLM(), None).triage(text, current)).value == kind  # type: ignore[arg-type]
+    assert (await SideTalk(ScriptedLLM(), None).triage(text, current)).value == kind  # type: ignore[arg-type]
 
 
 def test_continuation_and_context_phrases() -> None:

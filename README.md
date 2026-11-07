@@ -36,7 +36,7 @@ Agent LangGraph hỗ trợ bệnh nhân (dữ liệu giả lập, dự án học
 cp .env.example .env
 ```
 
-Sửa `.env`: đặt `POSTGRES_PASSWORD`; muốn dùng Claude thật thì `PA_LLM_PROVIDER=bedrock` (credential AWS lấy từ `~/.aws`, xem mục Bedrock bên dưới). Rồi:
+Sửa `.env`: đặt `POSTGRES_PASSWORD` và cấu hình Claude trên Bedrock (credential AWS lấy từ `~/.aws`, xem mục Bedrock bên dưới). Backend không khởi động nếu không gọi được LLM. Rồi:
 
 ```bash
 docker compose up -d --build
@@ -60,6 +60,22 @@ docker compose exec db psql -U patient patient_assistant
 
 Xóa sạch dữ liệu (kể cả tài khoản) để làm lại từ đầu: `docker compose down -v`.
 
+**Nhận dạng giọng nói (STT) trong Docker:** image backend mặc định không có faster-whisper. Muốn bật, đặt trong `.env`:
+
+```text
+PA_STT_ENABLED=true
+PA_STT_MODEL=small
+BACKEND_EXTRAS=stt
+```
+
+rồi `docker compose up -d --build`. Model Whisper được tải ở lần nhận dạng đầu tiên (`small` khoảng 480 MB) và lưu trong volume `stt-models`, nên không phải tải lại khi build hay khởi động lại. Nên tải sẵn trước khi dùng, vì lần đầu có thể lâu hơn thời gian chờ 3 phút của nginx:
+
+```bash
+docker compose exec backend python -c "from faster_whisper import download_model; download_model('small')"
+```
+
+Backend đặt `HF_HUB_DISABLE_XET=1` để tải qua HTTP thường: trên một số mạng, giao thức Xet của HuggingFace bị treo ở 0 byte.
+
 Lần build đầu, `frontend/` chưa có `package-lock.json` nên Docker dùng `npm install`. Nên chạy `npm install` một lần trong `frontend/` và commit `package-lock.json` để các lần build sau dùng `npm ci` với đúng phiên bản đã khóa.
 
 ## Cài đặt (phát triển local)
@@ -68,7 +84,7 @@ Lần build đầu, `frontend/` chưa có `package-lock.json` nên Docker dùng 
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 ```
 
-Tùy chọn: `.[postgres]` (Postgres + checkpointer Postgres), `.[stt]` (faster-whisper).
+Tùy chọn: `.[stt]` (faster-whisper). Driver Postgres (`asyncpg`, `psycopg`) là phụ thuộc bắt buộc.
 
 Frontend (cần Node 20+):
 
@@ -78,9 +94,16 @@ cd frontend && npm install
 
 ## Chạy test
 
+Test chạy với **Postgres thật**, bên trong container (cần Docker Desktop). Mỗi test dùng một schema riêng trong
+database `<POSTGRES_DB>_test` và xóa schema khi xong, nên không đụng dữ liệu của app:
+
 ```bash
-.venv/bin/pytest -q
+docker compose run --rm --build test
 ```
+
+Mã nguồn được mount vào container, nên sửa code rồi chạy lại không cần `--build` (chỉ cần khi đổi dependency).
+Chạy một file: `docker compose run --rm test pytest -q tests/integration/test_report_flow.py`.
+Muốn chạy pytest trực tiếp trên máy thì đặt `PA_TEST_DATABASE_URL=postgresql+asyncpg://...` trỏ tới Postgres.
 
 ```bash
 .venv/bin/ruff check src tests migrations && .venv/bin/mypy
@@ -98,7 +121,7 @@ cd frontend && npm run typecheck
 .venv/bin/python -m patient_assistant.evaluation.runner
 ```
 
-Lệnh trên chạy 60 case JSONL qua agent thật, rồi xuất báo cáo vào `eval_reports/`. Báo cáo gồm field accuracy, tool call, FP/FN của validator, self-correction, tỷ lệ hỏi lại, và ba metric bắt buộc bằng 0: false-success, slot hallucination, double-booking. Định nghĩa từng metric ở [docs/EVALUATION.md](docs/EVALUATION.md). Thêm `--llm bedrock` để đo với Claude thật (tốn phí).
+Lệnh trên chạy 60 case JSONL qua agent thật, rồi xuất báo cáo vào `eval_reports/`. Báo cáo gồm field accuracy, tool call, FP/FN của validator, self-correction, tỷ lệ hỏi lại, và ba metric bắt buộc bằng 0: false-success, slot hallucination, double-booking. Định nghĩa từng metric ở [docs/EVALUATION.md](docs/EVALUATION.md). Eval luôn gọi Claude thật trên Bedrock nên **tốn phí**.
 
 ## Dữ liệu demo và database
 
@@ -118,12 +141,12 @@ Toàn bộ dữ liệu demo nằm trong các file JSON ở [src/patient_assistan
 File được kiểm tra khi khởi động: sai định dạng, hoặc tham chiếu sai (ví dụ bác sĩ thuộc khoa không tồn tại), thì server báo lỗi ngay.
 
 **Database:**
-- Không đặt `PA_DATABASE_URL`: in-memory, dữ liệu mất khi tắt server.
-- `.env.example` đặt sẵn file SQLite `PA_DATABASE_URL=sqlite+aiosqlite:///./data/app.db`. Lần chạy đầu tạo bảng, nạp dữ liệu JSON và tạo tài khoản demo; các lần sau giữ nguyên dữ liệu đã có (tài khoản, mật khẩu đã đổi, lịch sử câu hỏi, báo cáo, lịch hẹn). Xóa `data/app.db` để làm lại từ đầu.
-- Postgres: dùng URL `postgresql+asyncpg://...` và cài thêm `.[postgres]`. Với database dùng thật, đặt `PA_AUTO_CREATE_SCHEMA=false` và `PA_SEED_DEMO_DATA=false`, rồi dùng `alembic upgrade head` và `python -m patient_assistant.interface.cli.seed` (Docker compose làm sẵn hai bước này).
+- Chỉ dùng **PostgreSQL**, chạy bằng service `db` của Docker compose (`docker compose up -d db`); `PA_DATABASE_URL` là bắt buộc. Cả dữ liệu nghiệp vụ lẫn state hội thoại của LangGraph (checkpointer) đều nằm trong database này. Không còn chế độ in-memory hay SQLite.
+- Cổng của `db` chỉ mở cho localhost (`127.0.0.1:${DB_PORT:-5432}`), để dùng `psql`/công cụ DB hoặc chạy backend ngoài Docker. Dữ liệu nằm trong volume `pgdata`; `docker compose down -v` để làm lại từ đầu.
+- Chạy backend trực tiếp (không qua compose): lần chạy đầu tự tạo bảng, nạp dữ liệu JSON và tài khoản demo; các lần sau giữ nguyên dữ liệu. Trong compose, đặt `PA_AUTO_CREATE_SCHEMA=false` và `PA_SEED_DEMO_DATA=false`, schema do `alembic upgrade head` quản lý và dữ liệu do `python -m patient_assistant.interface.cli.seed` nạp (service `migrate` làm sẵn).
 - Đổi `sql/models.py` thì sinh migration mới: `alembic revision --autogenerate -m "mô tả"`, đọc lại file sinh ra, rồi `alembic upgrade head`.
 
-Test và eval luôn bắt đầu với database sạch (không nạp `history.json`) để kết quả tái lập được.
+Test và eval chạy mỗi test/case trong một schema Postgres riêng, bắt đầu sạch (không nạp `history.json`) để kết quả tái lập được; schema bị xóa khi chạy xong.
 
 Xem dữ liệu **đang có trong database** dưới dạng JSON:
 
@@ -131,7 +154,7 @@ Xem dữ liệu **đang có trong database** dưới dạng JSON:
 .venv/bin/python -m patient_assistant.interface.cli.dump --out demo_dump.json
 ```
 
-Thêm `--database-url sqlite+aiosqlite:///./app.db` để xem dữ liệu trong file SQLite.
+Mặc định đọc database theo `PA_DATABASE_URL`; đổi bằng `--database-url postgresql+asyncpg://...`.
 
 ## Đăng nhập và phân quyền
 
@@ -142,6 +165,8 @@ Mở frontend (Docker: **http://localhost:8080**, dev: **http://localhost:5173**
 | `benhnhan1`, `benhnhan2`, `benhnhan3` | `patient` | Chat với trợ lý; chỉ thấy dữ liệu và hội thoại của chính mình |
 | `bacsi` | `staff` | Trang nhân viên: xem mọi hội thoại, từng câu bệnh nhân hỏi và câu trợ lý trả lời, lọc theo bệnh nhân. Không chat thay bệnh nhân |
 | `admin` | `admin` | Như `staff`, thêm tab **Tài khoản**: tạo tài khoản, khóa/mở khóa, đặt lại mật khẩu |
+
+**Tự đăng ký:** ở trang đăng nhập bấm **Đăng ký** (trang `/register`), nhập họ tên, tên đăng nhập và mật khẩu (tối thiểu 8 ký tự). Hệ thống tạo một hồ sơ bệnh nhân mới cùng tài khoản `patient` gắn với hồ sơ đó, rồi đăng nhập luôn. Người tự đăng ký không chọn được vai trò hay hồ sơ bệnh nhân có sẵn: tài khoản `staff`/`admin`, hoặc tài khoản gắn vào hồ sơ đã có, vẫn chỉ admin tạo được. Bệnh nhân mới xuất hiện ngay trong danh sách bệnh nhân của trang nhân viên. Tắt chức năng này bằng `PA_ALLOW_REGISTRATION=false` (nút Đăng ký ẩn đi, API trả 403).
 
 - Mật khẩu băm bằng scrypt; phiên đăng nhập là token ngẫu nhiên trong cookie HttpOnly (DB chỉ lưu hash của token). Phiên hết hạn sau `PA_SESSION_TTL_HOURS` (mặc định 12 giờ).
 - Sai mật khẩu 5 lần liên tiếp thì username đó bị khóa đăng nhập 5 phút.
@@ -168,7 +193,7 @@ Mã nguồn UI: [frontend/src/](frontend/src/) — `auth/` (đăng nhập, phân
 
 ## Chạy local không dùng Docker
 
-Backend — mặc định LLM offline (theo luật), không cần AWS; database theo `PA_DATABASE_URL` trong `.env` (SQLite file hoặc in-memory):
+Backend — cần gọi được Claude trên Bedrock (xem mục Bedrock bên dưới), lúc khởi động server gọi thử LLM một lần và dừng nếu lỗi; cần Postgres đang chạy (`docker compose up -d db`) và `PA_DATABASE_URL` trong `.env` trỏ tới nó:
 
 ```bash
 .venv/bin/uvicorn patient_assistant.interface.api.app:app --factory --reload
@@ -180,15 +205,12 @@ Frontend — Vite dev server ở http://localhost:5173, proxy `/v1` về backend
 cd frontend && npm run dev
 ```
 
-Dùng Claude trên Bedrock (xác thực bằng IAM của AWS) và Postgres: đặt biến môi trường (hoặc file `.env`):
+Cấu hình đầy đủ: đặt biến môi trường (hoặc file `.env`):
 
 ```text
-PA_LLM_PROVIDER=bedrock
 PA_AWS_REGION=us-east-1
 PA_LLM_MODEL_ID=global.anthropic.claude-opus-4-6-v1
-PA_DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/patient_assistant
-PA_CHECKPOINTER=postgres
-PA_CHECKPOINTER_URL=postgresql://user:pass@localhost:5432/patient_assistant
+PA_DATABASE_URL=postgresql+asyncpg://patient:<POSTGRES_PASSWORD>@127.0.0.1:5432/patient_assistant
 PA_STT_ENABLED=true
 PA_STT_MODEL=small
 ```
@@ -202,7 +224,6 @@ Kiểm tra model ID và region có dùng được trong tài khoản AWS. Với 
 3. Trong `.env`:
 
 ```text
-PA_LLM_PROVIDER=bedrock
 PA_AWS_REGION=ap-southeast-1
 PA_LLM_MODEL_ID=global.anthropic.claude-opus-4-6-v1
 ```
@@ -217,11 +238,11 @@ PA_LLM_MODEL_ID=global.anthropic.claude-opus-4-6-v1
 
 5. Chạy server như bình thường; badge "LLM" trên UI sẽ hiện `global.anthropic.claude-opus-4-6-v1`.
 
-Test và eval mặc định **không** đọc `.env`, nên vẫn chạy offline và không tốn phí. Muốn đo với Claude thật thì chạy `--llm bedrock` cho eval, hoặc `PA_LLM_PROVIDER=bedrock .venv/bin/pytest -m llm` cho test.
+Test mặc định dùng LLM giả có kịch bản định sẵn (`ScriptedLLM` trong `tests/conftest.py`), không gọi Bedrock và không tốn phí. Test với Claude thật: `.venv/bin/pytest -m llm`. Eval luôn gọi Claude thật.
 
 ## Luồng gọi API
 
-0. `POST /v1/auth/login` `{"username": "benhnhan1", "password": "demo1234"}`: đặt cookie `pa_session`. Client không phải trình duyệt có thể gửi `Authorization: Bearer <giá trị cookie>`. `POST /v1/auth/logout` để đăng xuất, `GET /v1/auth/me` để xem tài khoản hiện tại.
+0. `POST /v1/auth/login` `{"username": "benhnhan1", "password": "demo1234"}`: đặt cookie `pa_session`. Client không phải trình duyệt có thể gửi `Authorization: Bearer <giá trị cookie>`. `POST /v1/auth/logout` để đăng xuất, `GET /v1/auth/me` để xem tài khoản hiện tại. Tự đăng ký: `POST /v1/auth/register` `{"username": "...", "display_name": "...", "password": "..."}` trả 201 và đặt cookie phiên như đăng nhập (409 nếu trùng tên đăng nhập, 403 nếu đang tắt); `GET /v1/auth/options` (không cần đăng nhập) cho biết có cho đăng ký không.
 1. (giọng nói) `POST /v1/stt/transcribe` (multipart `audio`): trả về transcript và `flags` (những từ nhận dạng kém) để người dùng duyệt.
 2. `POST /v1/chat/{thread_id}/messages` `{"text": "...", "input_source": "voice", "stt_flags": [...]}`.
 3. Nếu `status = "waiting_user"`: hiển thị `interrupt` (`clarify` / `confirm_report` / `choose_slot` / `confirm_booking`), rồi gọi `POST /v1/chat/{thread_id}/resume` với một trong các dạng:

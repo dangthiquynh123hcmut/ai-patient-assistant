@@ -80,7 +80,6 @@ class AppointmentRow(Base):
             "slot_id",
             unique=True,
             postgresql_where=text("status = 'booked'"),
-            sqlite_where=text("status = 'booked'"),
         ),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True)

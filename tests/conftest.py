@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+import asyncio
+import os
+import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import AsyncExitStack
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -16,12 +20,10 @@ from patient_assistant.application.ports.llm import (
 )
 from patient_assistant.application.use_cases.chat import TurnResult
 from patient_assistant.config import Settings
-from patient_assistant.container import Container, assemble, in_memory_repositories, memory_checkpointer
+from patient_assistant.container import Container, Storage, assemble, open_storage, seed_demo_users
 from patient_assistant.domain.booking.models import SlotOption
 from patient_assistant.domain.conversation import Intent
 from patient_assistant.infrastructure.clock import FixedClock
-from patient_assistant.infrastructure.llm.offline import OfflineRuleLLM
-from patient_assistant.infrastructure.persistence.memory import InMemoryAuditLog
 from patient_assistant.infrastructure.persistence.seed import DEMO_PATIENT_ID
 from patient_assistant.infrastructure.stt.faster_whisper import UnavailableSTT
 
@@ -29,36 +31,99 @@ TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 NOW = datetime(2026, 10, 28, 10, 0, tzinfo=TZ)  # Thứ Tư
 PATIENT = DEMO_PATIENT_ID
 
+# Test chạy với Postgres thật: `docker compose run --rm --build test` (compose đặt sẵn biến này).
+TEST_DATABASE_URL = os.environ.get("PA_TEST_DATABASE_URL", "")
 
-class ScriptedLLM(OfflineRuleLLM):
-    """LLM giả trả lần lượt các đầu ra định sẵn; hết kịch bản thì dùng luật offline."""
 
-    def __init__(self, reports: list[Any] | None = None, bookings: list[Any] | None = None) -> None:
+def pytest_configure(config: pytest.Config) -> None:
+    if not TEST_DATABASE_URL:
+        pytest.exit("Đặt PA_TEST_DATABASE_URL (Postgres) hoặc chạy: docker compose run --rm --build test", 2)
+    asyncio.run(_ensure_database(TEST_DATABASE_URL))
+
+
+async def _ensure_database(url: str) -> None:
+    """Tạo database test nếu chưa có (kết nối qua database `postgres` mặc định của server)."""
+    import asyncpg
+
+    dsn = url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    base, name = dsn.rsplit("/", 1)
+    conn = await asyncpg.connect(f"{base}/postgres")
+    try:
+        if not await conn.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", name):
+            await conn.execute(f'CREATE DATABASE "{name}"')
+    finally:
+        await conn.close()
+
+
+def pg_settings(**overrides: Any) -> Settings:
+    return Settings(_env_file=None, database_url=TEST_DATABASE_URL, **overrides)  # type: ignore[call-arg]
+
+
+def _next(queue: list[Any], default: Any) -> Any:
+    if not queue:
+        return default
+    out = queue.pop(0)
+    if isinstance(out, Exception):
+        raise out
+    return out
+
+
+class ScriptedLLM:
+    """LLM giả, không có luật hiểu ngôn ngữ: trả lần lượt các đầu ra định sẵn trong test.
+
+    Hết kịch bản thì trả kết quả "không hiểu" (không intent, không trích được trường nào).
+    """
+
+    def __init__(
+        self,
+        reports: list[Any] | None = None,
+        bookings: list[Any] | None = None,
+        intents: list[Any] | None = None,
+        slots: list[Any] | None = None,
+        searches: list[Any] | None = None,
+        replies: list[Any] | None = None,
+    ) -> None:
         self.reports = list(reports or [])
         self.bookings = list(bookings or [])
+        self.intents = list(intents or [])
+        self.slots = list(slots or [])
+        self.searches = list(searches or [])
+        self.replies = list(replies or [])
         self.report_prompts: list[ReportPrompt] = []
         self.booking_prompts: list[BookingPrompt] = []
 
+    async def classify_intent(self, text: str) -> list[Intent]:
+        return _next(self.intents, [])
+
     async def extract_report(self, prompt: ReportPrompt) -> dict[str, Any]:
         self.report_prompts.append(prompt)
-        if self.reports:
-            out = self.reports.pop(0)
-            if isinstance(out, Exception):
-                raise out
-            return out
-        return await super().extract_report(prompt)
+        return _next(self.reports, {"missing_fields": [], "evidence": []})
 
     async def extract_booking(self, prompt: BookingPrompt) -> dict[str, Any]:
         self.booking_prompts.append(prompt)
-        if self.bookings:
-            out = self.bookings.pop(0)
-            if isinstance(out, Exception):
-                raise out
-            return out
-        return await super().extract_booking(prompt)
+        return _next(self.bookings, {"missing_fields": ["department_code", "date_expression"], "evidence": []})
+
+    async def choose_slot(self, reply: str, options: list[SlotOption]) -> int | None:
+        return _next(self.slots, None)
+
+    async def answer_question(self, question: str, tools: list[ToolSpec], max_tool_calls: int) -> GroundedAnswer:
+        """Kịch bản là câu truy vấn: gọi tool tìm tài liệu thật rồi trả lời bằng tài liệu đầu tiên."""
+        query = _next(self.searches, None)
+        search = next((t for t in tools if t.name == "search_approved_knowledge"), None)
+        if query is None or search is None:
+            return GroundedAnswer(text="")
+        result = await search.handler(search.input_model.model_validate({"query": query}))
+        docs = result.get("data") or []
+        if not docs:
+            return GroundedAnswer(text="", tool_calls=1)
+        top = docs[0]
+        return GroundedAnswer(text=f"{top['content']} ({top['doc_id']})", source_ids=[top["doc_id"]], tool_calls=1)
+
+    async def converse(self, text: str, context: str | None = None) -> str:
+        return _next(self.replies, "Chào bạn! Mình là trợ lý ảo của phòng khám.")
 
 
-class FailingLLM(OfflineRuleLLM):
+class FailingLLM(ScriptedLLM):
     async def classify_intent(self, text: str) -> list[Intent]:
         raise LLMError("unavailable", "down", retryable=True)
 
@@ -75,20 +140,65 @@ class FailingLLM(OfflineRuleLLM):
         raise LLMError("unavailable", "down")
 
 
+def report_out(
+    pain: tuple[int, str] | None = None,
+    days: tuple[int, str] | None = None,
+    change: tuple[str, str] | None = None,
+    activity: str | None = None,
+) -> dict[str, Any]:
+    """Đầu ra extract_report như LLM thật trả: (giá trị, trích dẫn nguyên văn) cho từng trường."""
+    fields = {"pain_level": pain, "exercise_days": days, "symptom_change": change}
+    out: dict[str, Any] = {k: v[0] if v else None for k, v in fields.items()}
+    out |= {"reporting_period": None, "triggering_activity": activity}
+    out["missing_fields"] = [f for f in ("pain_level", "exercise_days") if out[f] is None]
+    out["evidence"] = [{"field": k, "quote": v[1]} for k, v in fields.items() if v]
+    if activity:
+        out["evidence"].append({"field": "triggering_activity", "quote": activity})
+    return out
+
+
+def booking_out(
+    department: tuple[str, str] | None = None,
+    date: str | None = None,
+    time: str | None = None,
+    doctor: str | None = None,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    """Đầu ra extract_booking: khoa kèm trích dẫn, các cụm còn lại là nguyên văn lời người dùng."""
+    found = {"date_expression": date, "time_expression": time, "doctor_name": doctor, "reason": reason}
+    evidence = [{"field": k, "quote": v} for k, v in found.items() if v]
+    if department:
+        evidence.insert(0, {"field": "department_code", "quote": department[1]})
+    return {
+        "department_code": department[0] if department else None,
+        **found,
+        "missing_fields": [k for k, v in (("department_code", department), ("date_expression", date)) if not v],
+        "evidence": evidence,
+    }
+
+
 @pytest.fixture
-def make_app() -> Callable[..., Container]:
-    def _make(llm: Any = None, repos: dict[str, Any] | None = None, **settings: Any) -> Container:
+async def make_storage() -> AsyncIterator[Callable[..., Awaitable[Storage]]]:
+    """Mỗi lần gọi: một schema Postgres mới (bảng + dữ liệu demo + tài khoản demo), xóa khi test kết thúc."""
+    async with AsyncExitStack() as stack:
+
+        async def _make(with_history: bool = False, settings: Settings | None = None) -> Storage:
+            settings = settings or pg_settings()
+            schema = f"t_{uuid.uuid4().hex[:12]}"
+            storage = await open_storage(stack, settings, FixedClock(NOW), schema=schema, with_history=with_history)
+            await seed_demo_users(storage.sessions, settings.seed_password, NOW)
+            return storage
+
+        yield _make
+
+
+@pytest.fixture
+async def make_app(make_storage: Callable[..., Awaitable[Storage]]) -> Callable[..., Awaitable[Container]]:
+    async def _make(llm: Any = None, with_history: bool = False, **overrides: Any) -> Container:
+        settings = pg_settings(**overrides)
+        storage = await make_storage(with_history=with_history, settings=settings)
         clock = FixedClock(NOW)
-        container = assemble(
-            Settings(_env_file=None, **settings),  # type: ignore[call-arg]
-            repos or in_memory_repositories(clock),
-            llm or OfflineRuleLLM(),
-            UnavailableSTT(),
-            clock,
-            memory_checkpointer(),
-            audit=InMemoryAuditLog(),
-        )
-        return container
+        return assemble(settings, storage.repos, llm or ScriptedLLM(), UnavailableSTT(), clock, storage.checkpointer)
 
     return _make
 

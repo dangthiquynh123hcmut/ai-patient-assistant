@@ -1,13 +1,15 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { ApiError, api, setUnauthorizedHandler } from "../api/client";
-import type { Meta, User } from "../api/types";
+import type { Meta, Registration, User } from "../api/types";
 
 interface AuthState {
   /** undefined: đang kiểm tra phiên; null: chưa đăng nhập. */
   user: User | null | undefined;
   meta: Meta | null;
   login: (username: string, password: string) => Promise<User>;
+  /** Tạo tài khoản bệnh nhân rồi đăng nhập luôn (backend đặt cookie phiên). */
+  register: (registration: Registration) => Promise<User>;
   logout: () => Promise<void>;
 }
 
@@ -50,13 +52,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [load],
   );
 
+  const register = useCallback(
+    async (registration: Registration) => {
+      const created = await api.register(registration);
+      await load();
+      return created;
+    },
+    [load],
+  );
+
   const logout = useCallback(async () => {
     await api.logout().catch(() => undefined);
     setUser(null);
     setMeta(null);
   }, []);
 
-  const value = useMemo(() => ({ user, meta, login, logout }), [user, meta, login, logout]);
+  const value = useMemo(
+    () => ({ user, meta, login, register, logout }),
+    [user, meta, login, register, logout],
+  );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

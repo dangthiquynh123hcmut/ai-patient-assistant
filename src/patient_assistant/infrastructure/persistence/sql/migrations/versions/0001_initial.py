@@ -72,7 +72,6 @@ def upgrade() -> None:
         ["slot_id"],
         unique=True,
         postgresql_where=sa.text("status = 'booked'"),
-        sqlite_where=sa.text("status = 'booked'"),
     )
     op.create_table(
         "reports",

@@ -23,6 +23,13 @@ export interface NewUser {
   password: string;
 }
 
+/** Tự đăng ký: luôn tạo tài khoản bệnh nhân kèm hồ sơ bệnh nhân mới (backend quyết định vai trò). */
+export interface Registration {
+  username: string;
+  display_name: string;
+  password: string;
+}
+
 export interface Department {
   code: string;
   name: string;
@@ -31,7 +38,6 @@ export interface Department {
 
 export interface Meta {
   user: User;
-  llm_provider: "bedrock" | "offline";
   llm_model: string;
   stt_enabled: boolean;
   stt_model: string | null;

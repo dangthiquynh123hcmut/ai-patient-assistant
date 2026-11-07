@@ -4,9 +4,15 @@ from datetime import date
 from typing import Any
 
 from patient_assistant.application.agent.state import UserDecision
-from tests.conftest import NOW, PATIENT, ScriptedLLM, done, waiting
+from tests.conftest import NOW, PATIENT, ScriptedLLM, booking_out, done, report_out, waiting
 
 REQUEST = "Cho tôi đặt lịch khoa phục hồi chức năng thứ ba tuần sau buổi sáng"
+PHCN = ("PHCN", "phục hồi chức năng")
+REQUEST_OUT = booking_out(department=PHCN, date="thứ ba tuần sau", time="buổi sáng")
+
+
+async def _request_app(make_app: Any) -> Any:
+    return await make_app(llm=ScriptedLLM(bookings=[REQUEST_OUT]))
 
 
 async def _appointments(app: Any, patient: str = PATIENT) -> list[dict[str, Any]]:
@@ -14,7 +20,7 @@ async def _appointments(app: Any, patient: str = PATIENT) -> list[dict[str, Any]
 
 
 async def test_voice_style_booking_happy_path(make_app: Any) -> None:
-    app = make_app()
+    app = await _request_app(make_app)
     options = waiting(await app.chat.send_message("b1", PATIENT, REQUEST, "voice"), "choose_slot")
     slots = options.interrupt.options
     assert len(slots) == 3
@@ -38,7 +44,13 @@ async def test_voice_style_booking_happy_path(make_app: Any) -> None:
 
 
 async def test_weekday_date_conflict_is_asked(make_app: Any) -> None:
-    app = make_app()
+    llm = ScriptedLLM(
+        bookings=[
+            booking_out(department=PHCN, date="thứ hai ngày 5/11"),
+            booking_out(department=PHCN, date="thứ năm ngày 5/11"),
+        ]
+    )
+    app = await make_app(llm=llm)
     ask = waiting(
         await app.chat.send_message("b2", PATIENT, "đặt lịch khoa phục hồi chức năng thứ hai ngày 5/11"), "clarify"
     )
@@ -50,7 +62,7 @@ async def test_weekday_date_conflict_is_asked(make_app: Any) -> None:
 
 
 async def test_department_defaults_to_plan_from_backend(make_app: Any) -> None:
-    app = make_app()
+    app = await make_app(llm=ScriptedLLM(bookings=[booking_out(date="ngày mai", time="buổi chiều")]))
     options = waiting(
         await app.chat.send_message("b3", PATIENT, "đặt lịch tái khám ngày mai buổi chiều"), "choose_slot"
     )
@@ -73,7 +85,7 @@ async def test_department_guessed_from_symptoms_is_rejected(make_app: Any) -> No
         "missing_fields": [],
         "evidence": [],
     }
-    app = make_app(llm=ScriptedLLM(bookings=[guessed]), repos=None)
+    app = await make_app(llm=ScriptedLLM(bookings=[guessed]))
     # Bệnh nhân không có kế hoạch -> sau khi LLM sửa về null, phải hỏi khoa thay vì đoán.
     ask = waiting(
         await app.chat.send_message("b4", "patient-no-plan", "gối tôi đau, đặt lịch khám ngày mai"), "clarify"
@@ -82,7 +94,7 @@ async def test_department_guessed_from_symptoms_is_rejected(make_app: Any) -> No
 
 
 async def test_slot_taken_at_confirmation_offers_new_slots(make_app: Any) -> None:
-    app = make_app()
+    app = await _request_app(make_app)
     options = waiting(await app.chat.send_message("b5", PATIENT, REQUEST), "choose_slot").interrupt.options
     waiting(await app.chat.resume("b5", PATIENT, UserDecision(action="choose", option_no=1)), "confirm_booking")
     # Người khác đặt mất slot trong lúc bệnh nhân đang xác nhận.
@@ -95,7 +107,8 @@ async def test_slot_taken_at_confirmation_offers_new_slots(make_app: Any) -> Non
 
 
 async def test_ambiguous_choice_and_other_time(make_app: Any) -> None:
-    app = make_app()
+    later = booking_out(department=PHCN, date="thứ ba tuần sau", time="buổi chiều")
+    app = await make_app(llm=ScriptedLLM(bookings=[REQUEST_OUT, later]))
     waiting(await app.chat.send_message("b6", PATIENT, REQUEST), "choose_slot")
     # 2 slot đầu cùng 08:00 với hai bác sĩ khác nhau -> "8 giờ" là mơ hồ.
     again = waiting(await app.chat.resume("b6", PATIENT, UserDecision(action="reply", text="8 giờ")), "choose_slot")
@@ -107,7 +120,7 @@ async def test_ambiguous_choice_and_other_time(make_app: Any) -> None:
 
 
 async def test_sunday_and_cancel(make_app: Any) -> None:
-    app = make_app()
+    app = await make_app(llm=ScriptedLLM(bookings=[booking_out(department=PHCN, date="chủ nhật tuần sau")]))
     ask = waiting(
         await app.chat.send_message("b7", PATIENT, "đặt lịch khoa phục hồi chức năng chủ nhật tuần sau"), "clarify"
     )
@@ -116,7 +129,8 @@ async def test_sunday_and_cancel(make_app: Any) -> None:
 
 
 async def test_list_appointments_and_multi_intent_notice(make_app: Any) -> None:
-    app = make_app()
+    report = report_out(pain=(4, "tuần này đau mức 4"), days=(5, "tập 5 ngày"))
+    app = await make_app(llm=ScriptedLLM(reports=[report]))
     done(await app.chat.send_message("b8", PATIENT, "xem lịch hẹn của tôi"), "appointments")
     waiting(
         await app.chat.send_message("b9", PATIENT, "tuần này đau mức 4, tập 5 ngày, và đặt lịch tái khám"),

@@ -7,6 +7,7 @@ import type {
   Decision,
   Meta,
   NewUser,
+  Registration,
   SttFlag,
   TranscriptReview,
   TurnResult,
@@ -69,6 +70,9 @@ export const api = {
   // ---- đăng nhập
   login: (username: string, password: string) =>
     request<User>("/v1/auth/login", { method: "POST", json: { username, password }, allowUnauthorized: true }),
+  register: (registration: Registration) =>
+    request<User>("/v1/auth/register", { method: "POST", json: registration, allowUnauthorized: true }),
+  authOptions: () => request<{ allow_registration: boolean }>("/v1/auth/options", { allowUnauthorized: true }),
   logout: () => request<void>("/v1/auth/logout", { method: "POST", allowUnauthorized: true }),
   me: () => request<User>("/v1/auth/me", { allowUnauthorized: true }),
   meta: () => request<Meta>("/v1/meta"),

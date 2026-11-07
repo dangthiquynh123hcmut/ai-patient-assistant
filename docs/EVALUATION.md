@@ -1,6 +1,6 @@
 # Evaluation — AI Patient Assistant
 
-Bộ đánh giá chạy **agent thật**: LangGraph, validator, service và repository. Chỉ có dữ liệu là in-memory, đồng hồ là cố định, và một số lỗi được tiêm có chủ đích. Mỗi case dùng một container riêng nên các case không ảnh hưởng nhau.
+Bộ đánh giá chạy **agent thật**: LangGraph, validator, service và repository. Dữ liệu nằm trong Postgres thật, đồng hồ là cố định, và một số lỗi được tiêm có chủ đích. Mỗi case dùng một container và một schema Postgres riêng (xóa khi xong) nên các case không ảnh hưởng nhau, kể cả khi chạy song song.
 
 Code nằm ở `src/patient_assistant/evaluation/`:
 
@@ -15,17 +15,26 @@ Code nằm ở `src/patient_assistant/evaluation/`:
 
 ## Chạy
 
+Eval cần Postgres (`PA_DATABASE_URL`) và Claude trên Bedrock. Chạy trong Docker, dùng image và cấu hình của backend
+(báo cáo được ghi ra thư mục `eval_reports/` trên máy):
+
+```bash
+docker compose run --rm -v ./eval_reports:/app/eval_reports backend python -m patient_assistant.evaluation.runner
+```
+
+Hoặc chạy trực tiếp khi máy có Postgres và driver dùng được:
+
 ```bash
 .venv/bin/python -m patient_assistant.evaluation.runner
 ```
 
 ```bash
-.venv/bin/python -m patient_assistant.evaluation.runner --llm bedrock --suite booking --fail-on-hard-zero
+.venv/bin/python -m patient_assistant.evaluation.runner --suite booking --fail-on-hard-zero
 ```
 
-Tùy chọn khác: `--case <id>` (lặp được), `--dataset file.jsonl ...`, `--out eval_reports`, `--concurrency 4`. Báo cáo được ghi vào `eval_reports/<thời điểm>-<llm>/`. Nếu đã cài lại package (`pip install -e .`), có thể gọi tắt bằng `pa-eval`.
+Tùy chọn khác: `--case <id>` (lặp được), `--dataset file.jsonl ...`, `--out eval_reports`, `--concurrency 4`. Báo cáo được ghi vào `eval_reports/<thời điểm>/`. Nếu đã cài lại package (`pip install -e .`), có thể gọi tắt bằng `pa-eval`.
 
-`--llm bedrock` gọi Claude thật và **tốn phí**: mỗi case có từ 1 đến khoảng 5 lần gọi LLM. Nên chạy thử một suite nhỏ trước.
+Eval luôn gọi Claude thật trên Bedrock và **tốn phí**: mỗi case có từ 1 đến khoảng 5 lần gọi LLM. Nên chạy thử một suite nhỏ trước. Không gọi được LLM thì eval dừng ngay.
 
 ## Định dạng case
 
@@ -78,7 +87,7 @@ Ví dụ một case tiêm lỗi:
 
 Ba metric đánh dấu "= 0" là ngưỡng cứng. `--fail-on-hard-zero` trả exit code 1 nếu có metric nào khác 0, dùng được trong CI.
 
-## Kết quả baseline (LLM offline, 2026-10-28)
+## Kết quả baseline cũ (LLM offline theo luật, 2026-10-28 — chế độ này đã bị xóa)
 
 | Metric | Kết quả |
 |---|---|
@@ -90,7 +99,7 @@ Ba metric đánh dấu "= 0" là ngưỡng cứng. `--fail-on-hard-zero` trả e
 | Hỏi lại | Hỏi khi cần 100%, tự đoán 0%, hỏi thừa 0% |
 | False-success / slot hallucination / double-booking | 0 / 0 / 0 |
 
-**Cách đọc baseline này:** `OfflineRuleLLM` là bộ luật được viết song song với dataset, nên 100% ở đây chủ yếu chứng minh **workflow, validator và các chốt chặn** chạy đúng. Nó **không** đo chất lượng của một mô hình ngôn ngữ thật. Con số có ý nghĩa cho phần trích xuất là kết quả khi chạy `--llm bedrock`. Các case có `llm_script` tách riêng phần này: chúng đo validator và self-correction bằng đầu ra sai có chủ đích, độc lập với LLM được dùng.
+**Cách đọc baseline này:** `OfflineRuleLLM` là bộ luật được viết song song với dataset, nên 100% ở đây chủ yếu chứng minh **workflow, validator và các chốt chặn** chạy đúng. Nó **không** đo chất lượng của một mô hình ngôn ngữ thật. Con số có ý nghĩa cho phần trích xuất là kết quả chạy với Claude thật; cần chạy lại eval để có baseline mới. Các case có `llm_script` tách riêng phần này: chúng đo validator và self-correction bằng đầu ra sai có chủ đích, độc lập với LLM được dùng.
 
 ## Bộ eval bắt được gì khi phát triển
 

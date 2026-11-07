@@ -48,7 +48,7 @@
 | Mục đích | Thư viện |
 |---|---|
 | Unit/integration test | **pytest**, **pytest-asyncio**, **httpx** (`AsyncClient` test FastAPI) |
-| DB thật trong test | **testcontainers[postgres]** |
+| DB thật trong test | **Postgres của docker compose** (service `test`): mỗi test một schema riêng, xóa khi xong |
 | Property-based test cho validator | **hypothesis** (sinh `pain_level`, `exercise_days` biên/ngoài biên) |
 | LLM giả lập trong test workflow | `FakeLLMProvider` tự viết (cài cùng interface với provider thật) |
 | Evaluation runner | Tự viết trong `src/patient_assistant/evaluation/` (dataset JSONL + metric bằng code, xuất Markdown/JSON); không cần pandas |
@@ -614,7 +614,7 @@ src/patient_assistant/
       trace.py                 # diễn giải từng node đã chạy (từ LangGraph stream) cho UI
     use_cases/  chat.py  transcribe.py             # ẩn LangGraph (Command, interrupt) khỏi API
   infrastructure/
-    llm/  bedrock.py  offline.py  schema.py  prompts/*.md
+    llm/  bedrock.py  schema.py  prompts/*.md
     stt/  faster_whisper.py
     persistence/  memory.py  seed.py  sql/{models,repositories,setup}.py
                   demo_data/*.json   # khoa, bác sĩ, lịch làm việc, bệnh nhân, kế hoạch, tài liệu, lịch sử demo
@@ -630,13 +630,13 @@ frontend/                      # React 19 + TypeScript (Vite); nginx/ (proxy /v1
 Dockerfile  docker-compose.yml # backend image; compose: db (Postgres) + migrate + backend + frontend
 tests/
   unit/                        # vi_dates, vi_numbers, validators, selection, routing, schema, kiến trúc
-  integration/                 # graph thật qua interrupt; SQL (SQLite) đặt trùng đồng thời; HTTP API;
+  integration/                 # graph thật qua interrupt; SQL (Postgres) đặt trùng đồng thời; HTTP API;
                                # chính bộ eval (metric bắt được lỗi, mutation test tắt validator)
 ```
 
 **Khác với bản thiết kế ban đầu:**
 - Grounding dùng `difflib` của thư viện chuẩn thay cho `rapidfuzz` để domain không phụ thuộc thư viện ngoài. Khớp gần đúng còn bắt buộc **các con số giữ nguyên**: "đã tập 5 ngày" không khớp nguồn "đã tập 4 ngày".
-- Có `OfflineRuleLLM`, một adapter theo luật, để chạy demo và test không cần AWS. Đầu ra của nó vẫn đi qua cùng validator với LLM thật.
+- Chỉ có một LLM provider là Claude trên Bedrock; không có chế độ chạy offline. Lúc khởi động, server (và eval) gọi thử LLM một lần và dừng nếu không gọi được. Test dùng `ScriptedLLM` trả đầu ra định sẵn.
 - Node `respond` dựng câu trả lời bằng template từ dữ liệu đã xác minh. LLM chỉ viết câu trả lời ở `rag_answer`, và câu đó phải có `doc_id` nguồn.
 - State của subgraph chỉ được gộp vào graph cha khi subgraph kết thúc. Trong lúc đang dừng chờ người dùng, muốn xem state thì đọc bằng `aget_state(..., subgraphs=True)`.
 
@@ -682,7 +682,7 @@ Chi tiết ở [docs/EVALUATION.md](docs/EVALUATION.md). Tóm tắt:
   - validator TP/FP/FN/TN và tỷ lệ bắt đúng mã lỗi; self-correction success/regression;
   - hỏi lại khi cần, tự đoán, hỏi thừa; latency;
   - và ba ngưỡng cứng bằng 0: **false-success, slot hallucination, double-booking**.
-- **CLI:** `python -m patient_assistant.evaluation.runner [--llm bedrock] [--fail-on-hard-zero]`, xuất `report.md` và `report.json`.
+- **CLI:** `python -m patient_assistant.evaluation.runner [--suite ...] [--fail-on-hard-zero]` (gọi Claude thật), xuất `report.md` và `report.json`.
 - **Chưa có:** STT WER trên audio thật, latency theo từng node, chi phí token.
 
 ## 12. Kế hoạch triển khai (khớp với §9 của FR v0.3)

@@ -6,7 +6,6 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
-from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from patient_assistant.application.services.auth_service import AuthService, hash_password, verify_password
 from patient_assistant.domain.account import NewUser
@@ -14,10 +13,14 @@ from patient_assistant.infrastructure.clock import FixedClock
 from patient_assistant.infrastructure.persistence import seed
 from patient_assistant.infrastructure.persistence.sql import accounts
 from patient_assistant.infrastructure.persistence.sql import repositories as sql
-from patient_assistant.infrastructure.persistence.sql.setup import create_schema, make_engine, seed_demo_data
-from tests.conftest import NOW, PATIENT, TZ, api_client, login
+from tests.conftest import NOW, PATIENT, ScriptedLLM, api_client, booking_out, login, report_out
 
 BOOK = "Cho tôi đặt lịch khoa phục hồi chức năng thứ ba tuần sau buổi sáng"
+
+
+def _booking_llm() -> ScriptedLLM:
+    out = booking_out(department=("PHCN", "phục hồi chức năng"), date="thứ ba tuần sau", time="buổi sáng")
+    return ScriptedLLM(bookings=[out])
 
 
 def test_password_hash_roundtrip() -> None:
@@ -30,7 +33,7 @@ def test_password_hash_roundtrip() -> None:
 
 
 async def test_login_logout_and_bad_credentials(make_app: Any) -> None:
-    async with api_client(make_app()) as client:
+    async with api_client(await make_app()) as client:
         assert (await client.get("/v1/auth/me")).status_code == 401
         bad = await client.post("/v1/auth/login", json={"username": "benhnhan1", "password": "sai-mat-khau"})
         assert bad.status_code == 401 and "Sai tên đăng nhập" in bad.json()["detail"]
@@ -49,15 +52,74 @@ async def test_login_logout_and_bad_credentials(make_app: Any) -> None:
         assert (await client.get("/v1/auth/me")).status_code == 401
 
 
+NEW_ACCOUNT = {"username": "Nguyen.Van_A", "display_name": "  Nguyễn   Văn A ", "password": "matkhau123"}
+
+
+async def test_register_creates_patient_and_logs_in(make_app: Any) -> None:
+    async with api_client(await make_app()) as client:
+        assert (await client.get("/v1/auth/options")).json() == {"allow_registration": True}
+        # Gửi kèm role/patient_id cũng không được: tài khoản tự đăng ký luôn là bệnh nhân với hồ sơ mới.
+        r = await client.post(
+            "/v1/auth/register", json={**NEW_ACCOUNT, "role": "admin", "patient_id": "patient-demo-001"}
+        )
+        assert r.status_code == 201, r.text
+        user = r.json()
+        assert (user["username"], user["display_name"], user["role"]) == ("nguyen.van_a", "Nguyễn Văn A", "patient")
+        assert user["patient_id"].startswith("patient-") and user["patient_id"] != "patient-demo-001"
+        assert "httponly" in r.headers["set-cookie"].lower() and "password" not in r.text
+
+        me = (await client.get("/v1/auth/me")).json()  # đã đăng nhập ngay bằng cookie
+        assert me["id"] == user["id"]
+        reports = await client.get("/v1/me/reports")
+        assert reports.status_code == 200 and reports.json() == []  # hồ sơ mới, chưa có dữ liệu
+        client.cookies.clear()
+
+        again = await client.post("/v1/auth/login", json={"username": "nguyen.van_a", "password": "matkhau123"})
+        assert again.status_code == 200
+        client.cookies.clear()
+
+        # Nhân viên thấy bệnh nhân mới trong danh sách (lấy từ DB, không phải dữ liệu demo cố định).
+        staff = await login(client, "bacsi")
+        patients = (await client.get("/v1/meta", headers=staff)).json()["patients"]
+        assert {"id": user["patient_id"], "label": "Nguyễn Văn A"} in patients
+        assert any(p["id"] == "patient-demo-001" for p in patients)
+
+
+async def test_register_rejects_taken_username_and_bad_input(make_app: Any) -> None:
+    app = await make_app()
+    async with api_client(app) as client:
+        assert (await client.post("/v1/auth/register", json=NEW_ACCOUNT)).status_code == 201
+        client.cookies.clear()
+        taken = await client.post("/v1/auth/register", json={**NEW_ACCOUNT, "username": "NGUYEN.VAN_A"})
+        assert taken.status_code == 409 and "Tên đăng nhập" in taken.json()["detail"]
+        demo = await client.post("/v1/auth/register", json={**NEW_ACCOUNT, "username": "benhnhan1"})
+        assert demo.status_code == 409
+        for bad in ({"username": "a"}, {"password": "ngan"}, {"display_name": "   "}):
+            r = await client.post("/v1/auth/register", json={**NEW_ACCOUNT, "username": "khac", **bad})
+            assert r.status_code == 422, (bad, r.text)
+    # Đăng ký trùng không để lại hồ sơ bệnh nhân mồ côi.
+    profiles = await app.auth.list_patients()
+    assert len(profiles) == 4  # 3 bệnh nhân demo + 1 tài khoản vừa đăng ký
+
+
+async def test_register_can_be_disabled(make_app: Any) -> None:
+    async with api_client(await make_app(allow_registration=False)) as client:
+        assert (await client.get("/v1/auth/options")).json() == {"allow_registration": False}
+        r = await client.post("/v1/auth/register", json=NEW_ACCOUNT)
+        assert r.status_code == 403
+        login_attempt = await client.post("/v1/auth/login", json={"username": "nguyen.van_a", "password": "x"})
+        assert login_attempt.status_code == 401  # không có tài khoản nào được tạo
+
+
 async def test_logout_revokes_token_server_side(make_app: Any) -> None:
-    async with api_client(make_app()) as client:
+    async with api_client(await make_app()) as client:
         headers = await login(client, "benhnhan1")
         assert (await client.post("/v1/auth/logout", headers=headers)).status_code == 204
         assert (await client.get("/v1/auth/me", headers=headers)).status_code == 401
 
 
 async def test_lockout_after_repeated_failures(make_app: Any) -> None:
-    async with api_client(make_app()) as client:
+    async with api_client(await make_app()) as client:
         for _ in range(5):
             await client.post("/v1/auth/login", json={"username": "bacsi", "password": "sai"})
         locked = await client.post("/v1/auth/login", json={"username": "bacsi", "password": "demo1234"})
@@ -65,22 +127,10 @@ async def test_lockout_after_repeated_failures(make_app: Any) -> None:
         await login(client, "benhnhan1")  # tài khoản khác không bị ảnh hưởng
 
 
-async def test_session_expires() -> None:
-    from patient_assistant.infrastructure.persistence.memory import (
-        InMemoryPatientRepository,
-        InMemorySessionRepository,
-        InMemoryUserRepository,
-    )
-
+async def test_session_expires(make_storage: Any) -> None:
+    repos = (await make_storage()).repos
     clock = FixedClock(NOW)
-    auth = AuthService(
-        InMemoryUserRepository(),
-        InMemorySessionRepository(),
-        InMemoryPatientRepository(seed.profiles()),
-        clock,
-        timedelta(hours=1),
-    )
-    await auth.seed(seed.demo_accounts("demo1234"))
+    auth = AuthService(repos["users"], repos["sessions"], repos["patients"], clock, timedelta(hours=1))
     token, _ = await auth.login("bacsi", "demo1234")
     assert await auth.authenticate(token) is not None
     clock.now = lambda: NOW + timedelta(hours=2)  # type: ignore[method-assign]
@@ -101,14 +151,14 @@ async def test_session_expires() -> None:
     ],
 )
 async def test_role_permissions(make_app: Any, username: str, path: str, method: str, status: int) -> None:
-    async with api_client(make_app()) as client:
+    async with api_client(await make_app()) as client:
         headers = await login(client, username)
         kwargs: dict[str, Any] = {"json": {"text": "xin chào"}} if method == "post" else {}
         assert (await client.request(method, path, headers=headers, **kwargs)).status_code == status
 
 
 async def test_patient_cannot_touch_another_patients_conversation(make_app: Any) -> None:
-    async with api_client(make_app()) as client:
+    async with api_client(await make_app(llm=_booking_llm())) as client:
         owner = await login(client, "benhnhan1")
         other = await login(client, "benhnhan2")
         r = await client.post("/v1/chat/c-1/messages", headers=owner, json={"text": BOOK})
@@ -123,7 +173,9 @@ async def test_patient_cannot_touch_another_patients_conversation(make_app: Any)
 
 
 async def test_every_question_and_answer_is_logged_for_staff(make_app: Any) -> None:
-    async with api_client(make_app()) as client:
+    pain = (3, "tuần này tôi đau mức 3")
+    llm = ScriptedLLM(reports=[report_out(pain=pain), report_out(pain=pain, days=(4, "tập 4 ngày"))])
+    async with api_client(await make_app(llm=llm)) as client:
         patient = await login(client, "benhnhan1")
         await client.post("/v1/chat/log-1/messages", headers=patient, json={"text": "tuần này tôi đau mức 3"})
         await client.post("/v1/chat/log-1/resume", headers=patient, json={"action": "reply", "text": "tập 4 ngày"})
@@ -152,7 +204,7 @@ async def test_every_question_and_answer_is_logged_for_staff(make_app: Any) -> N
 
 
 async def test_admin_manages_accounts(make_app: Any) -> None:
-    async with api_client(make_app()) as client:
+    async with api_client(await make_app()) as client:
         admin = await login(client, "admin")
         new = {
             "username": "nguyenvana",
@@ -196,13 +248,10 @@ async def test_admin_manages_accounts(make_app: Any) -> None:
         assert self_lock.status_code == 400
 
 
-async def test_sql_accounts_sessions_and_log(tmp_path: Any) -> None:
+async def test_sql_accounts_sessions_and_log(make_storage: Any) -> None:
     from patient_assistant.domain.account import ChatMessage
 
-    engine = make_engine(f"sqlite+aiosqlite:///{tmp_path / 'auth.db'}")
-    await create_schema(engine)
-    sessions = async_sessionmaker(engine, expire_on_commit=False)
-    await seed_demo_data(sessions, NOW.date(), TZ)
+    sessions = (await make_storage()).sessions
     users = accounts.SqlUserRepository(sessions)
     auth = AuthService(
         users,
@@ -236,4 +285,3 @@ async def test_sql_accounts_sessions_and_log(tmp_path: Any) -> None:
     [conv] = await log.list_conversations(PATIENT, 10)
     assert (conv.message_count, conv.last_kind) == (2, "chat")
     assert [m.text for m in await log.list_messages("t1")] == ["#0", "#1"]  # cùng thời điểm vẫn đúng thứ tự
-    await engine.dispose()

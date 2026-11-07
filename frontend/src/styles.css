@@ -215,6 +215,9 @@ table.grid td { padding: 6px; border-bottom: 1px solid var(--line); vertical-ali
   padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink); font-size: 15px;
 }
 .auth-error { margin: 0; color: var(--bad); font-size: 13px; }
+.auth-switch { margin: 0; font-size: 14px; text-align: center; }
+.auth-switch a { color: var(--primary); font-weight: 600; }
+.field .hint { font-size: 12px; color: var(--muted); }
 .auth-demo summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 .auth-demo ul { padding-left: 18px; margin: 6px 0 0; line-height: 1.6; }
 .userbox { display: flex; align-items: center; gap: 8px; font-size: 13px; }

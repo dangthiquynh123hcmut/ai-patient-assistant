@@ -12,8 +12,7 @@ class Settings(BaseSettings):
 
     timezone: str = "Asia/Ho_Chi_Minh"
 
-    # LLM
-    llm_provider: Literal["bedrock", "offline"] = "offline"
+    # LLM: Claude trên Amazon Bedrock. Server không khởi động nếu không gọi được LLM.
     # Để trống thì SDK tự lấy theo chuỗi credential chuẩn của AWS: AWS_REGION / AWS_PROFILE / ~/.aws/config.
     aws_region: str | None = None
     aws_profile: str | None = None
@@ -22,12 +21,9 @@ class Settings(BaseSettings):
     llm_effort_extract: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
     llm_effort_light: Literal["low", "medium", "high", "xhigh", "max"] = "low"
 
-    # Lưu trữ: database_url rỗng -> in-memory (mất khi tắt server). SQLite: sqlite+aiosqlite:///./data/app.db
-    # Postgres:
-    # postgresql+asyncpg://user:pass@localhost:5432/patient_assistant
+    # Lưu trữ: chỉ PostgreSQL (dữ liệu nghiệp vụ + state hội thoại của LangGraph), bắt buộc.
+    # postgresql+asyncpg://user:pass@localhost:5432/patient_assistant — checkpointer dùng cùng database này.
     database_url: str | None = None
-    checkpointer: Literal["memory", "postgres"] = "memory"
-    checkpointer_url: str | None = None  # postgresql://user:pass@localhost:5432/patient_assistant
     # Dev/test: server tự tạo bảng và nạp dữ liệu demo lúc khởi động. Production (docker compose): tắt cả hai —
     # schema do `alembic upgrade head` quản lý, dữ liệu demo do `python -m patient_assistant.interface.cli.seed`.
     auto_create_schema: bool = True
@@ -38,6 +34,7 @@ class Settings(BaseSettings):
     session_ttl_hours: int = 12
     seed_password: str = "demo1234"
     cookie_secure: bool = False  # bật khi chạy sau HTTPS
+    allow_registration: bool = True  # người dùng tự tạo tài khoản bệnh nhân ở trang đăng ký
 
     # STT
     stt_enabled: bool = False

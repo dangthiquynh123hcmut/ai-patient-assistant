@@ -108,7 +108,7 @@ async def run(region: str | None, profile: str | None, model: str) -> int:
         print(f"{FAIL} 4. Phân loại intent thất bại — {_explain(exc)}")
         return 1
     print(f"{OK} 4. Phân loại câu nói lỏng: {[i.value for i in intents]}")
-    print("\nSẵn sàng: đặt PA_LLM_PROVIDER=bedrock trong .env rồi chạy lại server.")
+    print("\nSẵn sàng: khởi động server.")
     return 0
 
 

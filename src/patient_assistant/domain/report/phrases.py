@@ -1,4 +1,4 @@
-"""Nhận diện cách người dùng mô tả triệu chứng và việc tập — dùng chung cho validator và adapter offline."""
+"""Nhận diện cách người dùng mô tả triệu chứng và việc tập — dùng cho validator."""
 
 from __future__ import annotations
 

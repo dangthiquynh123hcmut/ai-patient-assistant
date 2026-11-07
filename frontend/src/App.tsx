@@ -4,6 +4,7 @@ import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import type { Role } from "./api/types";
 import { homeFor, useAuth } from "./auth/AuthProvider";
 import { LoginPage } from "./auth/LoginPage";
+import { RegisterPage } from "./auth/RegisterPage";
 import { ChatPage } from "./features/chat/ChatPage";
 import { ConversationsPage } from "./features/staff/ConversationsPage";
 import { UsersPage } from "./features/staff/UsersPage";
@@ -22,6 +23,7 @@ export function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/register" element={<RegisterPage />} />
       <Route
         path="/"
         element={

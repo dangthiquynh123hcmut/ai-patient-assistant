@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, tzinfo
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -109,6 +109,19 @@ class SqlPatientRepository:
         async with self._sessions() as session:
             row = await session.get(PatientRow, patient_id)
             return PatientProfile(id=row.id, display_name=row.display_name) if row else None
+
+    async def list_profiles(self) -> list[PatientProfile]:
+        async with self._sessions() as session:
+            rows = await session.scalars(select(PatientRow).order_by(PatientRow.id))
+            return [PatientProfile(id=r.id, display_name=r.display_name) for r in rows]
+
+    async def add(self, profile: PatientProfile) -> None:
+        async with self._sessions.begin() as session:
+            session.add(PatientRow(id=profile.id, display_name=profile.display_name))
+
+    async def remove(self, patient_id: str) -> None:
+        async with self._sessions.begin() as session:
+            await session.execute(delete(PatientRow).where(PatientRow.id == patient_id))
 
 
 class SqlPlanRepository:

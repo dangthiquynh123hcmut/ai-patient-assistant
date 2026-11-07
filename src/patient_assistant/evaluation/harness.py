@@ -1,6 +1,6 @@
 """Chạy một case qua agent thật (graph + validator + service), ghi lại những gì quan sát được.
 
-Mỗi case dùng container mới với dữ liệu in-memory riêng, đồng hồ cố định và (tùy chọn) lỗi tiêm sẵn.
+Mỗi case dùng container mới với schema Postgres riêng (xóa khi xong), đồng hồ cố định và (tùy chọn) lỗi tiêm sẵn.
 Harness chỉ QUAN SÁT; việc chấm điểm nằm ở `metrics.py`.
 """
 
@@ -8,13 +8,16 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections import Counter
-from collections.abc import Callable
+import uuid
+from collections.abc import AsyncIterator, Callable
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import datetime
 from datetime import time as dtime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from patient_assistant.application.agent.state import AgentState, UserDecision
 from patient_assistant.application.ports.llm import (
@@ -27,12 +30,14 @@ from patient_assistant.application.ports.llm import (
 )
 from patient_assistant.application.use_cases.chat import TurnResult
 from patient_assistant.config import Settings
-from patient_assistant.container import Container, assemble, in_memory_repositories, memory_checkpointer
+from patient_assistant.container import Container, assemble, open_storage, seed_demo_users
 from patient_assistant.domain.booking.models import AppointmentStatus, SlotOption
 from patient_assistant.domain.conversation import Intent
+from patient_assistant.domain.report.models import Report
 from patient_assistant.evaluation.cases import EvalCase, LLMScript
 from patient_assistant.infrastructure.clock import FixedClock
-from patient_assistant.infrastructure.persistence.memory import InMemoryAuditLog, InMemoryBookingStore
+from patient_assistant.infrastructure.persistence.sql.models import AppointmentRow, ReportRow, SlotRow
+from patient_assistant.infrastructure.persistence.sql.repositories import _report
 from patient_assistant.infrastructure.stt.faster_whisper import UnavailableSTT
 
 LLMFactory = Callable[[], LLMPort]
@@ -76,7 +81,7 @@ class CaseObservation(BaseModel):
 
 
 class ScriptedLLM:
-    """Trả lần lượt đầu ra tiêm sẵn; hết kịch bản thì chuyển cho LLM bên trong (offline hoặc Bedrock)."""
+    """Trả lần lượt đầu ra tiêm sẵn; hết kịch bản thì chuyển cho LLM bên trong."""
 
     def __init__(self, inner: LLMPort, script: LLMScript) -> None:
         self._inner = inner
@@ -116,14 +121,49 @@ async def _raise_unavailable(*_: Any, **__: Any) -> Any:
 # ---------------------------------------------------------------- chạy case
 
 
-async def _prebook(store: InMemoryBookingStore, spec: dict[str, str], now: datetime) -> None:
+async def _prebook(repos: dict[str, Any], spec: dict[str, str], now: datetime) -> None:
     """Chiếm trước mọi slot của một khoa trong một ngày (tới giờ `until`) để buộc agent nới điều kiện."""
     day = datetime.fromisoformat(spec["date"]).date()
     until = dtime.fromisoformat(spec.get("until", "23:59"))
     start = datetime.combine(day, dtime(0, 0), now.tzinfo)
     end = datetime.combine(day, until, now.tzinfo)
-    for i, slot in enumerate(await store.find_available(spec["department"], start, end, None, 1000)):
-        await store.book("prebook-patient", slot, None, f"prebook-{i}")
+    for i, slot in enumerate(await repos["slots"].find_available(spec["department"], start, end, None, 1000)):
+        await repos["appointments"].book("prebook-patient", slot, None, f"prebook-{i}")
+
+
+class _Db:
+    """Đọc thẳng database của case để kiểm tra kết quả (không đi qua agent)."""
+
+    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+        self._sessions = sessions
+
+    async def booked_slot_ids(self, patient_id: str) -> list[str]:
+        query = (
+            select(AppointmentRow.slot_id)
+            .where(AppointmentRow.status == AppointmentStatus.BOOKED.value, AppointmentRow.patient_id == patient_id)
+            .order_by(AppointmentRow.created_at)
+        )
+        async with self._sessions() as session:
+            return list(await session.scalars(query))
+
+    async def double_booked_slot_ids(self) -> list[str]:
+        query = (
+            select(AppointmentRow.slot_id)
+            .where(AppointmentRow.status == AppointmentStatus.BOOKED.value)
+            .group_by(AppointmentRow.slot_id)
+            .having(func.count() > 1)
+        )
+        async with self._sessions() as session:
+            return sorted(await session.scalars(query))
+
+    async def slot_ids(self) -> set[str]:
+        async with self._sessions() as session:
+            return set(await session.scalars(select(SlotRow.slot_id)))
+
+    async def reports(self, patient_id: str) -> list[Report]:
+        query = select(ReportRow).where(ReportRow.patient_id == patient_id).order_by(ReportRow.created_at)
+        async with self._sessions() as session:
+            return [_report(row) for row in await session.scalars(query)]
 
 
 def _fields(state: AgentState) -> dict[str, Any]:
@@ -141,47 +181,45 @@ def _fields(state: AgentState) -> dict[str, Any]:
 
 
 class CaseRunner:
-    def __init__(self, llm_factory: LLMFactory) -> None:
+    def __init__(self, llm_factory: LLMFactory, settings: Settings) -> None:
         self._llm_factory = llm_factory
+        self._settings = settings
 
-    def _container(self, case: EvalCase) -> tuple[Container, dict[str, Any]]:
+    @asynccontextmanager
+    async def _container(self, case: EvalCase) -> AsyncIterator[tuple[Container, dict[str, Any], _Db]]:
         clock = FixedClock(case.now)
-        repos = in_memory_repositories(clock)
-        if case.faults.save_unavailable:
-            repos["reports"].add = _raise_unavailable
-        if case.faults.booking_unavailable:
-            repos["appointments"].book = _raise_unavailable
-        llm: LLMPort = (
-            UnavailableLLM() if case.faults.llm_unavailable else ScriptedLLM(self._llm_factory(), case.llm_script)
-        )
-        container = assemble(
-            Settings(_env_file=None),
-            repos,
-            llm,
-            UnavailableSTT(),
-            clock,
-            memory_checkpointer(),
-            audit=InMemoryAuditLog(),
-        )
-        return container, repos
+        schema = f"eval_{uuid.uuid4().hex[:12]}"
+        async with AsyncExitStack() as stack:
+            storage = await open_storage(stack, self._settings, clock, schema=schema, with_history=False)
+            await seed_demo_users(storage.sessions, self._settings.seed_password, case.now)
+            repos = storage.repos
+            if case.faults.save_unavailable:
+                repos["reports"].add = _raise_unavailable
+            if case.faults.booking_unavailable:
+                repos["appointments"].book = _raise_unavailable
+            llm: LLMPort = (
+                UnavailableLLM() if case.faults.llm_unavailable else ScriptedLLM(self._llm_factory(), case.llm_script)
+            )
+            container = assemble(self._settings, repos, llm, UnavailableSTT(), clock, storage.checkpointer)
+            yield container, repos, _Db(storage.sessions)
 
     async def run(self, case: EvalCase) -> list[CaseObservation]:
-        container, repos = self._container(case)
-        store: InMemoryBookingStore = repos["slots"]
-        if case.faults.prebook_window:
-            await _prebook(store, case.faults.prebook_window, case.now)
-        sessions = case.concurrency.sessions if case.concurrency else 1
-        barrier = asyncio.Barrier(sessions) if sessions > 1 else None
-        observations = await asyncio.gather(*[self._drive(case, container, repos, i, barrier) for i in range(sessions)])
-        # Kiểm tra toàn cục sau khi mọi phiên kết thúc.
-        active = Counter(a.slot.slot_id for a in store.all_appointments() if a.status == AppointmentStatus.BOOKED)
-        doubled = sorted(slot for slot, n in active.items() if n > 1)
-        for obs in observations:
-            obs.double_booked_slot_ids = doubled
-        return list(observations)
+        async with self._container(case) as (container, repos, db):
+            if case.faults.prebook_window:
+                await _prebook(repos, case.faults.prebook_window, case.now)
+            sessions = case.concurrency.sessions if case.concurrency else 1
+            barrier = asyncio.Barrier(sessions) if sessions > 1 else None
+            observations = await asyncio.gather(
+                *[self._drive(case, container, db, i, barrier) for i in range(sessions)]
+            )
+            # Kiểm tra toàn cục sau khi mọi phiên kết thúc.
+            doubled = await db.double_booked_slot_ids()
+            for obs in observations:
+                obs.double_booked_slot_ids = doubled
+            return list(observations)
 
     async def _drive(
-        self, case: EvalCase, container: Container, repos: dict[str, Any], session: int, barrier: asyncio.Barrier | None
+        self, case: EvalCase, container: Container, db: _Db, session: int, barrier: asyncio.Barrier | None
     ) -> CaseObservation:
         thread = f"{case.id}-{session}"
         patient = case.patient_id if barrier is None else f"{case.patient_id}-{session}"
@@ -244,24 +282,22 @@ class CaseRunner:
             obs.error = f"{type(exc).__name__}: {exc}"
         obs.latency_ms = int((time.perf_counter() - started) * 1000)
 
-        store: InMemoryBookingStore = repos["slots"]
-        booked = [
-            a for a in store.all_appointments() if a.patient_id == patient and a.status == AppointmentStatus.BOOKED
-        ]
-        obs.booked_slot_ids = [a.slot.slot_id for a in booked]
+        obs.booked_slot_ids = await db.booked_slot_ids(patient)
         obs.offered_slot_ids = sorted(set(offered))
-        known = store.slot_ids()
+        known = await db.slot_ids()
         obs.hallucinated_slot_ids = sorted(
             {s for s in offered if s not in known} | {s for s in obs.booked_slot_ids if s not in offered}
         )
-        reports = [r for r in repos["reports"].all() if r.patient_id == patient]
+        reports = await db.reports(patient)
         obs.reports_written = len(reports)
         obs.saved_report = reports[-1].model_dump(mode="json", exclude={"evidence"}) if reports else None
         return obs
 
 
-async def run_cases(cases: list[EvalCase], llm_factory: LLMFactory, concurrency: int = 4) -> list[CaseObservation]:
-    runner = CaseRunner(llm_factory)
+async def run_cases(
+    cases: list[EvalCase], llm_factory: LLMFactory, settings: Settings, concurrency: int = 4
+) -> list[CaseObservation]:
+    runner = CaseRunner(llm_factory, settings)
     limit = asyncio.Semaphore(concurrency)
 
     async def one(case: EvalCase) -> list[CaseObservation]:

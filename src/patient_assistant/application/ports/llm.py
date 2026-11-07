@@ -1,4 +1,4 @@
-"""Port LLM. Agent chỉ biết interface này; Bedrock hay offline là chi tiết của infrastructure."""
+"""Port LLM. Agent chỉ biết interface này; Bedrock là chi tiết của infrastructure."""
 
 from __future__ import annotations
 

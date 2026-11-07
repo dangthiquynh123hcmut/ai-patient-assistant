@@ -15,8 +15,14 @@ import uuid
 from datetime import timedelta
 
 from patient_assistant.application.ports.clock import Clock
-from patient_assistant.application.ports.repositories import PatientRepository, SessionRepository, UserRepository
-from patient_assistant.domain.account import MIN_PASSWORD_LENGTH, NewUser, User
+from patient_assistant.application.ports.repositories import (
+    PatientRepository,
+    SessionRepository,
+    UsernameTakenError,
+    UserRepository,
+)
+from patient_assistant.domain.account import MIN_PASSWORD_LENGTH, NewUser, Registration, Role, User
+from patient_assistant.domain.patient import PatientProfile
 
 _SCRYPT = {"n": 2**14, "r": 8, "p": 1}
 MAX_FAILED_LOGINS = 5
@@ -111,7 +117,36 @@ class AuthService:
     async def logout(self, token: str) -> None:
         await self._sessions.delete(_token_hash(token))
 
+    # ------------------------------------------------------------------ tự đăng ký
+
+    async def register(self, registration: Registration) -> User:
+        """Tạo hồ sơ bệnh nhân mới và tài khoản patient gắn với hồ sơ đó.
+
+        Người tự đăng ký không chọn được vai trò hay hồ sơ có sẵn: chỉ admin tạo được staff/admin, hoặc
+        gắn tài khoản vào hồ sơ bệnh nhân đã có.
+        """
+        if await self._users.get_credentials(registration.username):
+            raise UsernameTakenError(registration.username)
+        patient = PatientProfile(id=f"patient-{uuid.uuid4().hex[:12]}", display_name=registration.display_name)
+        await self._patients.add(patient)
+        try:
+            return await self.create_user(
+                NewUser(
+                    username=registration.username,
+                    display_name=registration.display_name,
+                    role=Role.PATIENT,
+                    patient_id=patient.id,
+                    password=registration.password,
+                )
+            )
+        except Exception:
+            await self._patients.remove(patient.id)  # vd. hai người đăng ký cùng username một lúc
+            raise
+
     # ------------------------------------------------------------------ quản lý tài khoản (admin)
+
+    async def list_patients(self) -> list[PatientProfile]:
+        return await self._patients.list_profiles()
 
     async def create_user(self, new: NewUser) -> User:
         if new.patient_id and await self._patients.get_profile(new.patient_id) is None:
