@@ -11,6 +11,10 @@ PHCN = ("PHCN", "phục hồi chức năng")
 REQUEST_OUT = booking_out(department=PHCN, date="thứ ba tuần sau", time="buổi sáng")
 
 
+def _reply(text: str) -> UserDecision:
+    return UserDecision(action="reply", text=text)
+
+
 async def _request_app(make_app: Any) -> Any:
     return await make_app(llm=ScriptedLLM(bookings=[REQUEST_OUT]))
 
@@ -138,3 +142,84 @@ async def test_list_appointments_and_multi_intent_notice(make_app: Any) -> None:
     )
     final = done(await app.chat.resume("b9", PATIENT, UserDecision(action="confirm")), "report_saved")
     assert "đặt lịch khám" in final.response.text
+
+
+async def test_progress_never_hands_off_and_time_of_day_reply_searches_again(make_app: Any) -> None:
+    """Tái hiện hội thoại thật: trả lời đúng mọi lượt (khoa, ngày, "buổi chiều") mà vẫn bị chuyển nhân viên."""
+    llm = ScriptedLLM(
+        bookings=[
+            booking_out(),  # "đặt lịch khám mới": chưa có khoa, chưa có ngày
+            booking_out(department=PHCN),
+            booking_out(department=PHCN, date="thứ ba tuần sau"),
+            booking_out(department=PHCN, date="thứ ba tuần sau", time="buổi chiều"),
+        ]
+    )
+    app = await make_app(llm=llm)
+    waiting(await app.chat.send_message("b10", "patient-no-plan", "đặt lịch khám mới"), "clarify")
+    waiting(await app.chat.resume("b10", "patient-no-plan", _reply("phục hồi chức năng")), "clarify")
+    first = waiting(await app.chat.resume("b10", "patient-no-plan", _reply("thứ ba tuần sau")), "choose_slot")
+    assert any(o.slot.start_at.hour < 12 for o in first.interrupt.options)
+
+    # "buổi chiều" không khớp lịch nào đang hiện -> hiểu là muốn tìm lại buổi chiều, không chuyển nhân viên.
+    later = waiting(await app.chat.resume("b10", "patient-no-plan", _reply("buổi chiều")), "choose_slot")
+    assert later.interrupt.options and all(o.slot.start_at.hour >= 13 for o in later.interrupt.options)
+    assert all(o.slot.start_at.date() == date(2026, 11, 3) for o in later.interrupt.options)
+    waiting(await app.chat.resume("b10", "patient-no-plan", _reply("cái đầu tiên")), "confirm_booking")
+
+
+async def test_same_unanswerable_slot_question_still_hands_off(make_app: Any) -> None:
+    app = await _request_app(make_app)
+    waiting(await app.chat.send_message("b11", PATIENT, REQUEST), "choose_slot")
+    for _ in range(3):  # hỏi lại đúng câu đó tối đa 3 lần
+        again = waiting(await app.chat.resume("b11", PATIENT, _reply("abc xyz")), "choose_slot")
+        assert "chưa xác định được" in again.interrupt.message
+    final = done(await app.chat.resume("b11", PATIENT, _reply("abc xyz")), "handoff")
+    assert "nhân viên" in final.response.text
+
+
+async def test_own_appointment_clash_at_confirmation_keeps_request_and_offers_other_times(make_app: Any) -> None:
+    app = await _request_app(make_app)  # chỉ có MỘT đầu ra extract: hỏi lại từ đầu sẽ không có dữ liệu
+    options = waiting(await app.chat.send_message("b-own", PATIENT, REQUEST), "choose_slot").interrupt.options
+    chosen = options[0].slot
+    waiting(await app.chat.resume("b-own", PATIENT, UserDecision(action="choose", option_no=1)), "confirm_booking")
+    # Trong lúc chờ xác nhận, bệnh nhân tự đặt một lịch Tim mạch trùng giờ (tab khác).
+    tm_slot = f"doc-hai-{chosen.start_at:%Y%m%d-%H%M}"
+    assert (await app.toolbox.create_appointment(PATIENT, tm_slot, None, "tab-2", NOW)).ok
+
+    again = waiting(await app.chat.resume("b-own", PATIENT, UserDecision(action="confirm")), "choose_slot")
+    assert "Trùng giờ" in again.interrupt.message
+    new = [o.slot for o in again.interrupt.options]
+    assert new and all(s.department_code == "PHCN" and s.start_at.date() == date(2026, 11, 3) for s in new)
+    assert all(s.start_at.hour < 12 for s in new)  # vẫn giữ "buổi sáng" người dùng đã nói
+    assert all(abs((s.start_at - chosen.start_at).total_seconds()) >= 3600 for s in new)  # 30' slot + 30' đệm
+    assert all(o.hint and "Tim mạch" in o.hint for o in again.interrupt.options)
+
+    waiting(await app.chat.resume("b-own", PATIENT, UserDecision(action="choose", option_no=1)), "confirm_booking")
+    done(await app.chat.resume("b-own", PATIENT, UserDecision(action="confirm")), "appointment_booked")
+    booked = {a["slot"]["slot_id"] for a in await _appointments(app)}
+    assert booked == {tm_slot, new[0].slot_id}
+
+
+async def test_same_day_slots_are_recommended_next_to_existing_appointment(make_app: Any) -> None:
+    week = booking_out(department=PHCN, date="tuần sau")
+    app = await make_app(llm=ScriptedLLM(bookings=[week]))
+    # Đã có lịch Tim mạch chiều thứ Năm 05/11 lúc 14:00.
+    assert (await app.toolbox.create_appointment(PATIENT, "doc-hai-20261105-1400", None, "tm", NOW)).ok
+
+    options = waiting(
+        await app.chat.send_message("b-rec", PATIENT, "đặt lịch phục hồi chức năng tuần sau"), "choose_slot"
+    )
+    slots = [o.slot for o in options.interrupt.options]
+    assert all(s.start_at.date() == date(2026, 11, 5) for s in slots)
+    assert slots[0].start_at.hour == 15 and slots[0].start_at.minute == 0  # sát nhất mà vẫn đủ 30' đi lại
+    assert all(not (14 <= s.start_at.hour < 15) for s in slots)  # 14:00 trùng, 14:30 không kịp di chuyển
+    assert all(o.hint and "14:00" in o.hint for o in options.interrupt.options)
+    assert "gợi ý: cùng ngày với lịch khám Tim mạch lúc 14:00" in options.interrupt.message
+
+
+async def test_no_existing_appointments_means_plain_time_order_and_no_hint(make_app: Any) -> None:
+    app = await _request_app(make_app)
+    options = waiting(await app.chat.send_message("b-plain", PATIENT, REQUEST), "choose_slot").interrupt.options
+    starts = [o.slot.start_at for o in options]
+    assert starts == sorted(starts)
+    assert all(o.hint is None for o in options)

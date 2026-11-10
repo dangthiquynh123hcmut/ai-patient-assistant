@@ -1,11 +1,15 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+
+import { api } from "../../api/client";
+import type { ConversationSummary } from "../../api/types";
 
 import { useAuth } from "../../auth/AuthProvider";
 import { TopBar } from "../../components/TopBar";
-import { useToast } from "../../components/Toast";
-import { slotWhen } from "../../lib/format";
+import { errorText, useToast } from "../../components/Toast";
+import { MESSAGE_KIND, dateTime, slotWhen } from "../../lib/format";
 import { Inspector } from "../inspector/Inspector";
 import { Composer } from "./Composer";
+import { HistoryPanel } from "./HistoryPanel";
 import { InterruptCard } from "./InterruptCard";
 import { OutcomeCard } from "./OutcomeCard";
 import { TranscriptCard } from "./TranscriptCard";
@@ -27,6 +31,15 @@ export function ChatPage() {
   const toast = useToast();
   const chat = useChat(toast);
   const list = useRef<HTMLDivElement>(null);
+  const [history, setHistory] = useState<ConversationSummary[] | null>(null);
+
+  // Tải danh sách hội thoại lúc mở trang và sau mỗi lượt (hội thoại mới xuất hiện, thứ tự cập nhật).
+  useEffect(() => {
+    api
+      .myConversations()
+      .then(setHistory)
+      .catch((err) => toast(`Không tải được lịch sử: ${errorText(err)}`));
+  }, [chat.version, toast]);
 
   useEffect(() => {
     if (list.current) list.current.scrollTop = list.current.scrollHeight;
@@ -55,11 +68,17 @@ export function ChatPage() {
         )}
       </TopBar>
 
-      <main className="layout">
+      <main className="layout with-history">
+        <HistoryPanel
+          conversations={history}
+          currentId={chat.conversationId}
+          busy={chat.busy}
+          onOpen={(id) => void chat.open(id)}
+          onNew={chat.reset}
+        />
         <section className="panel chat" aria-label="Hội thoại">
           <div className="panel-head">
-            <h2>Hội thoại</h2>
-            <span className="muted">thread {chat.thread}</span>
+            <h2>{history?.find((c) => c.conversation_id === chat.conversationId)?.title ?? "Hội thoại mới"}</h2>
           </div>
           <div className="messages" ref={list} aria-live="polite">
             {chat.entries.length === 0 && (
@@ -92,6 +111,15 @@ export function ChatPage() {
                   );
                 case "outcome":
                   return <OutcomeCard key={e.id} response={e.response} />;
+                case "history":
+                  return (
+                    <div key={e.id} className="msg agent">
+                      <span className="meta">
+                        Trợ lý · {MESSAGE_KIND[e.kind] ?? e.kind} · {dateTime(e.at)}
+                      </span>
+                      {e.text}
+                    </div>
+                  );
                 case "transcript":
                   return (
                     <TranscriptCard

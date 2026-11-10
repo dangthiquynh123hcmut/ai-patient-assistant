@@ -22,6 +22,9 @@ class BookingPolicy:
     min_lead_time: timedelta = timedelta(hours=2)
     max_horizon_days: int = 30
     max_active_appointments: int = 3
+    # Khoảng trống tối thiểu giữa hai lịch của cùng bệnh nhân (đi lại giữa các khoa). Chỉ dùng khi tìm slot;
+    # backend khi ghi vẫn chỉ chặn trùng giờ thật.
+    travel_buffer: timedelta = timedelta(minutes=30)
     is_holiday: Callable[[date], bool] = _no_holidays
 
     def is_working_day(self, day: date) -> bool:

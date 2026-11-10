@@ -1,5 +1,5 @@
 // Nhãn hiển thị và định dạng thời gian — dùng chung cho các trang.
-import type { InterruptKind, Origin, OutcomeKind, Resolution, Role, Validation } from "../api/types";
+import type { InterruptKind, Origin, OutcomeKind, PatientOption, Resolution, Role, Validation } from "../api/types";
 
 export const ROLE_LABEL: Record<Role, string> = { patient: "Bệnh nhân", staff: "Nhân viên", admin: "Quản trị" };
 
@@ -74,12 +74,18 @@ export function slotWhen(iso: string): string {
   return `${weekday}, ${String(day).padStart(2, "0")}/${String(m).padStart(2, "0")}/${y} · ${t.slice(0, 5)}`;
 }
 
+/** "Nguyễn Văn An · 12/03/1985 · 0912000111" — đủ để phân biệt người trùng tên. */
+export function patientOptionText(p: PatientOption): string {
+  const born = p.date_of_birth ? new Date(`${p.date_of_birth}T00:00:00`).toLocaleDateString("vi-VN") : null;
+  return [p.label, born, p.phone].filter(Boolean).join(" · ");
+}
+
 export function dateTime(iso: string): string {
   return new Date(iso).toLocaleString("vi-VN", { dateStyle: "short", timeStyle: "short" });
 }
 
-/** Thread id ngẫu nhiên đủ dài để không đoán được / không trùng hội thoại của người khác. */
-export function newThreadId(): string {
+/** Mã hội thoại ngẫu nhiên đủ dài để không đoán được / không trùng hội thoại của người khác. */
+export function newConversationId(): string {
   const random = crypto.getRandomValues(new Uint32Array(2)).join("");
   return `t-${Date.now().toString(36)}-${random}`;
 }

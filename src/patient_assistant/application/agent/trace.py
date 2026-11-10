@@ -22,10 +22,12 @@ NODES: dict[str, tuple[str, StepKind]] = {
     "fetch_history": ("Lấy báo cáo trước", "tool"),
     "fetch_appointments": ("Lấy lịch hẹn", "tool"),
     "fetch_patient_info": ("Tổng hợp thông tin bệnh nhân", "tool"),
+    "fetch_doctors": ("Danh sách khoa và bác sĩ", "tool"),
     "rag_answer": ("Trả lời từ tài liệu đã duyệt", "llm"),
     "converse": ("Trò chuyện tự nhiên", "llm"),
     "side_reply": ("Trả lời câu hỏi phụ", "llm"),
     "switch_task": ("Đổi sang việc mới", "code"),
+    "reuse_context": ("Dùng lại thông tin đã nói", "code"),
     "respond": ("Soạn câu trả lời", "code"),
     # report_flow
     "extract": ("LLM trích xuất báo cáo", "llm"),

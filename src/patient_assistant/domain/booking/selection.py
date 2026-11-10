@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from patient_assistant.domain.booking.models import SlotOption
 from patient_assistant.domain.text.normalize import contains_phrase, normalize
+from patient_assistant.domain.text.vi_dates import expand_weekday_abbrev
 from patient_assistant.domain.text.vi_numbers import digitize
 
 _ORDINAL = re.compile(r"\b(?:cái|số|phương án|lựa chọn|option|slot|lịch)(?: thứ)? (\d{1,2})\b")
@@ -30,7 +31,7 @@ def match_selection(reply: str, options: list[SlotOption]) -> SelectionResult:
     if not options:
         return SelectionResult(None)
     numbers = {o.option_no for o in options}
-    raw = normalize(reply)
+    raw = expand_weekday_abbrev(normalize(reply))
     text = digitize(raw)
 
     if contains_phrase(raw, ("đầu tiên", "cái đầu", "cái trên cùng")):

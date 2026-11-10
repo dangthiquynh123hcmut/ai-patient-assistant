@@ -27,6 +27,7 @@ def build_agent_graph(deps: AgentDeps, checkpointer: BaseCheckpointSaver[Any]) -
     g.add_node("fetch_history", common.fetch_history)
     g.add_node("fetch_appointments", common.fetch_appointments)
     g.add_node("fetch_patient_info", common.fetch_patient_info)
+    g.add_node("fetch_doctors", common.fetch_doctors)
     g.add_node("rag_answer", common.rag_answer)
     g.add_node("converse", common.converse)
     g.add_node("respond", common.respond)
@@ -47,6 +48,7 @@ def build_agent_graph(deps: AgentDeps, checkpointer: BaseCheckpointSaver[Any]) -
             "booking_flow",
             "fetch_appointments",
             "fetch_patient_info",
+            "fetch_doctors",
             "fetch_history",
             "rag_answer",
             "converse",
@@ -61,6 +63,7 @@ def build_agent_graph(deps: AgentDeps, checkpointer: BaseCheckpointSaver[Any]) -
         "fetch_history",
         "fetch_appointments",
         "fetch_patient_info",
+        "fetch_doctors",
         "rag_answer",
         "converse",
     ):

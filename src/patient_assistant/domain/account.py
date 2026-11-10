@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from patient_assistant.domain.patient import normalize_phone
 
 USERNAME = re.compile(r"^[a-z0-9._-]{3,32}$")
 MIN_PASSWORD_LENGTH = 8
@@ -74,8 +76,18 @@ class Registration(BaseModel):
     username: str
     display_name: str = Field(min_length=1, max_length=128)
     password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=128)
+    date_of_birth: date | None = None
+    phone: str | None = None
 
     _username = field_validator("username")(normalize_username)
+    _phone = field_validator("phone")(normalize_phone)
+
+    @field_validator("date_of_birth")
+    @classmethod
+    def _birth_date(cls, value: date | None) -> date | None:
+        if value is not None and not date(1900, 1, 1) <= value <= date.today():
+            raise ValueError("Ngày sinh không hợp lệ")
+        return value
 
     @field_validator("display_name")
     @classmethod
@@ -87,7 +99,7 @@ class Registration(BaseModel):
 
 
 class ConversationSummary(BaseModel):
-    thread_id: str
+    conversation_id: str
     patient_id: str
     user_id: str
     title: str
@@ -101,7 +113,7 @@ class ChatMessage(BaseModel):
     """Một dòng trong lịch sử: lời người dùng (`role=user`) hoặc câu agent trả lời/hỏi lại (`role=assistant`)."""
 
     id: str
-    thread_id: str
+    conversation_id: str
     role: str  # user | assistant
     action: str  # user: message|reply|confirm|choose|edit|cancel|other_time; assistant: kind của câu trả lời
     text: str

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from patient_assistant.application.agent.state import UserDecision
+from patient_assistant.domain.conversation import Intent
 from tests.conftest import PATIENT, ScriptedLLM, booking_out, done, report_out, waiting
 
 PAIN = (3, "tuần này tôi đau mức 3")
@@ -84,3 +85,56 @@ async def test_booking_reply_with_a_different_request_switches(make_app: Any) ->
     done(await app.chat.resume("s6", PATIENT, _reply("cho tôi xem các báo cáo trước")), "history")
     back = waiting(await app.chat.send_message("s6", PATIENT, "đặt tiếp lịch lúc nãy"), "choose_slot")
     assert back.interrupt.options
+
+
+# ---------------------------------------------------------------- dùng lại ngữ cảnh đã nói (hội thoại t-mw76ehck...)
+
+PHCN = ("PHCN", "phục hồi chức năng")
+NO_PLAN = "patient-no-plan"  # không có kế hoạch theo dõi -> phải hỏi khoa
+
+
+async def _abandoned_booking(app: Any, conversation_id: str) -> None:
+    """Đã nói khoa, đang được hỏi ngày thì đổi sang việc khác -> việc đặt lịch còn dang dở."""
+    waiting(await app.chat.send_message(conversation_id, NO_PLAN, "đặt lịch khám mới"), "clarify")
+    waiting(await app.chat.resume(conversation_id, NO_PLAN, _reply("phục hồi chức năng")), "clarify")
+    done(await app.chat.resume(conversation_id, NO_PLAN, _reply("xem lịch hẹn của tôi")), "appointments")
+
+
+async def test_asking_for_the_same_task_again_reuses_what_was_said(make_app: Any) -> None:
+    llm = ScriptedLLM(
+        bookings=[booking_out(), booking_out(department=PHCN), booking_out(department=PHCN, date="thứ ba tuần sau")]
+    )
+    app = await make_app(llm=llm)
+    await _abandoned_booking(app, "c1")
+
+    # Không nói "làm tiếp": chỉ yêu cầu lại việc đặt lịch -> không hỏi lại khoa, dùng luôn câu trả lời cũ.
+    result = await app.chat.send_message("c1", NO_PLAN, "tôi muốn đặt lịch khám thứ ba tuần sau")
+    sources = llm.booking_prompts[-1].sources
+    assert "phục hồi chức năng" in sources and sources[-1] == "tôi muốn đặt lịch khám thứ ba tuần sau"
+    options = waiting(result, "choose_slot")
+    assert "dùng lại thông tin bạn đã nói" in options.interrupt.message
+    assert {o.slot.department_code for o in options.interrupt.options} == {"PHCN"}
+
+
+async def test_vague_request_with_unfinished_task_continues_it(make_app: Any) -> None:
+    llm = ScriptedLLM(bookings=[booking_out(), booking_out(department=PHCN), booking_out(department=PHCN)])
+    app = await make_app(llm=llm)
+    await _abandoned_booking(app, "c2")
+
+    # "tôi muốn xử lí ngay bây giờ": LLM không xác định được việc gì -> làm tiếp việc đặt lịch đang dở.
+    ask = waiting(await app.chat.send_message("c2", NO_PLAN, "tôi muốn xử lí ngay bây giờ"), "clarify")
+    assert "ngày nào" in ask.interrupt.message and "khoa nào" not in ask.interrupt.message
+    assert "phục hồi chức năng" in llm.booking_prompts[-1].sources
+
+
+async def test_reference_to_earlier_answers_reuses_them(make_app: Any) -> None:
+    # LLM được cài sẵn để phân loại sai thành "xem báo cáo" — câu nhắc lại thông tin cũ không được hỏi LLM.
+    llm = ScriptedLLM(
+        bookings=[booking_out(), booking_out(department=PHCN), booking_out(department=PHCN)],
+        intents=[[Intent.GET_REPORT_HISTORY]],
+    )
+    app = await make_app(llm=llm)
+    await _abandoned_booking(app, "c3")
+    ask = waiting(await app.chat.send_message("c3", NO_PLAN, "lấy thông tin cũ tôi đã trả lời phía trên"), "clarify")
+    assert "ngày nào" in ask.interrupt.message
+    assert "phục hồi chức năng" in llm.booking_prompts[-1].sources

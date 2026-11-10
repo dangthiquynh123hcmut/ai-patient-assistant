@@ -3,5 +3,15 @@
   {"username": "benhnhan2", "display_name": "Bệnh nhân Demo 2", "role": "patient", "patient_id": "patient-demo-002"},
   {"username": "benhnhan3", "display_name": "Bệnh nhân Demo 3", "role": "patient", "patient_id": "patient-no-plan"},
   {"username": "bacsi", "display_name": "BS. Trần Văn An", "role": "staff"},
-  {"username": "admin", "display_name": "Quản trị viên", "role": "admin"}
+  {"username": "admin", "display_name": "Quản trị viên", "role": "admin"},
+
+  {"username": "nguyenvanan", "display_name": "Nguyễn Văn An", "role": "patient", "patient_id": "patient-dup-an-1"},
+  {"username": "nguyenvanan2", "display_name": "Nguyễn Văn An", "role": "patient", "patient_id": "patient-dup-an-2"},
+  {"username": "an.nguyen", "display_name": "Nguyễn Văn An", "role": "patient", "patient_id": "patient-dup-an-3"},
+  {"username": "tranthibinh", "display_name": "Trần Thị Bình", "role": "patient", "patient_id": "patient-dup-binh-1"},
+  {"username": "binh.tran", "display_name": "Trần Thị Bình", "role": "patient", "patient_id": "patient-dup-binh-2"},
+  {"username": "lethihoa", "display_name": "Lê Thị Hoa", "role": "patient", "patient_id": "patient-dup-hoa-1"},
+  {"username": "lethihoa.kd", "display_name": "Le Thi Hoa", "role": "patient", "patient_id": "patient-dup-hoa-2"},
+  {"username": "tranvanan", "display_name": "Trần Văn An", "role": "patient", "patient_id": "patient-same-as-doctor"},
+  {"username": "benhnhan1b", "display_name": "Bệnh nhân Demo 1", "role": "patient", "patient_id": "patient-dup-demo-1"}
 ]

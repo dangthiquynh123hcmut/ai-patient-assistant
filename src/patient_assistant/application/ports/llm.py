@@ -64,8 +64,11 @@ class GroundedAnswer:
 
 
 class LLMPort(Protocol):
-    async def classify_intent(self, text: str) -> list[Intent]:
-        """Danh sách intent theo thứ tự ưu tiên; rỗng nếu không xác định được."""
+    async def classify_intent(self, text: str, memory: str | None = None) -> list[Intent]:
+        """Danh sách intent theo thứ tự ưu tiên; rỗng nếu không xác định được.
+
+        `memory`: ghi chú các lượt trước trong cùng hội thoại (do code soạn) — chỉ để hiểu câu nói.
+        """
         ...
 
     async def extract_report(self, prompt: ReportPrompt) -> dict[str, Any]:
@@ -78,11 +81,14 @@ class LLMPort(Protocol):
         """Dự phòng khi luật không ghép được câu chọn slot. Trả option_no hoặc None."""
         ...
 
-    async def answer_question(self, question: str, tools: list[ToolSpec], max_tool_calls: int) -> GroundedAnswer: ...
+    async def answer_question(
+        self, question: str, tools: list[ToolSpec], max_tool_calls: int, memory: str | None = None
+    ) -> GroundedAnswer: ...
 
-    async def converse(self, text: str, context: str | None = None) -> str:
+    async def converse(self, text: str, context: str | None = None, memory: str | None = None) -> str:
         """Trả lời tự nhiên câu chào hỏi/trò chuyện, không gọi tool, không đụng dữ liệu bệnh nhân.
 
         `context`: mô tả việc đang làm dở (do code soạn) khi người dùng hỏi chen giữa chừng.
+        `memory`: ghi chú các lượt trước trong cùng hội thoại (do code soạn).
         """
         ...

@@ -36,6 +36,8 @@ class DemoPatient(BaseModel):
     id: str
     display_name: str
     label: str
+    date_of_birth: date | None = None
+    phone: str | None = None
 
 
 class Schedule(BaseModel):
@@ -143,7 +145,7 @@ def demo_accounts(password: str) -> list[NewUser]:
 
 
 def profiles() -> list[PatientProfile]:
-    return [PatientProfile(id=p.id, display_name=p.display_name) for p in PATIENTS]
+    return [PatientProfile(**p.model_dump(exclude={"label"})) for p in PATIENTS]
 
 
 DEPARTMENTS: list[Department] = _data()["departments"]

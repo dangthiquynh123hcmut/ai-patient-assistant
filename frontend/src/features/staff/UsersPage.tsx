@@ -4,7 +4,7 @@ import { api } from "../../api/client";
 import type { NewUser, Role, User } from "../../api/types";
 import { useAuth } from "../../auth/AuthProvider";
 import { errorText, useToast } from "../../components/Toast";
-import { ROLE_LABEL } from "../../lib/format";
+import { ROLE_LABEL, patientOptionText } from "../../lib/format";
 import { StaffTopBar } from "./StaffTopBar";
 
 const EMPTY: NewUser = { username: "", display_name: "", role: "patient", patient_id: null, password: "" };
@@ -96,7 +96,7 @@ export function UsersPage() {
               >
                 {patients.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.label}
+                    {patientOptionText(p)}
                   </option>
                 ))}
               </select>

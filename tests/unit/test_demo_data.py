@@ -7,7 +7,7 @@ from tests.conftest import NOW, TZ
 
 
 def test_demo_json_loads_with_valid_references() -> None:
-    assert {d.code for d in seed.DEPARTMENTS} == {"PHCN", "CXK", "NOI"}
+    assert {d.code for d in seed.DEPARTMENTS} == {"PHCN", "CXK", "NOI", "DL", "TM", "TK", "TMH", "MAT"}
     assert {d.department_code for d in seed.DOCTORS} <= {d.code for d in seed.DEPARTMENTS}
     assert seed.DEMO_PATIENT_ID in {p.id for p in seed.PATIENTS}
     assert {p.patient_id for p in seed.PLANS} <= {p.id for p in seed.PATIENTS}

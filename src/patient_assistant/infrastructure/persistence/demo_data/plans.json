@@ -2,5 +2,14 @@
   {"plan_id": "plan-knee-01", "patient_id": "patient-demo-001", "department_code": "PHCN",
    "summary": "Phục hồi sau mổ dây chằng gối: tập gập/duỗi gối 5 ngày/tuần, báo cáo mức đau hằng tuần."},
   {"plan_id": "plan-shoulder-02", "patient_id": "patient-demo-002", "department_code": "CXK",
-   "summary": "Theo dõi viêm quanh khớp vai: tập xoay vai nhẹ 4 ngày/tuần, báo cáo mức đau hằng tuần."}
+   "summary": "Theo dõi viêm quanh khớp vai: tập xoay vai nhẹ 4 ngày/tuần, báo cáo mức đau hằng tuần."},
+
+  {"plan_id": "plan-dup-an-1", "patient_id": "patient-dup-an-1", "department_code": "PHCN",
+   "summary": "Phục hồi sau gãy cổ chân: tập đi có nạng 6 ngày/tuần, báo cáo mức đau hằng tuần."},
+  {"plan_id": "plan-dup-an-2", "patient_id": "patient-dup-an-2", "department_code": "CXK",
+   "summary": "Theo dõi thoái hóa khớp gối: tập đạp xe tại chỗ 3 ngày/tuần, báo cáo mức đau hằng tuần."},
+  {"plan_id": "plan-dup-binh-2", "patient_id": "patient-dup-binh-2", "department_code": "TM",
+   "summary": "Theo dõi sau đặt stent: đi bộ nhẹ 5 ngày/tuần, báo cáo mức mệt hằng tuần theo thang 0–10."},
+  {"plan_id": "plan-same-as-doctor", "patient_id": "patient-same-as-doctor", "department_code": "PHCN",
+   "summary": "Phục hồi sau mổ thay khớp háng: tập đứng dậy và đi bộ 5 ngày/tuần, báo cáo mức đau hằng tuần."}
 ]

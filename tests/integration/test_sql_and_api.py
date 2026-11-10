@@ -41,10 +41,10 @@ async def test_sql_slot_search_excludes_booked(sessions: Any) -> None:
         sql.SqlSlotRepository(sessions, TZ), sql.SqlAppointmentRepository(sessions, TZ), BookingPolicy()
     )
     window = resolve("thứ ba tuần sau", "buổi sáng", NOW).window
-    first = await service.search("PHCN", window, None, 3, NOW)
+    first = await service.search("patient-x", "PHCN", window, None, 3, NOW)
     booked_id = first.data[0]["slot_id"]
     assert (await service.book(PATIENT, booked_id, None, "k1", NOW)).ok
-    second = await service.search("PHCN", window, None, 3, NOW)
+    second = await service.search("patient-x", "PHCN", window, None, 3, NOW)
     assert booked_id not in [s["slot_id"] for s in second.data]
     assert all(s["start_at"].startswith("2026-11-03T0") and s["start_at"].endswith("+07:00") for s in second.data)
 
@@ -85,7 +85,7 @@ async def test_meta_and_decision_trace_endpoints(make_app: Any) -> None:
         meta = (await client.get("/v1/meta", headers=headers)).json()
         assert meta["user"]["patient_id"] == PATIENT and meta["patients"] == []  # bệnh nhân không thấy danh sách
         assert meta["llm_model"] == "global.anthropic.claude-opus-4-6-v1" and meta["limits"]["max_corrections"] == 2
-        assert {d["code"] for d in meta["departments"]} == {"PHCN", "CXK", "NOI"}
+        assert {d["code"] for d in meta["departments"]} == {"PHCN", "CXK", "NOI", "DL", "TM", "TK", "TMH", "MAT"}
 
         turn = (
             await client.post(
@@ -116,3 +116,27 @@ async def test_sql_seed_with_history(make_storage: Any) -> None:
     appointments = await sql.SqlAppointmentRepository(factory, TZ).list_for_patient(PATIENT)
     assert [r.pain_level for r in reports] == [5, 6, 7]  # mới nhất trước
     assert len(appointments) == 1 and appointments[0].slot.start_at.tzinfo is not None
+
+
+async def test_reseed_adds_departments_and_doctors_added_to_json(make_storage: Any) -> None:
+    """DB đã có dữ liệu: chạy lại seed chỉ bổ sung khoa/bác sĩ mới (và slot của họ), không đụng dữ liệu cũ."""
+    from sqlalchemy import delete, func, select, update
+
+    from patient_assistant.infrastructure.persistence.sql.models import DepartmentRow, DoctorRow, PatientRow, SlotRow
+
+    sessions = (await make_storage(with_history=True)).sessions
+    async with sessions.begin() as session:  # giả lập DB cũ, từ trước khi có khoa Da liễu và ngày sinh/SĐT
+        await session.execute(update(PatientRow).values(date_of_birth=None, phone=None))
+        await session.execute(delete(SlotRow).where(SlotRow.department_code == "DL"))
+        await session.execute(delete(DoctorRow).where(DoctorRow.department_code == "DL"))
+        await session.execute(delete(DepartmentRow).where(DepartmentRow.code == "DL"))
+
+    added = await seed_demo_data(sessions, NOW.date(), TZ, with_history=True)
+    assert added > 0
+    async with sessions() as session:
+        assert await session.scalar(select(DepartmentRow.name).where(DepartmentRow.code == "DL")) == "Da liễu"
+        assert await session.scalar(select(func.count()).select_from(SlotRow).where(SlotRow.doctor_id == "doc-giang"))
+        assert await session.scalar(select(PatientRow.phone).where(PatientRow.id == PATIENT)) == "0901000001"
+    reports = await sql.SqlReportRepository(sessions).list_by_patient(PATIENT, 10)
+    assert [r.pain_level for r in reports] == [5, 6, 7]  # lịch sử không bị nạp lại / nhân đôi
+    assert await seed_demo_data(sessions, NOW.date(), TZ, with_history=True) == 0  # chạy lại: không thêm gì

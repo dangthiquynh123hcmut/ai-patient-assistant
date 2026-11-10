@@ -28,6 +28,17 @@ export interface Registration {
   username: string;
   display_name: string;
   password: string;
+  date_of_birth?: string | null; // YYYY-MM-DD
+  phone?: string | null;
+}
+
+/** Bệnh nhân trong danh sách của nhân viên/quản trị. Họ tên có thể trùng: phân biệt bằng ngày sinh, SĐT, mã. */
+export interface PatientOption {
+  id: string;
+  label: string;
+  display_name: string;
+  date_of_birth: string | null;
+  phone: string | null;
 }
 
 export interface Department {
@@ -42,7 +53,7 @@ export interface Meta {
   stt_enabled: boolean;
   stt_model: string | null;
   now: string;
-  patients: { id: string; label: string }[];
+  patients: PatientOption[];
   departments: Department[];
   doctors: { id: string; name: string; department_code: string }[];
   limits: { max_corrections: number; max_clarify_rounds: number; max_slot_search_rounds: number };
@@ -92,6 +103,8 @@ export interface Slot {
 export interface SlotOption {
   option_no: number;
   slot: Slot;
+  /** Gợi ý do backend tạo, ví dụ slot cùng ngày với lịch đã có. */
+  hint?: string | null;
 }
 
 export interface Choice {
@@ -127,7 +140,7 @@ export interface StepTrace {
 }
 
 export interface TurnResult {
-  thread_id: string;
+  conversation_id: string;
   status: "waiting_user" | "done";
   interrupt: InterruptPayload | null;
   response: AgentResponse | null;
@@ -215,7 +228,7 @@ export interface AgentState {
 // ------------------------------------------------------------------ lịch sử (lưu ở DB)
 
 export interface ConversationSummary {
-  thread_id: string;
+  conversation_id: string;
   patient_id: string;
   user_id: string;
   title: string;
@@ -227,7 +240,7 @@ export interface ConversationSummary {
 
 export interface ChatMessage {
   id: string;
-  thread_id: string;
+  conversation_id: string;
   role: "user" | "assistant";
   action: string;
   text: string;

@@ -4,7 +4,7 @@ import { api } from "../../api/client";
 import type { ChatMessage, ConversationSummary } from "../../api/types";
 import { useAuth } from "../../auth/AuthProvider";
 import { errorText, useToast } from "../../components/Toast";
-import { MESSAGE_KIND, dateTime } from "../../lib/format";
+import { MESSAGE_KIND, dateTime, patientOptionText } from "../../lib/format";
 import { StaffTopBar } from "./StaffTopBar";
 
 export function ConversationsPage() {
@@ -16,7 +16,10 @@ export function ConversationsPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const box = useRef<HTMLDivElement>(null);
   const patients = meta?.patients ?? [];
-  const patientName = (id: string) => patients.find((p) => p.id === id)?.label ?? id;
+  const patientName = (id: string) => {
+    const p = patients.find((x) => x.id === id);
+    return p ? patientOptionText(p) : id;
+  };
 
   const loadList = useCallback(async () => {
     try {
@@ -37,7 +40,7 @@ export function ConversationsPage() {
   async function open(c: ConversationSummary) {
     setCurrent(c);
     try {
-      setMessages(await api.staffConversation(c.thread_id));
+      setMessages(await api.staffConversation(c.conversation_id));
     } catch (err) {
       toast(errorText(err));
     }
@@ -59,7 +62,7 @@ export function ConversationsPage() {
               <option value="">Tất cả bệnh nhân</option>
               {patients.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.label}
+                  {patientOptionText(p)}
                 </option>
               ))}
             </select>
@@ -68,7 +71,7 @@ export function ConversationsPage() {
             {conversations === null && <li className="muted pad">Đang tải…</li>}
             {conversations?.length === 0 && <li className="muted pad">Chưa có hội thoại nào.</li>}
             {conversations?.map((c) => (
-              <li key={c.thread_id} className={c.thread_id === current?.thread_id ? "active" : ""}>
+              <li key={c.conversation_id} className={c.conversation_id === current?.conversation_id ? "active" : ""}>
                 <button type="button" onClick={() => void open(c)}>
                   <span className="title">{c.title}</span>
                   <span className="muted">
@@ -86,7 +89,7 @@ export function ConversationsPage() {
             <h2>{current?.title ?? "Chọn một hội thoại"}</h2>
             {current && (
               <span className="muted">
-                {patientName(current.patient_id)} · {current.thread_id}
+                {patientName(current.patient_id)} · bắt đầu {dateTime(current.created_at)}
               </span>
             )}
           </div>

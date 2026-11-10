@@ -2,5 +2,11 @@
   {"id": "doc-an", "name": "BS. Trần Văn An", "department_code": "PHCN"},
   {"id": "doc-binh", "name": "BS. Lê Thị Bình", "department_code": "PHCN"},
   {"id": "doc-cuong", "name": "BS. Phạm Quốc Cường", "department_code": "CXK"},
-  {"id": "doc-dung", "name": "BS. Nguyễn Thu Dung", "department_code": "NOI"}
+  {"id": "doc-dung", "name": "BS. Nguyễn Thu Dung", "department_code": "NOI"},
+  {"id": "doc-giang", "name": "BS. Đỗ Thị Giang", "department_code": "DL"},
+  {"id": "doc-hai", "name": "BS. Hoàng Minh Hải", "department_code": "TM"},
+  {"id": "doc-hanh", "name": "BS. Vũ Thị Hạnh", "department_code": "TM"},
+  {"id": "doc-long", "name": "BS. Ngô Đăng Long", "department_code": "TK"},
+  {"id": "doc-lan", "name": "BS. Bùi Ngọc Lan", "department_code": "TMH"},
+  {"id": "doc-minh", "name": "BS. Đặng Quang Minh", "department_code": "MAT"}
 ]

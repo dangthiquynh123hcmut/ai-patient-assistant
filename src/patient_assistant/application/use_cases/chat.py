@@ -7,6 +7,7 @@ from typing import Any, Literal
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
+from patient_assistant.application.agent.memory import TurnNote, append_note, note_for_turn
 from patient_assistant.application.agent.side_talk import ReplyKind, SideTalk
 from patient_assistant.application.agent.state import (
     AgentResponse,
@@ -19,11 +20,11 @@ from patient_assistant.application.agent.state import (
 from patient_assistant.application.agent.trace import NODES, StepTrace, describe_interrupt, describe_step
 from patient_assistant.application.ports.clock import Clock
 from patient_assistant.domain.common import SttFlag
-from patient_assistant.domain.conversation import FLOW_INTENTS
+from patient_assistant.domain.conversation import FLOW_INTENTS, is_continuation
 
 
 class TurnResult(BaseModel):
-    thread_id: str
+    conversation_id: str
     status: Literal["waiting_user", "done"]
     interrupt: InterruptPayload | None = None
     response: AgentResponse | None = None
@@ -34,7 +35,7 @@ SUBGRAPH_NODES = ("report_flow", "booking_flow")
 
 
 class NoPendingQuestion(Exception):
-    """Gọi resume khi thread không có câu hỏi nào đang chờ."""
+    """Gọi resume khi hội thoại không có câu hỏi nào đang chờ."""
 
 
 class ChatUseCase:
@@ -44,12 +45,13 @@ class ChatUseCase:
         self._recursion_limit = recursion_limit
         self._side_talk = side_talk
 
-    def _config(self, thread_id: str) -> dict[str, Any]:
-        return {"configurable": {"thread_id": thread_id}, "recursion_limit": self._recursion_limit}
+    def _config(self, conversation_id: str) -> dict[str, Any]:
+        # "thread_id" là khóa do LangGraph quy định cho checkpointer; giá trị là mã hội thoại của mình.
+        return {"configurable": {"thread_id": conversation_id}, "recursion_limit": self._recursion_limit}
 
     async def send_message(
         self,
-        thread_id: str,
+        conversation_id: str,
         patient_id: str,
         text: str,
         input_source: Literal["text", "voice"] = "text",
@@ -57,29 +59,40 @@ class ChatUseCase:
     ) -> TurnResult:
         """Bắt đầu một lượt mới. State của lượt được đặt lại (mỗi lượt một intent chính); chỉ giữ việc dang dở
         của lượt trước để người dùng có thể nói "lưu đi", "làm tiếp" mà không phải kể lại từ đầu."""
+        previous = await self.inspect_state(conversation_id)
         fresh = AgentState(
-            thread_id=thread_id,
+            conversation_id=conversation_id,
             patient_id=patient_id,
             now=self._clock.now(),
             input_source=input_source,
             raw_input=text,
             stt_flags=stt_flags or [],
-            carryover=_carryover(await self.inspect_state(thread_id), patient_id),
+            carryover=_carryover(previous, patient_id),
+            memory=_memory(previous, patient_id),
         )
-        steps = await self._run(fresh.model_dump(), thread_id)
-        return await self._result(thread_id, steps)
+        steps = await self._run(fresh.model_dump(), conversation_id)
+        return await self._result(conversation_id, steps)
 
-    async def resume(self, thread_id: str, patient_id: str, decision: UserDecision) -> TurnResult:
-        config = self._config(thread_id)
+    async def resume(self, conversation_id: str, patient_id: str, decision: UserDecision) -> TurnResult:
+        config = self._config(conversation_id)
         snapshot = await self._graph.aget_state(config)
         if not snapshot or not _pending(snapshot) or snapshot.values.get("patient_id") != patient_id:
-            raise NoPendingQuestion(thread_id)
+            raise NoPendingQuestion(conversation_id)
         if self._side_talk and decision.action == "reply" and decision.text:
-            state = await self.inspect_state(thread_id)
+            state = await self.inspect_state(conversation_id)
             assert state is not None
+            carry = state.carryover
+            if carry and carry.intent == state.intent and is_continuation(decision.text):
+                # "lấy thông tin cũ tôi đã trả lời phía trên" giữa chừng -> bắt đầu lại đúng việc này, kèm lời cũ.
+                restarted = await self.send_message(conversation_id, patient_id, decision.text)
+                note = _step("reuse_context", "Người dùng nhắc lại thông tin đã nói → nối lời cũ vào việc đang làm.")
+                steps = [note, *restarted.steps]
+                return restarted.model_copy(
+                    update={"steps": [s.model_copy(update={"index": i}) for i, s in enumerate(steps)]}
+                )
             kind = await self._side_talk.triage(decision.text, state.intent)
             if kind == ReplyKind.SWITCH:
-                switched = await self.send_message(thread_id, patient_id, decision.text)
+                switched = await self.send_message(conversation_id, patient_id, decision.text)
                 note = _step(
                     "switch_task",
                     "Câu trả lời là một yêu cầu khác → bắt đầu việc mới; việc đang làm được "
@@ -98,19 +111,19 @@ class ChatUseCase:
                     "riêng, không đưa vào dữ liệu, không tính lượt hỏi lại, rồi hỏi lại đúng câu đang chờ.",
                 )
                 return TurnResult(
-                    thread_id=thread_id,
+                    conversation_id=conversation_id,
                     status="waiting_user",
                     interrupt=pending.model_copy(update={"message": f"{reply}\n\n{pending.message}"}),
                     steps=[note],
                 )
-        steps = await self._run(Command(resume=decision.model_dump(mode="json")), thread_id)
-        return await self._result(thread_id, steps)
+        steps = await self._run(Command(resume=decision.model_dump(mode="json")), conversation_id)
+        return await self._result(conversation_id, steps)
 
-    async def _run(self, graph_input: Any, thread_id: str) -> list[StepTrace]:
+    async def _run(self, graph_input: Any, conversation_id: str) -> list[StepTrace]:
         """Chạy graph và ghi lại từng node đã chạy (kể cả trong subgraph) để giải thích quyết định."""
         steps: list[StepTrace] = []
         async for namespace, chunk in self._graph.astream(
-            graph_input, self._config(thread_id), stream_mode="updates", subgraphs=True
+            graph_input, self._config(conversation_id), stream_mode="updates", subgraphs=True
         ):
             for node, update in chunk.items():
                 if node == "__interrupt__":
@@ -120,12 +133,12 @@ class ChatUseCase:
                     steps.append(describe_step(len(steps), namespace, node, update))
         return steps
 
-    async def inspect_state(self, thread_id: str) -> AgentState | None:
-        """State hiện tại của thread, kể cả khi đang dừng trong subgraph (debug, evaluation).
+    async def inspect_state(self, conversation_id: str) -> AgentState | None:
+        """State hiện tại của hội thoại, kể cả khi đang dừng trong subgraph (debug, evaluation).
 
         Khi subgraph đang chờ interrupt, state của nó chưa gộp vào graph cha nên phải đọc từ task.
         """
-        snapshot = await self._graph.aget_state(self._config(thread_id), subgraphs=True)
+        snapshot = await self._graph.aget_state(self._config(conversation_id), subgraphs=True)
         if not snapshot or not snapshot.values:
             return None
         values = dict(snapshot.values)
@@ -135,12 +148,18 @@ class ChatUseCase:
                 values.update(sub.values)
         return AgentState.model_validate(values)
 
-    async def _result(self, thread_id: str, steps: list[StepTrace]) -> TurnResult:
-        snapshot = await self._graph.aget_state(self._config(thread_id))
+    async def pending_question(self, conversation_id: str) -> InterruptPayload | None:
+        """Câu hỏi đang chờ người dùng trả lời (nếu có) — để mở lại hội thoại cũ và trả lời tiếp."""
+        snapshot = await self._graph.aget_state(self._config(conversation_id))
+        pending = _pending(snapshot) if snapshot else []
+        return InterruptPayload.model_validate(pending[0]) if pending else None
+
+    async def _result(self, conversation_id: str, steps: list[StepTrace]) -> TurnResult:
+        snapshot = await self._graph.aget_state(self._config(conversation_id))
         pending = _pending(snapshot)
         if pending:
             return TurnResult(
-                thread_id=thread_id,
+                conversation_id=conversation_id,
                 status="waiting_user",
                 interrupt=InterruptPayload.model_validate(pending[0]),
                 steps=steps,
@@ -148,7 +167,7 @@ class ChatUseCase:
         response = snapshot.values.get("response")
         if isinstance(response, dict):
             response = AgentResponse.model_validate(response)
-        return TurnResult(thread_id=thread_id, status="done", response=response, steps=steps)
+        return TurnResult(conversation_id=conversation_id, status="done", response=response, steps=steps)
 
 
 def _step(node: str, summary: str) -> StepTrace:
@@ -163,9 +182,22 @@ def _carryover(previous: AgentState | None, patient_id: str) -> Carryover | None
         return None
     if previous.intent in FLOW_INTENTS:
         if previous.outcome is None or previous.outcome.kind == OutcomeKind.HANDOFF:
-            return Carryover(intent=previous.intent, sources=previous.sources())
+            # Lượt trước bắt đầu lại cùng việc mà chưa nối ngữ cảnh cũ -> giữ cả lời cũ lẫn lời mới.
+            same_task = previous.carryover is not None and previous.carryover.intent == previous.intent
+            older = previous.carryover.sources if previous.carryover and same_task else []
+            return Carryover(intent=previous.intent, sources=list(dict.fromkeys([*older, *previous.sources()])))
         return None
     return previous.carryover.model_copy(update={"just_left": False}) if previous.carryover else None
+
+
+def _memory(previous: AgentState | None, patient_id: str) -> list[TurnNote]:
+    """Ghi chú các lượt trước + lượt vừa kết thúc. Lượt bị bỏ dở (chưa tới respond) thì code tự ghi "chưa xong"."""
+    if previous is None or previous.patient_id != patient_id:
+        return []
+    note = previous.turn_note or note_for_turn(
+        " ".join([previous.raw_input, *previous.user_replies]), previous.intent, None, None, [], [], []
+    )
+    return append_note(previous.memory, note)
 
 
 def _pending(snapshot: Any) -> list[Any]:

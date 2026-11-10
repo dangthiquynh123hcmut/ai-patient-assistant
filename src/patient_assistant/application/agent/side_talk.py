@@ -9,14 +9,17 @@ from __future__ import annotations
 import re
 from enum import StrEnum
 
+from patient_assistant.application.agent.memory import render_memory
 from patient_assistant.application.agent.presenters import (
     ASIDE_FALLBACK,
     INTENT_LABELS,
     assistant_context_text,
+    doctors_text,
 )
 from patient_assistant.application.agent.state import AgentState
 from patient_assistant.application.ports.llm import LLMError, LLMPort
 from patient_assistant.application.tools.toolbox import Toolbox
+from patient_assistant.domain.booking.validators import department_in_text
 from patient_assistant.domain.conversation import (
     TASK_INTENTS,
     ConfirmIntent,
@@ -24,6 +27,7 @@ from patient_assistant.domain.conversation import (
     asks_about_assistant_context,
     classify_by_rules,
     interpret_confirmation,
+    is_continuation,
     output_is_safe,
 )
 
@@ -52,8 +56,11 @@ class SideTalk:
         if asks_about_assistant_context(text):
             return ReplyKind.ASIDE
         guess = classify_by_rules(text)
-        if guess.primary == Intent.SMALL_TALK:
+        if guess.primary in (Intent.SMALL_TALK, Intent.GET_DOCTOR_INFO):
             return ReplyKind.ASIDE
+        # "lấy thông tin cũ tôi đã trả lời phía trên" là câu trả lời cho việc đang làm, không phải việc khác.
+        if guess.primary is None and is_continuation(text):
+            return ReplyKind.ANSWER
         if guess.primary in TASK_INTENTS and guess.primary != current:
             return ReplyKind.SWITCH
         if guess.primary is not None or _DIGIT.search(text) or len(text.split()) < _MIN_WORDS_FOR_LLM:
@@ -71,13 +78,17 @@ class SideTalk:
 
     async def answer(self, text: str, state: AgentState, question: str) -> str:
         task = INTENT_LABELS.get(state.intent) if state.intent else None
+        if classify_by_rules(text).primary == Intent.GET_DOCTOR_INFO:
+            departments, doctors = await self._tools.catalog()
+            only = department_in_text(text, departments)
+            return doctors_text(departments, doctors, only)
         if asks_about_assistant_context(text):
             summary = await self._tools.get_patient_summary(state.patient_id, state.now)
             name = (summary.data or {}).get("profile", {}).get("display_name") if summary.ok else None
             return assistant_context_text(name, state.patient_id, task)
         context = f"Người dùng đang làm dở việc: {task or 'không rõ'}. Câu hỏi đang chờ họ trả lời: “{question}”"
         try:
-            reply = (await self._llm.converse(text, context)).strip()
+            reply = (await self._llm.converse(text, context, render_memory(state.memory))).strip()
         except LLMError:
             reply = ""
         return reply if reply and output_is_safe(reply) else ASIDE_FALLBACK

@@ -12,6 +12,8 @@ export function RegisterPage() {
   const { user, register } = useAuth();
   const navigate = useNavigate();
   const [displayName, setDisplayName] = useState("");
+  const [birthDate, setBirthDate] = useState("");
+  const [phone, setPhone] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -29,7 +31,13 @@ export function RegisterPage() {
     }
     setBusy(true);
     try {
-      const created = await register({ username: username.trim().toLowerCase(), display_name: displayName, password });
+      const created = await register({
+        username: username.trim().toLowerCase(),
+        display_name: displayName,
+        password,
+        date_of_birth: birthDate || null,
+        phone: phone.trim() || null,
+      });
       navigate(homeFor(created), { replace: true });
     } catch (err) {
       setError(errorText(err));
@@ -60,6 +68,28 @@ export function RegisterPage() {
               maxLength={128}
               required
               autoFocus
+            />
+          </label>
+          <label className="field">
+            <span>Ngày sinh (không bắt buộc)</span>
+            <input
+              type="date"
+              value={birthDate}
+              onChange={(e) => setBirthDate(e.target.value)}
+              autoComplete="bday"
+              min="1900-01-01"
+              max={new Date().toISOString().slice(0, 10)}
+            />
+          </label>
+          <label className="field">
+            <span>Số điện thoại (không bắt buộc)</span>
+            <input
+              type="tel"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              autoComplete="tel"
+              inputMode="tel"
+              placeholder="ví dụ 0912 345 678"
             />
           </label>
           <label className="field">

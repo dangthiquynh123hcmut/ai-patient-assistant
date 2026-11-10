@@ -101,6 +101,10 @@ class SqlCatalogRepository:
             return [Doctor(id=r.id, name=r.name, department_code=r.department_code) for r in rows]
 
 
+def _profile(row: PatientRow) -> PatientProfile:
+    return PatientProfile(id=row.id, display_name=row.display_name, date_of_birth=row.date_of_birth, phone=row.phone)
+
+
 class SqlPatientRepository:
     def __init__(self, sessions: Sessions) -> None:
         self._sessions = sessions
@@ -108,16 +112,16 @@ class SqlPatientRepository:
     async def get_profile(self, patient_id: str) -> PatientProfile | None:
         async with self._sessions() as session:
             row = await session.get(PatientRow, patient_id)
-            return PatientProfile(id=row.id, display_name=row.display_name) if row else None
+            return _profile(row) if row else None
 
     async def list_profiles(self) -> list[PatientProfile]:
         async with self._sessions() as session:
             rows = await session.scalars(select(PatientRow).order_by(PatientRow.id))
-            return [PatientProfile(id=r.id, display_name=r.display_name) for r in rows]
+            return [_profile(r) for r in rows]
 
     async def add(self, profile: PatientProfile) -> None:
         async with self._sessions.begin() as session:
-            session.add(PatientRow(id=profile.id, display_name=profile.display_name))
+            session.add(PatientRow(**profile.model_dump()))
 
     async def remove(self, patient_id: str) -> None:
         async with self._sessions.begin() as session:

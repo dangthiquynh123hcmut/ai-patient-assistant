@@ -160,3 +160,17 @@ def test_selection_rules() -> None:
     assert match_selection("9 giờ bác sĩ Bình", options).option_no == 3
     assert match_selection("không biết nữa", options).option_no is None
     assert match_selection("số 7", options).option_no is None  # không có trong danh sách
+
+
+def test_departments_matching_partial_and_unaccented_names() -> None:
+    from patient_assistant.domain.booking.validators import departments_matching
+    from patient_assistant.infrastructure.persistence import seed
+
+    def names(text: str) -> list[str]:
+        return [d.name for d in departments_matching(text, seed.DEPARTMENTS)]
+
+    assert names("nội tổng") == ["Nội tổng quát"]
+    assert names("noi tong quat") == ["Nội tổng quát"]
+    assert names("khoa mắt") == ["Nhãn khoa"]
+    assert names("nội") == ["Nội tổng quát", "Nội thần kinh"]
+    assert names("khoa sản") == [] and names("x") == []

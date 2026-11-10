@@ -25,7 +25,7 @@ from patient_assistant.infrastructure.clock import SystemClock
 from patient_assistant.infrastructure.persistence import seed
 from patient_assistant.infrastructure.persistence.sql import accounts
 from patient_assistant.infrastructure.persistence.sql import repositories as sql
-from patient_assistant.infrastructure.persistence.sql.setup import ensure_slots, make_engine, seed_demo_data
+from patient_assistant.infrastructure.persistence.sql.setup import make_engine, seed_demo_data
 
 
 async def run(settings: Settings) -> None:
@@ -36,8 +36,8 @@ async def run(settings: Settings) -> None:
     engine = make_engine(settings.database_url)
     try:
         sessions = async_sessionmaker(engine, expire_on_commit=False)
-        await seed_demo_data(sessions, now.date(), now.tzinfo, with_history=True)  # type: ignore[arg-type]
-        added = await ensure_slots(sessions, now.date(), now.tzinfo)  # type: ignore[arg-type]
+        # DB trống: nạp toàn bộ; đã có: bổ sung khoa/bác sĩ/... mới thêm vào JSON và slot còn thiếu.
+        added = await seed_demo_data(sessions, now.date(), now.tzinfo, with_history=True)  # type: ignore[arg-type]
         auth = AuthService(
             accounts.SqlUserRepository(sessions),
             accounts.SqlSessionRepository(sessions),

@@ -71,7 +71,7 @@ def test_stt_flags_only_low_confidence_key_tokens() -> None:
 
 
 def _state(**kw: object) -> AgentState:
-    return AgentState(thread_id="t", patient_id="p", now=NOW, raw_input="x", **kw)  # type: ignore[arg-type]
+    return AgentState(conversation_id="t", patient_id="p", now=NOW, raw_input="x", **kw)  # type: ignore[arg-type]
 
 
 def _issue(resolution: Resolution) -> ValidationIssue:
@@ -133,3 +133,44 @@ def test_continuation_and_context_phrases() -> None:
     assert not is_continuation("tập 4 ngày")
     assert asks_about_assistant_context("dữ liệu của tôi lưu ở đâu")
     assert not asks_about_assistant_context("tôi đau mức 3")
+
+
+def test_next_ask_counts_only_repeats_of_the_same_question() -> None:
+    from types import SimpleNamespace
+
+    from patient_assistant.application.agent.deps import AgentLimits
+    from patient_assistant.application.agent.nodes.shared import next_ask
+
+    deps = SimpleNamespace(limits=AgentLimits(max_clarify_rounds=2, max_questions=5))
+    state = _state()
+    asked = []
+    for question in ["a", "a", "b", "b", "b"]:  # đổi câu hỏi = người dùng đã trả lời được -> đếm lại
+        counters = next_ask(state, question, deps)  # type: ignore[arg-type]
+        assert counters is not None
+        asked.append(counters["clarify_rounds"])
+        state = state.model_copy(update=counters)
+    assert asked == [0, 1, 0, 1, 2]
+    assert next_ask(state, "b", deps) is None  # hỏi lại "b" lần thứ 3 > max_clarify_rounds  # type: ignore[arg-type]
+    assert next_ask(state, "c", deps) is None  # đã hỏi đủ max_questions câu  # type: ignore[arg-type]
+
+
+async def test_reference_to_earlier_answers_is_an_answer_not_another_task() -> None:
+    from patient_assistant.application.agent.side_talk import SideTalk
+    from tests.conftest import ScriptedLLM
+
+    llm = ScriptedLLM(intents=[[Intent.GET_REPORT_HISTORY]])  # LLM sẽ đoán sai nếu được hỏi
+    kind = await SideTalk(llm, None).triage("lấy thông tin cũ tôi đã trả lời phía trên", Intent.BOOK_APPOINTMENT)  # type: ignore[arg-type]
+    assert kind.value == "answer"
+
+
+def test_carryover_accumulates_when_the_same_task_is_restarted() -> None:
+    from patient_assistant.application.agent.state import Carryover
+    from patient_assistant.application.use_cases.chat import _carryover
+
+    older = Carryover(intent=Intent.BOOK_APPOINTMENT, sources=["đặt lịch khám mới", "nội tổng quát", "mai"])
+    restarted = _state(intent=Intent.BOOK_APPOINTMENT, user_replies=["buổi chiều"], carryover=older).model_copy(
+        update={"raw_input": "đặt lịch khám"}
+    )
+    carry = _carryover(restarted, "p")
+    assert carry is not None
+    assert carry.sources == ["đặt lịch khám mới", "nội tổng quát", "mai", "đặt lịch khám", "buổi chiều"]

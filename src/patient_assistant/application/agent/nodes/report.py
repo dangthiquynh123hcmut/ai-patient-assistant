@@ -9,6 +9,7 @@ from patient_assistant.application.agent.nodes.shared import (
     ask_user,
     idempotency_key,
     is_cancel,
+    next_ask,
     record_attempt,
     tool_error_outcome,
     tool_record,
@@ -66,7 +67,9 @@ class ReportNodes:
 
     async def present_draft(self, state: AgentState) -> dict[str, Any]:
         assert state.report_draft is not None
-        if state.clarify_rounds >= self.deps.limits.max_clarify_rounds:
+        # Bản nháp đổi (người dùng sửa, trích xuất lại) là câu hỏi mới; chỉ đếm khi hỏi lại đúng bản nháp cũ.
+        counters = next_ask(state, "confirm_report:" + state.report_draft.model_dump_json(), self.deps)
+        if counters is None:
             return {"outcome": Outcome(kind=OutcomeKind.HANDOFF, code="too_many_rounds")}
         decision = ask_user(
             InterruptPayload(
@@ -76,11 +79,10 @@ class ReportNodes:
                 allowed_actions=["confirm", "edit", "cancel", "reply"],
             )
         )
-        updates: dict[str, Any] = {"decision": decision, "notice": None}
+        updates: dict[str, Any] = {**counters, "decision": decision, "notice": None}
         if is_cancel(decision):
             updates["outcome"] = Outcome(kind=OutcomeKind.CANCELLED)
         elif confirmation_of(state.model_copy(update={"decision": decision})) == ConfirmIntent.UNCLEAR:
-            updates["clarify_rounds"] = state.clarify_rounds + 1
             updates["notice"] = "Mình chưa rõ bạn đã xác nhận hay chưa."
         return updates
 
@@ -102,7 +104,7 @@ class ReportNodes:
         # Chốt chặn bằng code: không bao giờ ghi khi chưa validate đạt hoặc chưa xác nhận (FR-04.5, FR-07.3).
         if draft is None or state.issues or confirmation_of(state) != ConfirmIntent.CONFIRM:
             return {"outcome": Outcome(kind=OutcomeKind.ERROR, code="guard_violation")}
-        key = idempotency_key("report", state.thread_id, state.patient_id, draft.model_dump(mode="json"))
+        key = idempotency_key("report", state.conversation_id, state.patient_id, draft.model_dump(mode="json"))
         result = await self.deps.tools.save_patient_report(state.patient_id, draft, key, state.now)
         updates: dict[str, Any] = {
             "tool_calls": tool_record(state, result),

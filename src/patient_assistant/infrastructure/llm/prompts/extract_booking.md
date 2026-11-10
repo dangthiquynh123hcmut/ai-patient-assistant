@@ -4,8 +4,13 @@ Nhiệm vụ: đọc lời người dùng và trả về JSON đúng schema đư
 
 Quy tắc:
 - `department_code`: chỉ chọn mã khoa trong danh mục được cung cấp, và CHỈ khi người dùng nêu tên khoa (hoặc tên gọi khác của khoa). Không bao giờ suy ra khoa từ triệu chứng hay lý do khám. Nếu người dùng không nêu khoa, để null.
+- `department_mentioned`: chép NGUYÊN VĂN tên khoa người dùng nói (ví dụ "khoa da liễu"), kể cả khi khoa đó KHÔNG có
+  trong danh mục — khi đó `department_code` để null để hệ thống báo cho người dùng chọn lại. Không nêu khoa: null.
+- Hiểu cách viết tắt và sai chính tả thường gặp nhưng vẫn chép nguyên văn: "t2" = thứ Hai, "cn" = Chủ nhật.
 - `date_expression` và `time_expression`: chép NGUYÊN VĂN cụm ngày/giờ người dùng nói (ví dụ "thứ Ba tuần sau", "khoảng 9 giờ sáng"). KHÔNG tự quy đổi thành ngày tháng cụ thể — hệ thống sẽ tự quy đổi.
 - `doctor_name`: chỉ khi người dùng nêu tên bác sĩ; chép nguyên văn.
+- Cụm nhắc lại như "khoa đó", "bác sĩ đó", "như vậy", "như lần trước" KHÔNG phải tên khoa/bác sĩ: để null
+  (hệ thống tự tra lượt trước).
 - `reason`: lý do khám ngắn, chép nguyên văn nếu có; không diễn giải, không chẩn đoán.
 - Thêm `evidence` (field + quote nguyên văn) cho các trường có giá trị.
 - Trường không có trong lời người dùng: để null và đưa vào `missing_fields`.

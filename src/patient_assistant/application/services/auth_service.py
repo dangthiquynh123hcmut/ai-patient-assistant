@@ -127,7 +127,12 @@ class AuthService:
         """
         if await self._users.get_credentials(registration.username):
             raise UsernameTakenError(registration.username)
-        patient = PatientProfile(id=f"patient-{uuid.uuid4().hex[:12]}", display_name=registration.display_name)
+        patient = PatientProfile(
+            id=f"patient-{uuid.uuid4().hex[:12]}",
+            display_name=registration.display_name,
+            date_of_birth=registration.date_of_birth,
+            phone=registration.phone,
+        )
         await self._patients.add(patient)
         try:
             return await self.create_user(
@@ -181,8 +186,8 @@ class AuthService:
         return updated
 
     async def seed(self, accounts: list[NewUser]) -> None:
-        """Tạo tài khoản demo khi chưa có tài khoản nào."""
-        if await self._users.count():
-            return
+        """Tạo các tài khoản demo còn thiếu (theo username). Tài khoản đã có — kể cả mật khẩu đã đổi — giữ nguyên,
+        nên thêm người dùng vào `users.json` rồi chạy lại seed là có tài khoản mới mà không đụng tài khoản cũ."""
         for account in accounts:
-            await self.create_user(account)
+            if await self._users.get_credentials(account.username) is None:
+                await self.create_user(account)

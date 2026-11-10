@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Literal
 
-from patient_assistant.application.agent.state import AgentState, UserDecision
+from patient_assistant.application.agent.state import AgentState, InterruptPayload, UserDecision
 from patient_assistant.application.ports.clock import Clock
 from patient_assistant.application.ports.repositories import ConversationLogRepository
 from patient_assistant.application.use_cases.chat import ChatUseCase, TurnResult
@@ -40,52 +40,56 @@ class ConversationService:
             raise NotAllowed("Chỉ tài khoản bệnh nhân mới chat với trợ lý.")
         return user.patient_id
 
-    async def _check_owner(self, user: User, thread_id: str) -> str:
+    async def _check_owner(self, user: User, conversation_id: str) -> str:
         patient_id = self._patient(user)
-        if await self._log.owner(thread_id) != patient_id:
+        if await self._log.owner(conversation_id) != patient_id:
             raise NotAllowed("Không có hội thoại này.")
         return patient_id
 
     async def send(
         self,
         user: User,
-        thread_id: str,
+        conversation_id: str,
         text: str,
         input_source: Literal["text", "voice"] = "text",
         stt_flags: list[SttFlag] | None = None,
     ) -> TurnResult:
         patient_id = self._patient(user)
         now = self._clock.now()
-        if await self._log.open(thread_id, user.id, patient_id, text[:_TITLE_CHARS], now) != patient_id:
+        if await self._log.open(conversation_id, user.id, patient_id, text[:_TITLE_CHARS], now) != patient_id:
             raise NotAllowed("Không có hội thoại này.")
-        await self._add(thread_id, "user", "voice" if input_source == "voice" else "message", text)
-        result = await self._chat.send_message(thread_id, patient_id, text, input_source, stt_flags)
-        await self._add_result(thread_id, result)
+        await self._add(conversation_id, "user", "voice" if input_source == "voice" else "message", text)
+        result = await self._chat.send_message(conversation_id, patient_id, text, input_source, stt_flags)
+        await self._add_result(conversation_id, result)
         return result
 
-    async def resume(self, user: User, thread_id: str, decision: UserDecision) -> TurnResult:
-        patient_id = await self._check_owner(user, thread_id)
-        result = await self._chat.resume(thread_id, patient_id, decision)  # NoPendingQuestion -> không ghi gì
-        await self._add(thread_id, "user", decision.action, _decision_text(decision))
-        await self._add_result(thread_id, result)
+    async def resume(self, user: User, conversation_id: str, decision: UserDecision) -> TurnResult:
+        patient_id = await self._check_owner(user, conversation_id)
+        result = await self._chat.resume(conversation_id, patient_id, decision)  # NoPendingQuestion -> không ghi gì
+        await self._add(conversation_id, "user", decision.action, _decision_text(decision))
+        await self._add_result(conversation_id, result)
         return result
 
-    async def state(self, user: User, thread_id: str) -> AgentState | None:
-        await self._check_owner(user, thread_id)
-        return await self._chat.inspect_state(thread_id)
+    async def state(self, user: User, conversation_id: str) -> AgentState | None:
+        await self._check_owner(user, conversation_id)
+        return await self._chat.inspect_state(conversation_id)
 
-    async def _add_result(self, thread_id: str, result: TurnResult) -> None:
+    async def pending(self, user: User, conversation_id: str) -> InterruptPayload | None:
+        await self._check_owner(user, conversation_id)
+        return await self._chat.pending_question(conversation_id)
+
+    async def _add_result(self, conversation_id: str, result: TurnResult) -> None:
         intent = next((s.details.get("intent") for s in result.steps if s.node == "classify"), None)
         if result.interrupt is not None:
-            await self._add(thread_id, "assistant", result.interrupt.kind, result.interrupt.message, intent)
+            await self._add(conversation_id, "assistant", result.interrupt.kind, result.interrupt.message, intent)
         elif result.response is not None:
-            await self._add(thread_id, "assistant", result.response.kind.value, result.response.text, intent)
+            await self._add(conversation_id, "assistant", result.response.kind.value, result.response.text, intent)
 
-    async def _add(self, thread_id: str, role: str, action: str, text: str, intent: str | None = None) -> None:
+    async def _add(self, conversation_id: str, role: str, action: str, text: str, intent: str | None = None) -> None:
         await self._log.add_message(
             ChatMessage(
                 id=str(uuid.uuid4()),
-                thread_id=thread_id,
+                conversation_id=conversation_id,
                 role=role,
                 action=action,
                 text=text,

@@ -1,5 +1,27 @@
 [
-  {"id": "patient-demo-001", "display_name": "Bệnh nhân Demo 1", "label": "Bệnh nhân demo (có kế hoạch theo dõi khoa PHCN, có lịch sử)"},
-  {"id": "patient-demo-002", "display_name": "Bệnh nhân Demo 2", "label": "Bệnh nhân demo 2 (kế hoạch theo dõi khoa Cơ xương khớp)"},
-  {"id": "patient-no-plan", "display_name": "Bệnh nhân Demo 3", "label": "Bệnh nhân chưa có kế hoạch theo dõi"}
+  {"id": "patient-demo-001", "display_name": "Bệnh nhân Demo 1", "date_of_birth": "1980-01-15", "phone": "0901000001",
+   "label": "Bệnh nhân demo (có kế hoạch theo dõi khoa PHCN, có lịch sử)"},
+  {"id": "patient-demo-002", "display_name": "Bệnh nhân Demo 2", "date_of_birth": "1975-06-30", "phone": "0901000002",
+   "label": "Bệnh nhân demo 2 (kế hoạch theo dõi khoa Cơ xương khớp)"},
+  {"id": "patient-no-plan", "display_name": "Bệnh nhân Demo 3", "date_of_birth": "1992-09-09", "phone": "0901000003",
+   "label": "Bệnh nhân chưa có kế hoạch theo dõi"},
+
+  {"id": "patient-dup-an-1", "display_name": "Nguyễn Văn An", "date_of_birth": "1985-03-12", "phone": "0912000111",
+   "label": "Nguyễn Văn An"},
+  {"id": "patient-dup-an-2", "display_name": "Nguyễn Văn An", "date_of_birth": "1985-03-12", "phone": "0987000222",
+   "label": "Nguyễn Văn An"},
+  {"id": "patient-dup-an-3", "display_name": "Nguyễn Văn An", "date_of_birth": "1990-07-01", "phone": "0912000111",
+   "label": "Nguyễn Văn An"},
+  {"id": "patient-dup-binh-1", "display_name": "Trần Thị Bình", "date_of_birth": "1972-11-20", "phone": "0903000333",
+   "label": "Trần Thị Bình"},
+  {"id": "patient-dup-binh-2", "display_name": "Trần Thị Bình", "date_of_birth": "1972-11-20", "phone": "0903000333",
+   "label": "Trần Thị Bình"},
+  {"id": "patient-dup-hoa-1", "display_name": "Lê Thị Hoa", "date_of_birth": "1995-02-28", "phone": "0934000444",
+   "label": "Lê Thị Hoa"},
+  {"id": "patient-dup-hoa-2", "display_name": "Le Thi Hoa", "date_of_birth": "1995-02-28", "phone": "0934000444",
+   "label": "Le Thi Hoa"},
+  {"id": "patient-same-as-doctor", "display_name": "Trần Văn An", "date_of_birth": "1968-05-05", "phone": "0945000555",
+   "label": "Trần Văn An"},
+  {"id": "patient-dup-demo-1", "display_name": "Bệnh nhân Demo 1", "date_of_birth": "1980-01-15", "phone": "0901000099",
+   "label": "Bệnh nhân Demo 1"}
 ]

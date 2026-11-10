@@ -13,7 +13,7 @@ from patient_assistant.infrastructure.clock import FixedClock
 from patient_assistant.infrastructure.persistence import seed
 from patient_assistant.infrastructure.persistence.sql import accounts
 from patient_assistant.infrastructure.persistence.sql import repositories as sql
-from tests.conftest import NOW, PATIENT, ScriptedLLM, api_client, booking_out, login, report_out
+from tests.conftest import NOW, PATIENT, ScriptedLLM, api_client, booking_out, done, login, report_out
 
 BOOK = "Cho tôi đặt lịch khoa phục hồi chức năng thứ ba tuần sau buổi sáng"
 
@@ -81,7 +81,9 @@ async def test_register_creates_patient_and_logs_in(make_app: Any) -> None:
         # Nhân viên thấy bệnh nhân mới trong danh sách (lấy từ DB, không phải dữ liệu demo cố định).
         staff = await login(client, "bacsi")
         patients = (await client.get("/v1/meta", headers=staff)).json()["patients"]
-        assert {"id": user["patient_id"], "label": "Nguyễn Văn A"} in patients
+        assert {"id": user["patient_id"], "label": "Nguyễn Văn A"} in [
+            {"id": p["id"], "label": p["label"]} for p in patients
+        ]
         assert any(p["id"] == "patient-demo-001" for p in patients)
 
 
@@ -99,7 +101,7 @@ async def test_register_rejects_taken_username_and_bad_input(make_app: Any) -> N
             assert r.status_code == 422, (bad, r.text)
     # Đăng ký trùng không để lại hồ sơ bệnh nhân mồ côi.
     profiles = await app.auth.list_patients()
-    assert len(profiles) == 4  # 3 bệnh nhân demo + 1 tài khoản vừa đăng ký
+    assert len(profiles) == len(seed.PATIENTS) + 1  # bệnh nhân demo + 1 tài khoản vừa đăng ký
 
 
 async def test_register_can_be_disabled(make_app: Any) -> None:
@@ -163,13 +165,36 @@ async def test_patient_cannot_touch_another_patients_conversation(make_app: Any)
         other = await login(client, "benhnhan2")
         r = await client.post("/v1/chat/c-1/messages", headers=owner, json={"text": BOOK})
         assert r.json()["interrupt"]["kind"] == "choose_slot"
-        # Biết thread_id cũng không đọc / gửi / trả lời thay được.
+        # Biết conversation_id cũng không đọc / gửi / trả lời thay được.
         assert (await client.post("/v1/chat/c-1/messages", headers=other, json={"text": "hi"})).status_code == 404
         resume = await client.post("/v1/chat/c-1/resume", headers=other, json={"action": "choose", "option_no": 1})
         assert resume.status_code == 404
         assert (await client.get("/v1/chat/c-1/state", headers=other)).status_code == 404
         assert (await client.get("/v1/me/conversations/c-1", headers=other)).status_code == 404
         assert (await client.get("/v1/me/conversations", headers=other)).json() == []
+        assert (await client.get("/v1/chat/c-1/pending", headers=other)).status_code == 404
+
+
+async def test_patient_reopens_past_conversation_and_continues(make_app: Any) -> None:
+    async with api_client(await make_app(llm=_booking_llm())) as client:
+        owner = await login(client, "benhnhan1")
+        await client.post("/v1/chat/c-2/messages", headers=owner, json={"text": BOOK})
+
+        # Đăng nhập lại (phiên mới) vẫn thấy hội thoại cũ, đọc được tin nhắn và câu hỏi đang chờ.
+        again = await login(client, "benhnhan1")
+        [conv] = (await client.get("/v1/me/conversations", headers=again)).json()
+        assert conv["conversation_id"] == "c-2" and conv["title"].startswith("Cho tôi đặt lịch")
+        messages = (await client.get("/v1/me/conversations/c-2", headers=again)).json()
+        assert [m["role"] for m in messages] == ["user", "assistant"]
+        pending = (await client.get("/v1/chat/c-2/pending", headers=again)).json()
+        assert pending["kind"] == "choose_slot" and pending["options"]
+
+        # Trả lời tiếp ngay trên hội thoại cũ.
+        r = await client.post("/v1/chat/c-2/resume", headers=again, json={"action": "choose", "option_no": 1})
+        assert r.json()["interrupt"]["kind"] == "confirm_booking"
+        r = await client.post("/v1/chat/c-2/resume", headers=again, json={"action": "confirm"})
+        assert r.json()["status"] == "done"
+        assert (await client.get("/v1/chat/c-2/pending", headers=again)).json() is None  # xong: không còn câu hỏi
 
 
 async def test_every_question_and_answer_is_logged_for_staff(make_app: Any) -> None:
@@ -182,13 +207,13 @@ async def test_every_question_and_answer_is_logged_for_staff(make_app: Any) -> N
         await client.post("/v1/chat/log-1/resume", headers=patient, json={"action": "confirm"})
 
         mine = (await client.get("/v1/me/conversations", headers=patient)).json()
-        assert [(c["thread_id"], c["title"], c["message_count"], c["last_kind"]) for c in mine] == [
+        assert [(c["conversation_id"], c["title"], c["message_count"], c["last_kind"]) for c in mine] == [
             ("log-1", "tuần này tôi đau mức 3", 6, "report_saved")
         ]
 
         staff = await login(client, "bacsi")
         listed = (await client.get(f"/v1/staff/conversations?patient_id={PATIENT}", headers=staff)).json()
-        assert [c["thread_id"] for c in listed] == ["log-1"]
+        assert [c["conversation_id"] for c in listed] == ["log-1"]
         assert (await client.get("/v1/staff/conversations?patient_id=patient-demo-002", headers=staff)).json() == []
         messages = (await client.get("/v1/staff/conversations/log-1", headers=staff)).json()
         assert [(m["role"], m["action"], m["text"][:22]) for m in messages] == [
@@ -262,7 +287,7 @@ async def test_sql_accounts_sessions_and_log(make_storage: Any) -> None:
     )
     await auth.seed(seed.demo_accounts("demo1234"))
     await auth.seed(seed.demo_accounts("khac-mat-khau"))  # chạy lại không tạo trùng / không đổi mật khẩu
-    assert await users.count() == 5
+    assert await users.count() == len(seed.demo_accounts("demo1234"))
 
     token, user = await auth.login("benhnhan1", "demo1234")
     assert (await auth.authenticate(token)) == user and user.patient_id == PATIENT
@@ -280,8 +305,59 @@ async def test_sql_accounts_sessions_and_log(make_storage: Any) -> None:
     assert await log.open("t1", "kẻ khác", "patient-demo-002", "x", NOW) == PATIENT  # chủ cũ giữ nguyên
     for i, (role, action) in enumerate([("user", "message"), ("assistant", "chat")]):
         await log.add_message(
-            ChatMessage(id=f"m{i}", thread_id="t1", role=role, action=action, text=f"#{i}", created_at=NOW)
+            ChatMessage(id=f"m{i}", conversation_id="t1", role=role, action=action, text=f"#{i}", created_at=NOW)
         )
     [conv] = await log.list_conversations(PATIENT, 10)
     assert (conv.message_count, conv.last_kind) == (2, "chat")
     assert [m.text for m in await log.list_messages("t1")] == ["#0", "#1"]  # cùng thời điểm vẫn đúng thứ tự
+
+
+async def test_patients_with_the_same_name_only_see_their_own_data(make_app: Any) -> None:
+    """Ba bệnh nhân cùng tên "Nguyễn Văn An": mỗi người chỉ thấy hồ sơ, kế hoạch và hội thoại của chính mình."""
+    async with api_client(await make_app()) as client:
+        patient_ids = set()
+        for username in ("nguyenvanan", "nguyenvanan2", "an.nguyen"):
+            headers = await login(client, username)
+            me = (await client.get("/v1/auth/me", headers=headers)).json()
+            assert me["display_name"] == "Nguyễn Văn An"
+            patient_ids.add(me["patient_id"])
+            assert (await client.get("/v1/me/conversations", headers=headers)).json() == []
+        assert len(patient_ids) == 3  # ba hồ sơ khác nhau dù trùng tên
+
+        staff = await login(client, "bacsi")
+        patients = (await client.get("/v1/meta", headers=staff)).json()["patients"]
+        assert [p["label"] for p in patients].count("Nguyễn Văn An") == 3
+
+
+async def test_register_with_birth_date_and_phone(make_app: Any) -> None:
+    app = await make_app()
+    async with api_client(app) as client:
+        body = {**NEW_ACCOUNT, "date_of_birth": "1990-05-17", "phone": "+84 912 345 678"}
+        user = (await client.post("/v1/auth/register", json=body)).json()
+        profile = await app.toolbox._patients.get_profile(user["patient_id"])
+        assert (str(profile.date_of_birth), profile.phone) == ("1990-05-17", "0912345678")  # +84 -> 0, bỏ khoảng trắng
+        client.cookies.clear()
+        for bad in ({"phone": "12345"}, {"date_of_birth": "2999-01-01"}):
+            r = await client.post("/v1/auth/register", json={**NEW_ACCOUNT, "username": "khac", **bad})
+            assert r.status_code == 422, (bad, r.text)
+
+
+async def test_staff_can_tell_apart_patients_with_identical_details(make_app: Any) -> None:
+    async with api_client(await make_app()) as client:
+        staff = await login(client, "bacsi")
+        patients = (await client.get("/v1/meta", headers=staff)).json()["patients"]
+        binh = [p for p in patients if p["display_name"] == "Trần Thị Bình"]
+        # Trùng cả họ tên, ngày sinh, số điện thoại: chỉ mã hồ sơ là khác nhau.
+        assert len(binh) == 2 and len({(p["date_of_birth"], p["phone"]) for p in binh}) == 1
+        assert len({p["id"] for p in binh}) == 2
+        an = [p for p in patients if p["display_name"] == "Nguyễn Văn An"]
+        assert len({p["date_of_birth"] for p in an}) == 2 and len({p["phone"] for p in an}) == 2
+
+
+async def test_patient_info_shows_birth_date_and_phone_but_llm_tool_does_not(make_app: Any) -> None:
+    app = await make_app()
+    info = done(await app.chat.send_message("pi-1", PATIENT, "xem thông tin của tôi"), "patient_info")
+    assert "Ngày sinh: 15/01/1980" in info.response.text and "Số điện thoại: 0901000001" in info.response.text
+    summary = next(t for t in app.toolbox.read_only_specs(PATIENT, NOW) if t.name == "get_patient_summary")
+    profile = (await summary.handler(None))["data"]["profile"]  # type: ignore[arg-type]
+    assert profile["display_name"] == "Bệnh nhân Demo 1" and "phone" not in profile and "date_of_birth" not in profile

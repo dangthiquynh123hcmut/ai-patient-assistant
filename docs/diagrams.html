@@ -74,8 +74,8 @@ flowchart TB
   subgraph API["FastAPI"]
     direction TB
     a1["POST /stt/transcribe"]
-    a2["POST /chat/{thread_id}/messages"]
-    a3["POST /chat/{thread_id}/resume"]
+    a2["POST /chat/{conversation_id}/messages"]
+    a3["POST /chat/{conversation_id}/resume"]
     a4["GET /reports · GET /appointments"]
   end
   STT["stt/<br/>faster-whisper (CPU, int8)<br/>+ cờ độ tin cậy"]:::code
@@ -348,7 +348,7 @@ erDiagram
     timestamptz end_at
   }
   AGENT_ATTEMPTS {
-    string thread_id
+    string conversation_id
     int attempt_no
     string kind
     jsonb draft_json

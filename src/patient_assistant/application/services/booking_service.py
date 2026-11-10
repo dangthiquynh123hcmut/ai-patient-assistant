@@ -10,11 +10,16 @@ from patient_assistant.application.ports.repositories import (
     SlotTakenError,
 )
 from patient_assistant.application.tools.result import ToolErrorCode, ToolResult
-from patient_assistant.domain.booking.models import Appointment, AppointmentStatus, Slot
+from patient_assistant.domain.booking.models import Appointment, AppointmentStatus
 from patient_assistant.domain.booking.policy import BookingPolicy, slot_issues
+from patient_assistant.domain.booking.ranking import SlotFit, fit_to_schedule
 from patient_assistant.domain.text.vi_dates import DateWindow
 
 ALTERNATIVE_SPAN_DAYS = 7
+# Số slot trống lấy từ DB trước khi lọc/xếp hạng — đủ rộng để thấy cả những ngày bệnh nhân đã có lịch.
+CANDIDATE_POOL = 200
+# Lỗi khi ghi mà đổi sang slot khác là xử lý được: tìm lại, giữ nguyên yêu cầu thay vì kết thúc luồng.
+RECOVERABLE_ISSUES = frozenset({"overlapping_appointment", "too_soon"})
 
 
 class BookingService:
@@ -31,6 +36,7 @@ class BookingService:
 
     async def _find(
         self,
+        patient_id: str,
         department_code: str,
         start: datetime,
         end: datetime,
@@ -38,8 +44,8 @@ class BookingService:
         limit: int,
         window: DateWindow | None,
         now: datetime,
-    ) -> list[Slot]:
-        found = await self._slots.find_available(department_code, start, end, doctor_id, limit * 4)
+    ) -> list[SlotFit]:
+        found = await self._slots.find_available(department_code, start, end, doctor_id, CANDIDATE_POOL)
         result = []
         for slot in found:
             local = slot.start_at.astimezone(now.tzinfo)
@@ -54,18 +60,44 @@ class BookingService:
             ):
                 continue
             result.append(slot)
-        return result[:limit]
+        # Bỏ slot trùng/sát lịch của chính bệnh nhân, đưa slot cùng ngày với lịch đã có lên đầu.
+        mine = await self._appointments.list_for_patient(patient_id)
+        return fit_to_schedule(result, mine, now, self.policy.travel_buffer)[:limit]
+
+    @staticmethod
+    def _slots_result(fits: list[SlotFit]) -> ToolResult:
+        data = []
+        source_ids = []
+        for fit in fits:
+            item = fit.slot.model_dump(mode="json")
+            source_ids.append(fit.slot.slot_id)
+            if fit.same_day:
+                item["same_day_appointment"] = {
+                    "id": fit.same_day.id,
+                    "department_code": fit.same_day.slot.department_code,
+                    "start_at": fit.same_day.slot.start_at.isoformat(),
+                }
+                source_ids.append(fit.same_day.id)
+            data.append(item)
+        return ToolResult.success("get_available_slots", data, list(dict.fromkeys(source_ids)))
 
     async def search(
-        self, department_code: str, window: DateWindow, doctor_id: str | None, limit: int, now: datetime
+        self,
+        patient_id: str,
+        department_code: str,
+        window: DateWindow,
+        doctor_id: str | None,
+        limit: int,
+        now: datetime,
     ) -> ToolResult:
         start, end = self._bounds(window, now)
-        slots = await self._find(department_code, start, end, doctor_id, limit, window, now)
-        return ToolResult.success(
-            "get_available_slots", [s.model_dump(mode="json") for s in slots], [s.slot_id for s in slots]
+        return self._slots_result(
+            await self._find(patient_id, department_code, start, end, doctor_id, limit, window, now)
         )
 
-    async def alternatives(self, department_code: str, window: DateWindow, limit: int, now: datetime) -> ToolResult:
+    async def alternatives(
+        self, patient_id: str, department_code: str, window: DateWindow, limit: int, now: datetime
+    ) -> ToolResult:
         """Nới theo luật cố định: ±7 ngày quanh khoảng đã chọn, bỏ ràng buộc giờ và bác sĩ."""
         relaxed = DateWindow(
             date_from=max(window.date_from - timedelta(days=ALTERNATIVE_SPAN_DAYS), now.date()),
@@ -73,9 +105,8 @@ class BookingService:
         )
         start, end = self._bounds(relaxed, now)
         horizon = datetime.combine(now.date() + timedelta(days=self.policy.max_horizon_days), time(23, 59), now.tzinfo)
-        slots = await self._find(department_code, start, min(end, horizon), None, limit, None, now)
-        return ToolResult.success(
-            "get_available_slots", [s.model_dump(mode="json") for s in slots], [s.slot_id for s in slots]
+        return self._slots_result(
+            await self._find(patient_id, department_code, start, min(end, horizon), None, limit, None, now)
         )
 
     async def book(
@@ -92,6 +123,8 @@ class BookingService:
             return ToolResult.failure(tool, ToolErrorCode.NOT_FOUND, "Slot không tồn tại.")
         mine = await self._appointments.list_for_patient(patient_id)
         issues = slot_issues(slot, now, self.policy, mine)
+        if issues and all(i.code in RECOVERABLE_ISSUES for i in issues):
+            return ToolResult.failure(tool, ToolErrorCode.CONFLICT, " ".join(i.message for i in issues))
         if issues:
             return ToolResult.failure(
                 tool, ToolErrorCode.INVALID_ARGS, "Không thể đặt slot này.", details=[i.message for i in issues]
@@ -99,7 +132,9 @@ class BookingService:
         try:
             appt = await self._appointments.book(patient_id, slot, reason, idempotency_key)
         except SlotTakenError:
-            return ToolResult.failure(tool, ToolErrorCode.CONFLICT, "Slot vừa được người khác đặt.", retryable=False)
+            return ToolResult.failure(
+                tool, ToolErrorCode.CONFLICT, "Slot bạn chọn vừa được người khác đặt.", retryable=False
+            )
         return ToolResult.success(tool, appt.model_dump(mode="json"), [appt.id])
 
     async def get_appointment(self, patient_id: str, appointment_id: str) -> Appointment | None:

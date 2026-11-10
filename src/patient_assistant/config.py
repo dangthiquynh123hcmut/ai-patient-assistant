@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     checkpointer_pool_size: int = 10
     seed_demo_data: bool = True
 
-    # Đăng nhập. Tài khoản demo (demo_data/users.json) chỉ được tạo khi DB chưa có tài khoản nào.
+    # Đăng nhập. Tài khoản demo (demo_data/users.json) còn thiếu theo username được tạo khi seed.
     session_ttl_hours: int = 12
     seed_password: str = "demo1234"
     cookie_secure: bool = False  # bật khi chạy sau HTTPS
@@ -46,5 +46,6 @@ class Settings(BaseSettings):
     # Giới hạn agent
     max_corrections: int = 2
     max_clarify_rounds: int = 3
+    max_questions: int = 10
     max_slot_search_rounds: int = 3
     slot_options: int = 3

@@ -86,6 +86,14 @@ def _issue(field_name: str, code: str, message: str) -> ValidationIssue:
     )
 
 
+_WEEKDAY_ABBREV = re.compile(r"\b(?:t|th)\.? ?([2-7])\b")
+
+
+def expand_weekday_abbrev(text: str) -> str:
+    """Cách viết tắt hay gặp khi chat: "t2", "t.3", "th 4" -> "thứ 2"... ("cn" đã được hiểu là Chủ nhật)."""
+    return _WEEKDAY_ABBREV.sub(r"thứ \1", text)
+
+
 def _weekday_mentioned(text: str) -> int | None:
     m = _WEEKDAY_PATTERN.search(text)
     if not m:
@@ -113,7 +121,7 @@ def _explicit_date(text: str, today: date) -> tuple[date | None, ValidationIssue
 
 
 def _resolve_date(raw: str, today: date) -> tuple[DateWindow | None, list[ValidationIssue]]:
-    norm = normalize(raw)
+    norm = expand_weekday_abbrev(normalize(raw))
     if not norm:
         return None, [_issue("date_expression", "date_missing", "Chưa có ngày muốn khám.")]
 
@@ -240,6 +248,15 @@ def _resolve_time(raw: str, parts: DayParts) -> tuple[tuple[time, time] | None, 
     lo = max(center - EXACT_TIME_TOLERANCE, datetime.combine(date.min, time(0, 0)))
     hi = min(center + EXACT_TIME_TOLERANCE, datetime.combine(date.min, time(23, 59)))
     return (lo.time(), hi.time()), rule, []
+
+
+def mentions_when(text: str, now: datetime) -> bool:
+    """Câu có nêu ngày, buổi hoặc giờ không ("buổi chiều", "thứ năm", "ngày mai", "3 giờ", kể cả mốc không hợp lệ)."""
+    window, issues = _resolve_date(text, now.date())
+    if window is not None or any(i.code not in ("date_missing", "date_unparsed") for i in issues):
+        return True
+    times, _, time_issues = _resolve_time(text, DayParts())
+    return times is not None or bool(time_issues)
 
 
 def resolve(

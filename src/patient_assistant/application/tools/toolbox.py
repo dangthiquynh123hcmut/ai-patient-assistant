@@ -146,16 +146,19 @@ class Toolbox:
         return await _guarded("search_approved_knowledge", call)
 
     async def get_available_slots(
-        self, department_code: str, window: DateWindow, doctor_id: str | None, now: datetime
+        self, patient_id: str, department_code: str, window: DateWindow, doctor_id: str | None, now: datetime
     ) -> ToolResult:
         return await _guarded(
             "get_available_slots",
-            lambda: self._booking.search(department_code, window, doctor_id, self._slot_limit, now),
+            lambda: self._booking.search(patient_id, department_code, window, doctor_id, self._slot_limit, now),
         )
 
-    async def get_alternative_slots(self, department_code: str, window: DateWindow, now: datetime) -> ToolResult:
+    async def get_alternative_slots(
+        self, patient_id: str, department_code: str, window: DateWindow, now: datetime
+    ) -> ToolResult:
         return await _guarded(
-            "get_available_slots", lambda: self._booking.alternatives(department_code, window, self._slot_limit, now)
+            "get_available_slots",
+            lambda: self._booking.alternatives(patient_id, department_code, window, self._slot_limit, now),
         )
 
     async def list_my_appointments(self, patient_id: str, now: datetime) -> ToolResult:
@@ -199,13 +202,19 @@ class Toolbox:
         async def slots(inp: BaseModel) -> dict[str, Any]:
             assert isinstance(inp, SlotsInput)
             window = DateWindow(date_from=inp.date_from, date_to=inp.date_to)
-            return (await self.get_available_slots(inp.department_code, window, None, now)).model_dump(mode="json")
+            return (await self.get_available_slots(patient_id, inp.department_code, window, None, now)).model_dump(
+                mode="json"
+            )
 
         async def appointments(_: BaseModel) -> dict[str, Any]:
             return (await self.list_my_appointments(patient_id, now)).model_dump(mode="json")
 
         async def summary(_: BaseModel) -> dict[str, Any]:
-            return (await self.get_patient_summary(patient_id, now)).model_dump(mode="json")
+            result = (await self.get_patient_summary(patient_id, now)).model_dump(mode="json")
+            # LLM không cần ngày sinh / số điện thoại để trả lời -> không gửi dữ liệu cá nhân này cho LLM.
+            for key in ("date_of_birth", "phone"):
+                ((result.get("data") or {}).get("profile") or {}).pop(key, None)
+            return result
 
         return [
             ToolSpec(

@@ -74,6 +74,11 @@ def uses_bedrock_runtime(model_id: str) -> bool:
     return bool(_RUNTIME_MODEL_ID.search(model_id))
 
 
+def _with_memory(text: str, memory: str | None) -> str:
+    """Ghi chú lượt trước (code soạn) đặt trong khối riêng, tách khỏi lời người dùng hiện tại."""
+    return f"<lich_su_hoi_thoai>\n{memory}\n</lich_su_hoi_thoai>\n\n{text}" if memory else text
+
+
 class _IntentList(BaseModel):
     intents: list[Intent]
 
@@ -164,8 +169,9 @@ class AnthropicBedrockLLM:
 
     # ------------------------------------------------------------------ LLMPort
 
-    async def converse(self, text: str, context: str | None = None) -> str:
+    async def converse(self, text: str, context: str | None = None, memory: str | None = None) -> str:
         content = f"<boi_canh>\n{context}\n</boi_canh>\n\n{text}" if context else text
+        content = _with_memory(content, memory)
         response = await self._create(
             system=[{"type": "text", "text": _prompt("converse"), "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": content}],
@@ -173,8 +179,10 @@ class AnthropicBedrockLLM:
         )
         return "".join(b.text for b in response.content if b.type == "text").strip()
 
-    async def classify_intent(self, text: str) -> list[Intent]:
-        raw = await self._structured(_prompt("classify_intent"), text, strict_schema(_IntentList), self._effort_light)
+    async def classify_intent(self, text: str, memory: str | None = None) -> list[Intent]:
+        raw = await self._structured(
+            _prompt("classify_intent"), _with_memory(text, memory), strict_schema(_IntentList), self._effort_light
+        )
         try:
             return _IntentList.model_validate(raw).intents
         except ValidationError as exc:
@@ -212,13 +220,15 @@ class AnthropicBedrockLLM:
         )
         return _SlotChoice.model_validate(raw).option_no
 
-    async def answer_question(self, question: str, tools: list[ToolSpec], max_tool_calls: int) -> GroundedAnswer:
+    async def answer_question(
+        self, question: str, tools: list[ToolSpec], max_tool_calls: int, memory: str | None = None
+    ) -> GroundedAnswer:
         by_name = {t.name: t for t in tools}
         tool_defs = [
             {"name": t.name, "description": t.description, "input_schema": strict_schema(t.input_model), "strict": True}
             for t in tools
         ]
-        messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
+        messages: list[dict[str, Any]] = [{"role": "user", "content": _with_memory(question, memory)}]
         source_ids: list[str] = []
         calls = 0
         system = [{"type": "text", "text": _prompt("answer_question"), "cache_control": {"type": "ephemeral"}}]

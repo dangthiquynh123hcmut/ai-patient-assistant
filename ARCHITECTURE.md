@@ -33,14 +33,14 @@
 | Ngôn ngữ / quản lý dự án | Python 3.12, **uv** | Lock file nhanh, tái lập môi trường. |
 | API | **FastAPI** + **uvicorn** | Async, tự sinh OpenAPI từ Pydantic. |
 | Agent orchestration | **langgraph** (StateGraph, `interrupt`, `Command`) | Graph có state, routing có điều kiện, HITL native. |
-| Checkpointer | **langgraph-checkpoint-postgres** (`AsyncPostgresSaver`) | Lưu state theo `thread_id`, resume sau interrupt, xem lại lịch sử từng bước (time travel) để debug. |
+| Checkpointer | **langgraph-checkpoint-postgres** (`AsyncPostgresSaver`) | Lưu state theo `conversation_id`, resume sau interrupt, xem lại lịch sử từng bước (time travel) để debug. |
 | Schema / validation | **pydantic v2**, **pydantic-settings** | Lớp 1 validation (FR-04.1) + config qua env. |
 | LLM | **anthropic** (`anthropic[bedrock]`, client `AnthropicBedrock` cho bedrock-runtime / `AnthropicBedrockMantle` cho Mantle, chọn theo dạng model ID) | SDK chính thức, xác thực bằng IAM của AWS, có `messages.parse(output_format=PydanticModel)` cho structured output và `strict: true` cho tool. |
 | Database | **PostgreSQL 16**, **SQLAlchemy 2.0 (async)** + **asyncpg**, **Alembic** | Một Postgres dùng cho cả dữ liệu nghiệp vụ, checkpoint LangGraph và (sau này) pgvector. |
 | STT | **faster-whisper** (CTranslate2, `int8` trên CPU) | Chạy local trên CPU (FR-01.6), trả xác suất theo từng từ để phát hiện đoạn nhận dạng kém (FR-01.4). |
 | Xử lý audio | **ffmpeg** (hệ thống) / **soundfile** | Chuẩn hóa về 16kHz mono trước khi đưa vào STT. |
 | So khớp chuỗi | **difflib** (stdlib) | Source-grounding: kiểm tra `evidence` có thật trong transcript (gần đúng, chịu được dấu câu/chính tả, nhưng con số phải giữ nguyên). |
-| Logging | **structlog** (JSON) | Log có cấu trúc, gắn `thread_id`/`run_id`; có processor che PII (FR-08.8). |
+| Logging | **structlog** (JSON) | Log có cấu trúc, gắn `conversation_id`/`run_id`; có processor che PII (FR-08.8). |
 | Ngày giờ | **zoneinfo** (stdlib) + **holidays** (lịch nghỉ lễ Việt Nam) | Quy đổi ngày tương đối theo múi giờ cố định; chặn đặt lịch vào ngày nghỉ lễ. Bộ phân tích ngày tiếng Việt (`vi_dates.py`) tự viết theo luật và có test riêng; không dựa vào thư viện parse ngày tổng quát vì độ phủ tiếng Việt cho các cụm tương đối ("thứ Ba tuần sau") không đáng tin. |
 
 ### 1.2 Test và đánh giá
@@ -91,8 +91,8 @@ Nếu sau này muốn dùng hệ sinh thái LangChain (`ToolNode`, `with_structu
 
 ```text
 ┌──────────────┐   text / audio    ┌───────────────────────── FastAPI ──────────────────────────┐
-│  Client/UI   │ ────────────────▶ │ POST /stt/transcribe   POST /chat/{thread_id}/messages      │
-│ (Streamlit)  │ ◀──────────────── │ POST /chat/{thread_id}/resume   GET /reports                │
+│  Client/UI   │ ────────────────▶ │ POST /stt/transcribe   POST /chat/{conversation_id}/messages      │
+│ (Streamlit)  │ ◀──────────────── │ POST /chat/{conversation_id}/resume   GET /reports                │
 └──────────────┘  response/interrupt└───────┬──────────────────────┬─────────────────────────────┘
                                            │                      │
                                    ┌───────▼──────┐      ┌────────▼─────────────────────────┐
@@ -236,7 +236,7 @@ def present_draft(state: AgentState) -> Command:
     ...
 ```
 
-API resume: `POST /chat/{thread_id}/resume` → `graph.ainvoke(Command(resume=decision), config={"configurable": {"thread_id": ...}})`. Checkpoint nằm trong Postgres nên server có restart giữa chừng vẫn resume được.
+API resume: `POST /chat/{conversation_id}/resume` → `graph.ainvoke(Command(resume=decision), config={"configurable": {"thread_id": conversation_id}})` (`thread_id` là khóa cấu hình của LangGraph, giá trị là mã hội thoại). Checkpoint nằm trong Postgres nên server có restart giữa chừng vẫn resume được.
 
 ---
 
@@ -245,7 +245,7 @@ API resume: `POST /chat/{thread_id}/resume` → `graph.ainvoke(Command(resume=de
 ```python
 class AgentState(BaseModel):
     # định danh lượt (từ API/auth, không bao giờ từ LLM)
-    thread_id: str
+    conversation_id: str
     patient_id: str
     turn_id: str
 
@@ -381,7 +381,7 @@ Khi `get_available_slots` được LLM gọi trong `rag_answer`, `date_from`/`da
 
 Tool cho LLM khai báo với `strict: true` và `additionalProperties: false`; tham số vẫn được validate lại bằng Pydantic trước khi chạy.
 
-**Chống ghi trùng (FR-07.7):** `idempotency_key = sha256(thread_id + draft_version + canonical_json(draft))`, cột `UNIQUE` trong bảng `reports`. Retry trùng key → trả lại report đã có với `status=ok`, không tạo mới.
+**Chống ghi trùng (FR-07.7):** `idempotency_key = sha256(conversation_id + draft_version + canonical_json(draft))`, cột `UNIQUE` trong bảng `reports`. Retry trùng key → trả lại report đã có với `status=ok`, không tạo mới.
 
 ---
 
@@ -532,7 +532,7 @@ Kết quả luôn là một `option_no` thuộc danh sách đã đưa ra — dù
 ### 7.7 Đồng thời và chống đặt trùng
 
 - Bảng `appointments`: `UNIQUE (slot_id) WHERE status = 'booked'` (partial unique index) → hai người cùng chốt một slot thì chỉ một người thành công; người kia nhận `ToolError(code="conflict")`.
-- `idempotency_key = sha256(thread_id + slot_id + draft_version)`, `UNIQUE`. Retry do lỗi mạng → trả lại lịch hẹn đã tạo, `status=ok`.
+- `idempotency_key = sha256(conversation_id + slot_id + draft_version)`, `UNIQUE`. Retry do lỗi mạng → trả lại lịch hẹn đã tạo, `status=ok`.
 - Kiểm tra lại toàn bộ business rule trong transaction lưu (`SELECT … FOR UPDATE` trên slot) — không dựa vào kết quả `search_slots` trước đó.
 - Giữ chỗ tạm thời (hold slot có TTL trong lúc người dùng xác nhận) là **P1**; MVP dùng optimistic + xử lý `conflict`.
 
@@ -652,12 +652,12 @@ tests/
 | `slots` | `slot_id`, `doctor_id`, `department_code`, `start_at`, `end_at` (timestamptz), `capacity=1`. Sinh sẵn bằng script seed. |
 | `appointments` | `id` (UUID do DB sinh), `patient_id`, `slot_id`, `status` (booked/cancelled), `reason`, `evidence` (JSONB), `idempotency_key UNIQUE`, `created_at`; partial unique index `(slot_id) WHERE status='booked'`. |
 | `knowledge_docs` | `doc_id`, `title`, `content`, `tsvector` (FTS); sau thêm cột `embedding vector`. |
-| `agent_attempts` | `thread_id`, `turn_id`, `attempt_no`, `kind` (extract/correct), `draft_json`, `issues_json`, `model_id`, `latency_ms`, `tokens` (FR-06.6). |
+| `agent_attempts` | `conversation_id`, `turn_id`, `attempt_no`, `kind` (extract/correct), `draft_json`, `issues_json`, `model_id`, `latency_ms`, `tokens` (FR-06.6). |
 | `tool_calls` | `tool_name`, `args_json` (đã che PII), `status`, `error_code`, `latency_ms`, `called_by` (llm/code). |
 | `users` | Tài khoản: `username UNIQUE`, `role` (patient/staff/admin), `patient_id` (bắt buộc với patient), `password_hash` (scrypt), `active`, `failed_logins`, `locked_until`. |
 | `sessions` | Phiên đăng nhập: `token_hash` (SHA-256 của token, không lưu bản rõ), `user_id`, `expires_at`. |
-| `conversations` | Một dòng mỗi hội thoại: `thread_id`, `patient_id` (chủ sở hữu), `title`, `message_count`, `last_kind`, `updated_at`. |
-| `chat_messages` | Mọi câu bệnh nhân gửi và câu trợ lý trả lời: `seq` (thứ tự), `thread_id`, `role`, `action`, `text`, `intent`, `created_at`. |
+| `conversations` | Một dòng mỗi hội thoại: `conversation_id`, `patient_id` (chủ sở hữu), `title`, `message_count`, `last_kind`, `updated_at`. |
+| `chat_messages` | Mọi câu bệnh nhân gửi và câu trợ lý trả lời: `seq` (thứ tự), `conversation_id`, `role`, `action`, `text`, `intent`, `created_at`. |
 | `checkpoints*` | Do `AsyncPostgresSaver.setup()` tạo — chạy trong bước seed (`cli/seed.py`), không chạy lúc backend khởi động. |
 
 Schema chỉ do **Alembic** quản lý (`persistence/sql/migrations/`, `alembic upgrade head`), không dùng `create_all` ở đâu cả: dev (`PA_AUTO_CREATE_SCHEMA=true` chạy `upgrade head` lúc khởi động), test và eval (mỗi schema riêng chạy migration) và production (service `migrate`) dùng cùng một lịch sử schema. Hai bảng `agent_attempts` và `tool_calls` hiện ghi qua `AuditLog` (structlog), chưa thành bảng.

@@ -72,6 +72,10 @@ button, select, textarea, input { font: inherit; color: inherit; }
   gap: 16px; padding: 16px; min-height: 0;
 }
 @media (max-width: 1000px) { .layout { grid-template-columns: 1fr; } }
+.layout.with-history { grid-template-columns: minmax(200px, 260px) minmax(380px, 1fr) minmax(420px, 1.15fr); }
+@media (max-width: 1280px) { .layout.with-history { grid-template-columns: minmax(200px, 240px) 1fr; } .layout.with-history > :last-child { grid-column: 1 / -1; } }
+@media (max-width: 1000px) { .layout.with-history { grid-template-columns: 1fr; } .panel.history { height: auto; max-height: 40vh; } }
+.conv-list li button:disabled { cursor: not-allowed; opacity: .6; }
 .panel {
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
   display: flex; flex-direction: column; min-height: 0; height: calc(100vh - 100px);
@@ -113,6 +117,7 @@ button, select, textarea, input { font: inherit; color: inherit; }
 }
 .slot .when { font-weight: 600; }
 .slot .who { color: var(--muted); font-size: 13px; }
+.slot .hint { color: var(--primary); font-size: 13px; }
 .inline-row { display: flex; gap: 6px; margin-top: 8px; }
 .inline-row input { flex: 1; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; }
 

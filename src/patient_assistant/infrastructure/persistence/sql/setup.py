@@ -10,6 +10,7 @@ import asyncio
 import re
 import threading
 from datetime import date
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from alembic import command
@@ -111,21 +112,47 @@ async def ensure_slots(sessions: async_sessionmaker[AsyncSession], today: date, 
     return len(missing)
 
 
+async def _fill_patient_details(sessions: async_sessionmaker[AsyncSession]) -> None:
+    """Hồ sơ demo đã có từ trước khi có ngày sinh/số điện thoại: điền các ô còn trống, không ghi đè ô đã có."""
+    demo = {p.id: p for p in seed.profiles()}
+    async with sessions.begin() as session:
+        for row in await session.scalars(select(PatientRow).where(PatientRow.id.in_(demo))):
+            row.date_of_birth = row.date_of_birth or demo[row.id].date_of_birth
+            row.phone = row.phone or demo[row.id].phone
+
+
 async def seed_demo_data(
     sessions: async_sessionmaker[AsyncSession], today: date, tz: ZoneInfo, with_history: bool = False
-) -> None:
-    """Nạp `demo_data/*.json` vào DB nếu DB còn trống. Slot sinh tương đối theo hôm nay."""
+) -> int:
+    """Nạp `demo_data/*.json` vào DB, trả số slot khám đã thêm. Slot sinh tương đối theo hôm nay.
+
+    DB trống: nạp toàn bộ (kèm lịch sử nếu `with_history`). DB đã có dữ liệu: chỉ BỔ SUNG danh mục còn thiếu theo
+    mã (khoa, bác sĩ, bệnh nhân, kế hoạch, tài liệu mới thêm vào JSON) cùng slot còn thiếu; dữ liệu đã có và lịch
+    sử giữ nguyên. Vì vậy thêm khoa/bác sĩ chỉ cần sửa JSON rồi chạy lại seed (hoặc khởi động lại server dev).
+    """
     async with sessions.begin() as session:
-        if await session.scalar(select(DepartmentRow).limit(1)):
-            return  # đã seed
-        session.add_all(DepartmentRow(code=d.code, name=d.name, aliases=list(d.aliases)) for d in seed.DEPARTMENTS)
-        await session.flush()
-        session.add_all(DoctorRow(id=d.id, name=d.name, department_code=d.department_code) for d in seed.DOCTORS)
-        session.add_all(PatientRow(id=p.id, display_name=p.display_name) for p in seed.PATIENTS)
-        await session.flush()
-        session.add_all(PatientPlanRow(**p.model_dump()) for p in seed.PLANS)
-        session.add_all(KnowledgeDocRow(**k.model_dump()) for k in seed.KNOWLEDGE)
-        await session.flush()
+        fresh = await session.scalar(select(DepartmentRow).limit(1)) is None
+        catalog: list[tuple[Any, dict[str, Any]]] = [
+            (
+                DepartmentRow.code,
+                {d.code: DepartmentRow(code=d.code, name=d.name, aliases=list(d.aliases)) for d in seed.DEPARTMENTS},
+            ),
+            (
+                DoctorRow.id,
+                {d.id: DoctorRow(id=d.id, name=d.name, department_code=d.department_code) for d in seed.DOCTORS},
+            ),
+            (PatientRow.id, {p.id: PatientRow(**p.model_dump()) for p in seed.profiles()}),
+            (PatientPlanRow.plan_id, {p.plan_id: PatientPlanRow(**p.model_dump()) for p in seed.PLANS}),
+            (KnowledgeDocRow.doc_id, {k.doc_id: KnowledgeDocRow(**k.model_dump()) for k in seed.KNOWLEDGE}),
+        ]
+        for key, rows in catalog:  # theo thứ tự khóa ngoại: khoa -> bác sĩ, bệnh nhân -> kế hoạch
+            existing = set(await session.scalars(select(key)))
+            session.add_all(row for k, row in rows.items() if k not in existing)
+            await session.flush()
+    if not fresh:
+        await _fill_patient_details(sessions)
+        return await ensure_slots(sessions, today, tz)  # slot cho bác sĩ mới (và các ngày tới còn thiếu)
+    async with sessions.begin() as session:
         slots = seed.generate_slots(today, tz)
         session.add_all(
             SlotRow(
@@ -138,7 +165,7 @@ async def seed_demo_data(
             for s in slots
         )
         if not with_history:
-            return
+            return len(slots)
         await session.flush()
         session.add_all(
             ReportRow(
@@ -160,3 +187,4 @@ async def seed_demo_data(
             )
             for a in seed.history_appointments(today, slots)
         )
+    return len(slots)

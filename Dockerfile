@@ -5,14 +5,19 @@
 
 # ---- build: cài package vào virtualenv riêng
 FROM python:3.13-slim AS build
-ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN python -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 WORKDIR /src
+# 1) Thư viện: chỉ cài lại khi pyproject.toml đổi (package rỗng tạm thời để pip đọc được metadata).
+#    Cache của pip giữ lại giữa các lần build, nên đổi phụ thuộc cũng không phải tải lại toàn bộ.
 COPY pyproject.toml README.md ./
-COPY src ./src
+RUN mkdir -p src/patient_assistant && touch src/patient_assistant/__init__.py
 ARG EXTRAS=
-RUN pip install ".${EXTRAS:+[$EXTRAS]}"
+RUN --mount=type=cache,target=/root/.cache/pip pip install ".${EXTRAS:+[$EXTRAS]}"
+# 2) Mã nguồn: sửa code chỉ cài lại package của mình (vài giây), không đụng tới thư viện.
+COPY src ./src
+RUN pip install --no-cache-dir --no-deps --force-reinstall .
 
 # ---- runtime: chỉ venv + migration, chạy bằng user thường
 FROM python:3.13-slim

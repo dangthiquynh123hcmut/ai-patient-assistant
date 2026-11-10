@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, TypeDecorator, text
+from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text, TypeDecorator, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -52,6 +52,8 @@ class PatientRow(Base):
     __tablename__ = "patients"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     display_name: Mapped[str] = mapped_column(String(128))
+    date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
 
 class PatientPlanRow(Base):
@@ -136,7 +138,7 @@ class SessionRow(Base):
 
 class ConversationRow(Base):
     __tablename__ = "conversations"
-    thread_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     patient_id: Mapped[str] = mapped_column(ForeignKey("patients.id"), index=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
     title: Mapped[str] = mapped_column(String(128))
@@ -150,7 +152,7 @@ class ChatMessageRow(Base):
     __tablename__ = "chat_messages"
     seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)  # thứ tự ghi, ổn định
     id: Mapped[str] = mapped_column(String(36), unique=True)
-    thread_id: Mapped[str] = mapped_column(ForeignKey("conversations.thread_id"), index=True)
+    conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.conversation_id"), index=True)
     role: Mapped[str] = mapped_column(String(16))
     action: Mapped[str] = mapped_column(String(32))
     text: Mapped[str] = mapped_column(Text)

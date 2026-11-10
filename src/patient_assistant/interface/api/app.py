@@ -12,7 +12,7 @@ from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
 
-from patient_assistant.application.agent.state import UserDecision
+from patient_assistant.application.agent.state import InterruptPayload, UserDecision
 from patient_assistant.application.ports.repositories import UsernameTakenError
 from patient_assistant.application.ports.stt import STTError
 from patient_assistant.application.services.auth_service import AuthError
@@ -153,7 +153,13 @@ def create_app(container_factory: Callable[[], AbstractAsyncContextManager[Conta
             "stt_model": s.stt_model if s.stt_enabled else None,
             "now": c.clock.now().isoformat(),
             "patients": [
-                {"id": p.id, "label": c.patient_labels.get(p.id, p.display_name)}
+                {
+                    "id": p.id,
+                    "label": c.patient_labels.get(p.id, p.display_name),
+                    "display_name": p.display_name,
+                    "date_of_birth": p.date_of_birth.isoformat() if p.date_of_birth else None,
+                    "phone": p.phone,
+                }
                 for p in (await c.auth.list_patients() if user.can_view_conversations else [])
             ],
             "departments": [d.model_dump() for d in departments],
@@ -161,20 +167,29 @@ def create_app(container_factory: Callable[[], AbstractAsyncContextManager[Conta
             "limits": {
                 "max_corrections": s.max_corrections,
                 "max_clarify_rounds": s.max_clarify_rounds,
+                "max_questions": s.max_questions,
                 "max_slot_search_rounds": s.max_slot_search_rounds,
             },
         }
 
-    @app.get("/v1/chat/{thread_id}/state")
-    async def chat_state(thread_id: str, c: C, user: P) -> Any:
+    @app.get("/v1/chat/{conversation_id}/state")
+    async def chat_state(conversation_id: str, c: C, user: P) -> Any:
         """State hiện tại của hội thoại (dữ liệu giả lập) — để xem chi tiết cách agent ra quyết định."""
         try:
-            state = await c.conversations.state(user, thread_id)
+            state = await c.conversations.state(user, conversation_id)
         except NotAllowed as exc:
             raise HTTPException(404, "Không có hội thoại này") from exc
         if state is None:
             raise HTTPException(404, "Không có hội thoại này")
         return state.model_dump(mode="json", exclude={"now"})
+
+    @app.get("/v1/chat/{conversation_id}/pending")
+    async def chat_pending(conversation_id: str, c: C, user: P) -> InterruptPayload | None:
+        """Câu hỏi đang chờ trả lời của hội thoại (null nếu không có) — mở lại hội thoại cũ để trả lời tiếp."""
+        try:
+            return await c.conversations.pending(user, conversation_id)
+        except NotAllowed as exc:
+            raise HTTPException(404, "Không có hội thoại này") from exc
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -190,17 +205,17 @@ def create_app(container_factory: Callable[[], AbstractAsyncContextManager[Conta
         except STTError as exc:
             raise HTTPException(503, str(exc)) from exc
 
-    @app.post("/v1/chat/{thread_id}/messages", response_model=TurnResult)
-    async def send_message(thread_id: str, body: MessageIn, c: C, user: P) -> TurnResult:
+    @app.post("/v1/chat/{conversation_id}/messages", response_model=TurnResult)
+    async def send_message(conversation_id: str, body: MessageIn, c: C, user: P) -> TurnResult:
         try:
-            return await c.conversations.send(user, thread_id, body.text, body.input_source, body.stt_flags)
+            return await c.conversations.send(user, conversation_id, body.text, body.input_source, body.stt_flags)
         except NotAllowed as exc:
             raise HTTPException(404, "Không có hội thoại này") from exc
 
-    @app.post("/v1/chat/{thread_id}/resume", response_model=TurnResult)
-    async def resume(thread_id: str, body: ResumeIn, c: C, user: P) -> TurnResult:
+    @app.post("/v1/chat/{conversation_id}/resume", response_model=TurnResult)
+    async def resume(conversation_id: str, body: ResumeIn, c: C, user: P) -> TurnResult:
         try:
-            return await c.conversations.resume(user, thread_id, UserDecision(**body.model_dump()))
+            return await c.conversations.resume(user, conversation_id, UserDecision(**body.model_dump()))
         except NotAllowed as exc:
             raise HTTPException(404, "Không có hội thoại này") from exc
         except NoPendingQuestion as exc:
@@ -226,11 +241,11 @@ def create_app(container_factory: Callable[[], AbstractAsyncContextManager[Conta
     async def my_conversations(c: C, user: P) -> list[ConversationSummary]:
         return await c.log.list_conversations(user.patient_id, 50)
 
-    @app.get("/v1/me/conversations/{thread_id}")
-    async def my_conversation(thread_id: str, c: C, user: P) -> list[ChatMessage]:
-        if await c.log.owner(thread_id) != user.patient_id:
+    @app.get("/v1/me/conversations/{conversation_id}")
+    async def my_conversation(conversation_id: str, c: C, user: P) -> list[ChatMessage]:
+        if await c.log.owner(conversation_id) != user.patient_id:
             raise HTTPException(404, "Không có hội thoại này")
-        messages: list[ChatMessage] = await c.log.list_messages(thread_id)
+        messages: list[ChatMessage] = await c.log.list_messages(conversation_id)
         return messages
 
     # ------------------------------------------------------------------ nhân viên y tế
@@ -241,11 +256,11 @@ def create_app(container_factory: Callable[[], AbstractAsyncContextManager[Conta
     ) -> list[ConversationSummary]:
         return await c.log.list_conversations(patient_id, min(max(limit, 1), 500))
 
-    @app.get("/v1/staff/conversations/{thread_id}")
-    async def staff_conversation(thread_id: str, c: C, _: S) -> list[ChatMessage]:
-        if await c.log.owner(thread_id) is None:
+    @app.get("/v1/staff/conversations/{conversation_id}")
+    async def staff_conversation(conversation_id: str, c: C, _: S) -> list[ChatMessage]:
+        if await c.log.owner(conversation_id) is None:
             raise HTTPException(404, "Không có hội thoại này")
-        messages: list[ChatMessage] = await c.log.list_messages(thread_id)
+        messages: list[ChatMessage] = await c.log.list_messages(conversation_id)
         return messages
 
     # ------------------------------------------------------------------ quản trị tài khoản

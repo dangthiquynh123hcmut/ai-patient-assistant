@@ -43,6 +43,9 @@ class BookingRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     department_code: str | None = Field(None, description="Mã khoa trong danh mục; null nếu người dùng không nêu")
+    department_mentioned: str | None = Field(
+        None, description="Tên khoa người dùng nói, NGUYÊN VĂN, kể cả khi khoa đó không có trong danh mục"
+    )
     doctor_name: str | None = None
     date_expression: str | None = Field(None, description="Cụm ngày NGUYÊN VĂN, ví dụ 'thứ Ba tuần sau'")
     time_expression: str | None = Field(None, description="Cụm giờ NGUYÊN VĂN, ví dụ 'buổi sáng'")
@@ -69,6 +72,16 @@ class Slot(BaseModel):
         )
 
 
+class SameDayAppointment(BaseModel):
+    """Lịch hẹn đã có của bệnh nhân cùng ngày với slot — căn cứ cho gợi ý "đi một lần khám cả hai"."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    department_code: str
+    start_at: datetime
+
+
 class SlotOption(BaseModel):
     """Slot đã đưa cho người dùng chọn, đánh số 1..N để chọn bằng giọng nói."""
 
@@ -76,6 +89,8 @@ class SlotOption(BaseModel):
 
     option_no: int
     slot: Slot
+    same_day: SameDayAppointment | None = None
+    hint: str | None = None  # câu gợi ý hiển thị, do code tạo từ `same_day`
 
 
 class AppointmentStatus(StrEnum):

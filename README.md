@@ -125,7 +125,9 @@ Lệnh trên chạy 60 case JSONL qua agent thật, rồi xuất báo cáo vào 
 
 ## Dữ liệu demo và database
 
-Toàn bộ dữ liệu demo nằm trong các file JSON ở [src/patient_assistant/infrastructure/persistence/demo_data/](src/patient_assistant/infrastructure/persistence/demo_data/). Sửa các file này rồi khởi động lại server là đổi được dữ liệu, không cần sửa code.
+Toàn bộ dữ liệu demo nằm trong các file JSON ở [src/patient_assistant/infrastructure/persistence/demo_data/](src/patient_assistant/infrastructure/persistence/demo_data/). Sửa các file này là đổi được dữ liệu, không cần sửa code.
+
+**Thêm khoa / bác sĩ:** thêm vào `departments.json` và `doctors.json` (mỗi khoa nên có ít nhất một bác sĩ để có slot khám), rồi build lại để chạy seed: `docker compose up -d --build` (service `migrate` chạy seed). Với database đã có dữ liệu, seed chỉ **bổ sung** khoa, bác sĩ, bệnh nhân, kế hoạch, tài liệu còn thiếu theo mã, kèm slot của bác sĩ mới; dữ liệu đã có (kể cả lịch hẹn, báo cáo) giữ nguyên. Sửa tên hay xóa một khoa đã có thì seed không tự áp dụng. Tên gọi khác (`aliases`) nên là cách gọi khoa rõ ràng ("khoa mắt", "khám mắt"), tránh từ trùng với triệu chứng ("mắt" trong "mắt cá chân"), vì hệ thống không được suy ra khoa từ triệu chứng.
 
 | File | Nội dung |
 |---|---|
@@ -133,7 +135,7 @@ Toàn bộ dữ liệu demo nằm trong các file JSON ở [src/patient_assistan
 | `doctors.json` | Bác sĩ thuộc từng khoa |
 | `schedule.json` | Lịch làm việc dùng để sinh slot: ngày làm việc, giờ bắt đầu, độ dài slot, số ngày tới |
 | `patients.json` | Bệnh nhân demo |
-| `users.json` | Tài khoản đăng nhập demo, gắn với bệnh nhân (mật khẩu: `PA_SEED_PASSWORD`) |
+| `users.json` | Tài khoản đăng nhập demo, gắn với bệnh nhân (mật khẩu: `PA_SEED_PASSWORD`). Chạy lại seed sẽ tạo các tài khoản còn thiếu theo username; tài khoản đã có giữ nguyên |
 | `plans.json` | Kế hoạch theo dõi: agent lấy khoa mặc định từ đây khi người dùng không nêu khoa |
 | `knowledge.json` | Tài liệu hướng dẫn đã duyệt dùng cho FAQ (`doc_id` là nguồn được dẫn trong câu trả lời) |
 | `history.json` | Báo cáo và lịch hẹn có sẵn, tính tương đối theo hôm nay (`weeks_ago`, `days_from_today`) |
@@ -167,12 +169,22 @@ Mở frontend (Docker: **http://localhost:8080**, dev: **http://localhost:5173**
 | `bacsi` | `staff` | Trang nhân viên: xem mọi hội thoại, từng câu bệnh nhân hỏi và câu trợ lý trả lời, lọc theo bệnh nhân. Không chat thay bệnh nhân |
 | `admin` | `admin` | Như `staff`, thêm tab **Tài khoản**: tạo tài khoản, khóa/mở khóa, đặt lại mật khẩu |
 
+**Bệnh nhân trùng tên (để thử):** mỗi người một hồ sơ (mã khác nhau) và một tài khoản riêng, cùng mật khẩu demo.
+
+| Họ tên | Tài khoản | Ghi chú |
+|---|---|---|
+| Nguyễn Văn An | `nguyenvanan`, `nguyenvanan2`, `an.nguyen` | 3 người: kế hoạch PHCN / kế hoạch Cơ xương khớp / chưa có kế hoạch |
+| Trần Thị Bình | `tranthibinh`, `binh.tran` | 2 người: chưa có kế hoạch / kế hoạch Tim mạch |
+| Lê Thị Hoa · Le Thi Hoa | `lethihoa`, `lethihoa.kd` | Chỉ khác nhau ở dấu |
+| Trần Văn An | `tranvanan` | Bệnh nhân trùng tên bác sĩ BS. Trần Văn An (khoa PHCN) và tên hiển thị của tài khoản `bacsi` |
+| Bệnh nhân Demo 1 | `benhnhan1b` | Trùng tên hiển thị với `benhnhan1` |
+
 **Tự đăng ký:** ở trang đăng nhập bấm **Đăng ký** (trang `/register`), nhập họ tên, tên đăng nhập và mật khẩu (tối thiểu 8 ký tự). Hệ thống tạo một hồ sơ bệnh nhân mới cùng tài khoản `patient` gắn với hồ sơ đó, rồi đăng nhập luôn. Người tự đăng ký không chọn được vai trò hay hồ sơ bệnh nhân có sẵn: tài khoản `staff`/`admin`, hoặc tài khoản gắn vào hồ sơ đã có, vẫn chỉ admin tạo được. Bệnh nhân mới xuất hiện ngay trong danh sách bệnh nhân của trang nhân viên. Tắt chức năng này bằng `PA_ALLOW_REGISTRATION=false` (nút Đăng ký ẩn đi, API trả 403).
 
 - Mật khẩu băm bằng scrypt; phiên đăng nhập là token ngẫu nhiên trong cookie HttpOnly (DB chỉ lưu hash của token). Phiên hết hạn sau `PA_SESSION_TTL_HOURS` (mặc định 12 giờ).
 - Sai mật khẩu 5 lần liên tiếp thì username đó bị khóa đăng nhập 5 phút.
 - Khóa tài khoản hoặc đổi mật khẩu sẽ đăng xuất mọi phiên đang mở của tài khoản đó.
-- Quyền được kiểm tra ở API cho từng request: bệnh nhân không đọc/gửi/trả lời được hội thoại của người khác, kể cả khi biết `thread_id`.
+- Quyền được kiểm tra ở API cho từng request: bệnh nhân không đọc/gửi/trả lời được hội thoại của người khác, kể cả khi biết `conversation_id`.
 - Mọi câu bệnh nhân gửi (kể cả bấm nút xác nhận, chọn slot) và mọi câu trợ lý trả lời được lưu vào bảng `chat_messages`, nhóm theo `conversations`, kèm intent agent đã nhận ra.
 - Chạy sau HTTPS thì đặt `PA_COOKIE_SECURE=true`.
 
@@ -245,8 +257,8 @@ Test mặc định dùng LLM giả có kịch bản định sẵn (`ScriptedLLM`
 
 0. `POST /v1/auth/login` `{"username": "benhnhan1", "password": "demo1234"}`: đặt cookie `pa_session`. Client không phải trình duyệt có thể gửi `Authorization: Bearer <giá trị cookie>`. `POST /v1/auth/logout` để đăng xuất, `GET /v1/auth/me` để xem tài khoản hiện tại. Tự đăng ký: `POST /v1/auth/register` `{"username": "...", "display_name": "...", "password": "..."}` trả 201 và đặt cookie phiên như đăng nhập (409 nếu trùng tên đăng nhập, 403 nếu đang tắt); `GET /v1/auth/options` (không cần đăng nhập) cho biết có cho đăng ký không.
 1. (giọng nói) `POST /v1/stt/transcribe` (multipart `audio`): trả về transcript và `flags` (những từ nhận dạng kém) để người dùng duyệt.
-2. `POST /v1/chat/{thread_id}/messages` `{"text": "...", "input_source": "voice", "stt_flags": [...]}`.
-3. Nếu `status = "waiting_user"`: hiển thị `interrupt` (`clarify` / `confirm_report` / `choose_slot` / `confirm_booking`), rồi gọi `POST /v1/chat/{thread_id}/resume` với một trong các dạng:
+2. `POST /v1/chat/{conversation_id}/messages` `{"text": "...", "input_source": "voice", "stt_flags": [...]}`.
+3. Nếu `status = "waiting_user"`: hiển thị `interrupt` (`clarify` / `confirm_report` / `choose_slot` / `confirm_booking`), rồi gọi `POST /v1/chat/{conversation_id}/resume` với một trong các dạng:
    - `{"action": "reply", "text": "cái thứ hai"}` (câu trả lời bằng lời, kể cả giọng nói)
    - `{"action": "choose", "option_no": 2}`
    - `{"action": "confirm"}`
@@ -259,9 +271,9 @@ Các API khác:
 
 | API | Quyền | Nội dung |
 |---|---|---|
-| `GET /v1/me/conversations`, `GET /v1/me/conversations/{thread_id}` | patient | Hội thoại và tin nhắn của chính mình |
+| `GET /v1/me/conversations`, `GET /v1/me/conversations/{conversation_id}` | patient | Hội thoại và tin nhắn của chính mình |
 | `GET /v1/me/reports`, `GET /v1/me/appointments` | patient | Báo cáo, lịch hẹn của chính mình |
-| `GET /v1/staff/conversations?patient_id=` , `GET /v1/staff/conversations/{thread_id}` | staff, admin | Mọi hội thoại / tin nhắn |
+| `GET /v1/staff/conversations?patient_id=` , `GET /v1/staff/conversations/{conversation_id}` | staff, admin | Mọi hội thoại / tin nhắn |
 | `GET /v1/admin/users`, `POST /v1/admin/users`, `PATCH /v1/admin/users/{id}` `{"active": false}` / `{"password": "..."}` | admin | Quản lý tài khoản |
 
 Chưa đăng nhập → `401`; sai vai trò → `403`; hội thoại không phải của mình → `404`.

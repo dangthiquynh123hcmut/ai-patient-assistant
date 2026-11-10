@@ -5,6 +5,7 @@ import type {
   ChatMessage,
   ConversationSummary,
   Decision,
+  InterruptPayload,
   Meta,
   NewUser,
   Registration,
@@ -78,26 +79,28 @@ export const api = {
   meta: () => request<Meta>("/v1/meta"),
 
   // ---- hội thoại của bệnh nhân
-  sendMessage: (threadId: string, text: string, inputSource: "text" | "voice" = "text", sttFlags: SttFlag[] = []) =>
-    request<TurnResult>(`/v1/chat/${enc(threadId)}/messages`, {
+  sendMessage: (conversationId: string, text: string, inputSource: "text" | "voice" = "text", sttFlags: SttFlag[] = []) =>
+    request<TurnResult>(`/v1/chat/${enc(conversationId)}/messages`, {
       method: "POST",
       json: { text, input_source: inputSource, stt_flags: sttFlags },
     }),
-  resume: (threadId: string, decision: Decision) =>
-    request<TurnResult>(`/v1/chat/${enc(threadId)}/resume`, { method: "POST", json: decision }),
-  state: (threadId: string) => request<AgentState>(`/v1/chat/${enc(threadId)}/state`),
+  resume: (conversationId: string, decision: Decision) =>
+    request<TurnResult>(`/v1/chat/${enc(conversationId)}/resume`, { method: "POST", json: decision }),
+  pending: (conversationId: string) =>
+    request<InterruptPayload | null>(`/v1/chat/${enc(conversationId)}/pending`),
+  state: (conversationId: string) => request<AgentState>(`/v1/chat/${enc(conversationId)}/state`),
   transcribe: (audio: Blob, filename: string) => {
     const form = new FormData();
     form.append("audio", audio, filename);
     return request<TranscriptReview>("/v1/stt/transcribe", { method: "POST", body: form });
   },
   myConversations: () => request<ConversationSummary[]>("/v1/me/conversations"),
-  myConversation: (threadId: string) => request<ChatMessage[]>(`/v1/me/conversations/${enc(threadId)}`),
+  myConversation: (conversationId: string) => request<ChatMessage[]>(`/v1/me/conversations/${enc(conversationId)}`),
 
   // ---- nhân viên y tế
   staffConversations: (patientId?: string) =>
     request<ConversationSummary[]>(`/v1/staff/conversations${patientId ? `?patient_id=${enc(patientId)}` : ""}`),
-  staffConversation: (threadId: string) => request<ChatMessage[]>(`/v1/staff/conversations/${enc(threadId)}`),
+  staffConversation: (conversationId: string) => request<ChatMessage[]>(`/v1/staff/conversations/${enc(conversationId)}`),
 
   // ---- quản trị
   users: () => request<User[]>("/v1/admin/users"),

@@ -5,11 +5,12 @@ Tách khỏi node để đổi câu chữ (hoặc đa ngôn ngữ) mà không đ
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
+from patient_assistant.application.agent.memory import MemoryRef
 from patient_assistant.application.agent.state import Choice, FieldExplanation, Outcome, OutcomeKind
-from patient_assistant.domain.booking.models import BookingRequest, Department, Slot, SlotOption
+from patient_assistant.domain.booking.models import BookingRequest, Department, Doctor, Slot, SlotOption
 from patient_assistant.domain.common import Origin, Resolution, ValidationIssue, evidence_for
 from patient_assistant.domain.conversation import Intent, SafetyKind
 from patient_assistant.domain.report.models import REPORT_FIELDS, ReportExtraction
@@ -38,6 +39,7 @@ INTENT_LABELS = {
     Intent.GET_PATIENT_INFO: "xem thông tin của bạn",
     Intent.GET_REPORT_HISTORY: "xem các báo cáo trước",
     Intent.ANSWER_FAQ: "hỏi thông tin",
+    Intent.GET_DOCTOR_INFO: "xem danh sách bác sĩ",
 }
 
 _MISSING_QUESTIONS = {
@@ -75,6 +77,11 @@ def clarify_question(issues: list[ValidationIssue], departments: list[Department
         if issue.code == "missing_field" and issue.field == "department_code":
             names = ", ".join(d.name for d in departments or [])
             line = f"Bạn muốn khám khoa nào? Các khoa hiện có: {names}."
+        elif issue.code == "department_ambiguous":
+            line = f"{issue.message} Bạn muốn khám khoa nào?"
+        elif issue.code == "department_not_offered":
+            names = ", ".join(d.name for d in departments or [])
+            line = f"{issue.message} Các khoa hiện có: {names}. Bạn cân nhắc chọn lại một khoa trong danh sách nhé."
         elif issue.code == "missing_field":
             line = _MISSING_QUESTIONS.get(
                 issue.field or "", f"Bạn bổ sung giúp mình {LABELS.get(issue.field or '', '')}?"
@@ -85,8 +92,10 @@ def clarify_question(issues: list[ValidationIssue], departments: list[Department
             line = f"{issue.message} Bạn kiểm tra lại giúp mình con số này?"
         elif issue.code == "contradiction":
             line = "Bạn có nhắc là chưa tập, nhưng cũng có số ngày tập. Kỳ này bạn đã tập bao nhiêu ngày?"
-        elif issue.field in ("date_expression", "time_expression"):
-            line = f"{issue.message} Bạn muốn khám vào ngày/giờ nào?"
+        elif issue.field == "date_expression":
+            line = f"{issue.message} Bạn muốn khám vào ngày nào? (ví dụ: thứ Hai, ngày mai, 12/11)"
+        elif issue.field == "time_expression":
+            line = f"{issue.message} Bạn muốn khám buổi sáng hay buổi chiều, hoặc khoảng mấy giờ?"
         elif issue.code == "doctor_not_found":
             line = f"{issue.message} Bạn muốn chọn bác sĩ khác, hay để hệ thống chọn bác sĩ còn trống?"
         else:
@@ -96,6 +105,16 @@ def clarify_question(issues: list[ValidationIssue], departments: list[Department
     return " ".join(lines[:2]) or "Bạn nói rõ hơn giúp mình được không?"
 
 
+def doctors_text(departments: list[Department], doctors: list[Doctor], only: Department | None = None) -> str:
+    """Danh sách khoa và bác sĩ lấy từ danh mục ở backend — code soạn, không qua LLM nên không bịa tên."""
+    lines = ["Bác sĩ của khoa " + only.name + ":" if only else "Các khoa và bác sĩ của phòng khám:"]
+    for dept in [only] if only else departments:
+        names = ", ".join(d.name for d in doctors if d.department_code == dept.code) or "chưa có bác sĩ"
+        lines.append(f"- {names}" if only else f"- {dept.name}: {names}")
+    lines.append("Bạn muốn đặt lịch với khoa hoặc bác sĩ nào thì cứ nhắn mình nhé.")
+    return "\n".join(lines)
+
+
 # Gợi ý trả lời nhanh cho từng intent: (nhãn nút, câu gửi đi — câu này khớp luật phân loại).
 INTENT_CHOICES: dict[Intent, tuple[str, str]] = {
     Intent.GET_PATIENT_INFO: ("Xem thông tin của tôi", "xem thông tin của tôi"),
@@ -103,6 +122,7 @@ INTENT_CHOICES: dict[Intent, tuple[str, str]] = {
     Intent.LIST_APPOINTMENTS: ("Xem lịch hẹn", "xem lịch hẹn của tôi"),
     Intent.GET_REPORT_HISTORY: ("Xem báo cáo trước", "xem các báo cáo trước"),
     Intent.CREATE_REPORT: ("Gửi báo cáo theo dõi", "tôi muốn gửi báo cáo theo dõi"),
+    Intent.GET_DOCTOR_INFO: ("Xem bác sĩ", "xem danh sách bác sĩ"),
 }
 
 
@@ -243,22 +263,40 @@ def booking_explanations(
     department: Department | None,
     from_plan: bool,
     slot: Slot | None = None,
+    memory_ref: MemoryRef | None = None,
+    department_from_memory: bool = False,
 ) -> list[FieldExplanation]:
+    if department_from_memory and memory_ref:
+        dept_origin, dept_evidence, dept_why = Origin.BACKEND, memory_ref.phrase, memory_ref.explanation
+    elif from_plan:
+        dept_origin, dept_evidence = Origin.BACKEND, None
+        dept_why = "Bạn không nêu khoa; lấy theo kế hoạch theo dõi hiện tại của bạn."
+    else:
+        dept_origin, dept_evidence = Origin.USER_SAID, department.name if department else None
+        dept_why = "Khoa do bạn nêu, có trong danh mục."
     out = [
         FieldExplanation(
             field="department_code",
             label=LABELS["department_code"],
             value=department.name if department else req.department_code,
-            evidence=None if from_plan else (department.name if department else None),
-            origin=Origin.BACKEND if from_plan else Origin.USER_SAID,
+            evidence=dept_evidence,
+            origin=dept_origin,
             validation="passed",
-            explanation=(
-                "Bạn không nêu khoa; lấy theo kế hoạch theo dõi hiện tại của bạn."
-                if from_plan
-                else "Khoa do bạn nêu, có trong danh mục."
-            ),
+            explanation=dept_why,
         )
     ]
+    if memory_ref and memory_ref.doctor_id and not req.doctor_name:
+        out.append(
+            FieldExplanation(
+                field="doctor_name",
+                label=LABELS["doctor_name"],
+                value=slot.doctor_name if slot else memory_ref.doctor_id,
+                evidence=memory_ref.phrase,
+                origin=Origin.BACKEND,
+                validation="passed",
+                explanation=memory_ref.explanation,
+            )
+        )
     if window:
         out.append(
             FieldExplanation(
@@ -298,6 +336,19 @@ def booking_explanations(
     return out
 
 
+def with_same_day_hints(options: list[SlotOption], department_names: dict[str, str]) -> list[SlotOption]:
+    """Gắn câu gợi ý cho slot cùng ngày với lịch đã có. Căn cứ là lịch hẹn backend trả về, không do LLM suy ra."""
+    out = []
+    for o in options:
+        if o.same_day is None:
+            out.append(o)
+            continue
+        dept = department_names.get(o.same_day.department_code, o.same_day.department_code)
+        hint = f"cùng ngày với lịch khám {dept} lúc {o.same_day.start_at:%H:%M} của bạn — đi một lần khám được cả hai"
+        out.append(o.model_copy(update={"hint": hint}))
+    return out
+
+
 def slot_options_message(options: list[SlotOption], relaxed: bool, department_name: str | None) -> str:
     head = (
         "Không còn lịch đúng khoảng bạn chọn. Đây là các lịch gần nhất (đã nới thêm ±7 ngày, "
@@ -305,7 +356,9 @@ def slot_options_message(options: list[SlotOption], relaxed: bool, department_na
         if relaxed
         else "Các lịch còn trống:"
     )
-    lines = [f"{o.option_no}. {o.slot.label(department_name)}" for o in options]
+    lines = [
+        f"{o.option_no}. {o.slot.label(department_name)}" + (f" (gợi ý: {o.hint})" if o.hint else "") for o in options
+    ]
     tail = "Bạn chọn số mấy? Bạn cũng có thể nói “giờ khác” hoặc “hủy”."
     return "\n".join([head, *lines, tail])
 
@@ -342,7 +395,7 @@ _HANDOFF_TEXT = {
     "too_many_rounds": "Mình chưa thu thập đủ thông tin sau nhiều lượt hỏi lại.",
     "no_slots": "Hiện không còn lịch trống phù hợp trong thời gian cho phép đặt.",
     "blocked": "Yêu cầu có nội dung nằm ngoài phạm vi hỗ trợ.",
-    "conflict": "Slot bạn chọn vừa được người khác đặt và không còn phương án thay thế.",
+    "conflict": "Slot bạn chọn không còn đặt được và mình đã tìm lại nhưng vẫn chưa đặt được. Bạn thử lại sau nhé.",
 }
 
 
@@ -434,6 +487,11 @@ def patient_info_text(data: dict[str, Any], own_only: bool = False) -> str:
         lines.append("Mình chỉ có thể hiển thị thông tin của chính tài khoản đang đăng nhập.")
     profile = data["profile"]
     lines.append(f"Thông tin của {profile['display_name']} (mã {profile['id']}):")
+    if profile.get("date_of_birth"):
+        born = date.fromisoformat(str(profile["date_of_birth"]))
+        lines.append(f"- Ngày sinh: {born:%d/%m/%Y}")
+    if profile.get("phone"):
+        lines.append(f"- Số điện thoại: {profile['phone']}")
     plan = data.get("plan")
     if plan:
         lines.append(

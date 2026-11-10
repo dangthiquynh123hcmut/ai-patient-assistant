@@ -112,3 +112,12 @@ def test_fuzzy_grounding_rejects_changed_numbers() -> None:
     sources = ["Tuần này tôi đau mức 5 trên 10, đã tập 4 ngày."]
     assert not quote_in_sources("đã tập 5 ngày", sources)
     assert not quote_in_sources("đau mức 6 trên 10", sources)
+
+
+def test_weekday_abbreviations() -> None:
+    from patient_assistant.domain.text.vi_dates import expand_weekday_abbrev
+
+    assert expand_weekday_abbrev("t2") == "thứ 2"
+    assert expand_weekday_abbrev("t.3 tuần sau") == "thứ 3 tuần sau"
+    assert expand_weekday_abbrev("th 5 buổi sáng") == "thứ 5 buổi sáng"
+    assert expand_weekday_abbrev("tập 4 ngày") == "tập 4 ngày"  # không đụng chữ khác bắt đầu bằng t

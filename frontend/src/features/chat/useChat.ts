@@ -12,13 +12,15 @@ import type {
   TurnResult,
 } from "../../api/types";
 import { errorText } from "../../components/Toast";
-import { newThreadId } from "../../lib/format";
+import { dateTime, newConversationId } from "../../lib/format";
 
 export type ChatEntry =
   | { type: "user"; id: number; text: string; meta: string }
   | { type: "interrupt"; id: number; payload: InterruptPayload; answered: boolean }
   | { type: "outcome"; id: number; response: AgentResponse }
-  | { type: "transcript"; id: number; review: TranscriptReview; done: boolean };
+  | { type: "transcript"; id: number; review: TranscriptReview; done: boolean }
+  // Câu trả lời của trợ lý ở các lượt trước, đọc lại từ lịch sử (chỉ để xem, không còn nút bấm).
+  | { type: "history"; id: number; kind: string; text: string; at: string };
 
 /** Omit phân phối trên từng nhánh của union (Omit thường gộp union lại, mất các trường riêng). */
 type NewEntry = ChatEntry extends infer E ? (E extends ChatEntry ? Omit<E, "id"> : never) : never;
@@ -30,12 +32,13 @@ export interface Turn {
 
 /** Trạng thái một hội thoại với agent: tin nhắn, câu hỏi đang chờ, diễn biến từng lượt, state backend. */
 export function useChat(onError: (message: string) => void) {
-  const [thread, setThread] = useState(newThreadId);
+  const [conversationId, setConversationId] = useState(newConversationId);
   const [entries, setEntries] = useState<ChatEntry[]>([]);
   const [pending, setPending] = useState<InterruptPayload | null>(null);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [agentState, setAgentState] = useState<AgentState | null>(null);
   const [busy, setBusy] = useState(false);
+  const [version, setVersion] = useState(0); // tăng sau mỗi lượt -> danh sách lịch sử tải lại
   const nextId = useRef(0);
   const busyRef = useRef(false); // chặn gửi trùng trước khi React kịp render lại
 
@@ -57,12 +60,13 @@ export function useChat(onError: (message: string) => void) {
           setPending(null);
           if (res.response) push({ type: "outcome", response: res.response });
         }
-        setAgentState(await api.state(res.thread_id).catch(() => null));
+        setAgentState(await api.state(res.conversation_id).catch(() => null));
       } catch (err) {
         onError(`Lỗi: ${errorText(err)}`);
       } finally {
         busyRef.current = false;
         setBusy(false);
+        setVersion((v) => v + 1);
       }
     },
     [onError, push],
@@ -78,9 +82,9 @@ export function useChat(onError: (message: string) => void) {
       if (busyRef.current) return;
       push({ type: "user", text: label, meta });
       markAnswered();
-      await run(label, () => api.resume(thread, decision));
+      await run(label, () => api.resume(conversationId, decision));
     },
-    [markAnswered, push, run, thread],
+    [markAnswered, push, run, conversationId],
   );
 
   /** Gửi một câu: là câu trả lời nếu agent đang chờ, ngược lại là yêu cầu mới. */
@@ -93,9 +97,9 @@ export function useChat(onError: (message: string) => void) {
         return;
       }
       push({ type: "user", text, meta: source === "voice" ? "bạn · giọng nói (đã duyệt transcript)" : "bạn" });
-      await run(text, () => api.sendMessage(thread, text, source, flags));
+      await run(text, () => api.sendMessage(conversationId, text, source, flags));
     },
-    [pending, push, resume, run, thread],
+    [pending, push, resume, run, conversationId],
   );
 
   const transcribe = useCallback(
@@ -122,13 +126,60 @@ export function useChat(onError: (message: string) => void) {
     );
   }, []);
 
+  /** Mở lại một hội thoại cũ: hiện lại tin nhắn; nếu agent còn đang chờ trả lời thì hiện câu hỏi đó để nói tiếp. */
+  const open = useCallback(
+    async (id: string) => {
+      if (busyRef.current) return;
+      busyRef.current = true;
+      setBusy(true);
+      try {
+        const [messages, waiting] = await Promise.all([api.myConversation(id), api.pending(id)]);
+        const restored: ChatEntry[] = messages.map((m, i) =>
+          m.role === "user"
+            ? { type: "user", id: i, text: m.text, meta: `bạn · ${dateTime(m.created_at)}` }
+            : { type: "history", id: i, kind: m.action, text: m.text, at: m.created_at },
+        );
+        // Câu hỏi cuối đang chờ: thay bản chỉ-đọc bằng thẻ có nút để trả lời tiếp.
+        const last = restored[restored.length - 1];
+        if (waiting && last?.type === "history" && last.kind === waiting.kind) restored.pop();
+        if (waiting) restored.push({ type: "interrupt", id: restored.length, payload: waiting, answered: false });
+        nextId.current = restored.length;
+        setConversationId(id);
+        setEntries(restored);
+        setPending(waiting);
+        setTurns([]);
+        setAgentState(await api.state(id).catch(() => null));
+      } catch (err) {
+        onError(`Không mở được hội thoại: ${errorText(err)}`);
+      } finally {
+        busyRef.current = false;
+        setBusy(false);
+      }
+    },
+    [onError],
+  );
+
   const reset = useCallback(() => {
-    setThread(newThreadId());
+    setConversationId(newConversationId());
     setEntries([]);
     setPending(null);
     setTurns([]);
     setAgentState(null);
   }, []);
 
-  return { thread, entries, pending, turns, agentState, busy, send, resume, transcribe, closeTranscript, reset };
+  return {
+    conversationId,
+    entries,
+    pending,
+    turns,
+    agentState,
+    busy,
+    version,
+    send,
+    resume,
+    transcribe,
+    closeTranscript,
+    open,
+    reset,
+  };
 }

@@ -74,6 +74,12 @@ export function InterruptCard({ payload: p, answered, busy, onDecide }: Props) {
                   <span className="who">
                     {o.slot.doctor_name} · {deptName(o.slot.department_code)} · mã {o.slot.slot_id}
                   </span>
+                  {o.hint && (
+                    <>
+                      <br />
+                      <span className="hint">★ Gợi ý: {o.hint}</span>
+                    </>
+                  )}
                 </span>
               </button>
             ))}

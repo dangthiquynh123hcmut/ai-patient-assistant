@@ -21,5 +21,5 @@ class StructlogAuditLog:
     def __init__(self) -> None:
         self._log = structlog.get_logger("patient_assistant.audit")
 
-    async def record(self, kind: str, thread_id: str, payload: dict[str, Any]) -> None:
-        self._log.info(kind, thread_id=thread_id, **_redact(payload))
+    async def record(self, kind: str, conversation_id: str, payload: dict[str, Any]) -> None:
+        self._log.info(kind, conversation_id=conversation_id, **_redact(payload))

@@ -114,7 +114,7 @@ def _demo_users(password: str, created_at: Any) -> tuple[tuple[User, str], ...]:
 
 
 async def seed_demo_users(sessions: async_sessionmaker[AsyncSession], password: str, now: Any) -> None:
-    """Tạo tài khoản demo nếu DB chưa có tài khoản nào, dùng mật khẩu đã băm sẵn (nhanh cho test/eval)."""
+    """Tạo tài khoản demo cho DB (schema) mới, dùng mật khẩu đã băm sẵn (nhanh cho test/eval)."""
     users = accounts.SqlUserRepository(sessions)
     if await users.count():
         return
@@ -161,6 +161,7 @@ def assemble(
     limits = AgentLimits(
         max_corrections=settings.max_corrections,
         max_clarify_rounds=settings.max_clarify_rounds,
+        max_questions=settings.max_questions,
         max_slot_search_rounds=settings.max_slot_search_rounds,
     )
     deps = AgentDeps(llm=llm, tools=toolbox, audit=audit or StructlogAuditLog(), limits=limits)
@@ -265,5 +266,5 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             settings, storage.repos, llm, build_stt(settings), clock, storage.checkpointer, policy=policy
         )
         if settings.seed_demo_data:
-            await container.auth.seed(seed.demo_accounts(settings.seed_password))  # chỉ khi DB chưa có tài khoản
+            await container.auth.seed(seed.demo_accounts(settings.seed_password))  # chỉ tạo tài khoản còn thiếu
         yield container

@@ -88,8 +88,8 @@ class ScriptedLLM:
         self._reports = list(script.reports)
         self._bookings = list(script.bookings)
 
-    async def classify_intent(self, text: str) -> list[Intent]:
-        return await self._inner.classify_intent(text)
+    async def classify_intent(self, text: str, memory: str | None = None) -> list[Intent]:
+        return await self._inner.classify_intent(text, memory)
 
     async def extract_report(self, prompt: ReportPrompt) -> dict[str, Any]:
         return self._reports.pop(0) if self._reports else await self._inner.extract_report(prompt)
@@ -100,11 +100,13 @@ class ScriptedLLM:
     async def choose_slot(self, reply: str, options: list[SlotOption]) -> int | None:
         return await self._inner.choose_slot(reply, options)
 
-    async def answer_question(self, question: str, tools: list[ToolSpec], max_tool_calls: int) -> GroundedAnswer:
-        return await self._inner.answer_question(question, tools, max_tool_calls)
+    async def answer_question(
+        self, question: str, tools: list[ToolSpec], max_tool_calls: int, memory: str | None = None
+    ) -> GroundedAnswer:
+        return await self._inner.answer_question(question, tools, max_tool_calls, memory)
 
-    async def converse(self, text: str, context: str | None = None) -> str:
-        return await self._inner.converse(text, context)
+    async def converse(self, text: str, context: str | None = None, memory: str | None = None) -> str:
+        return await self._inner.converse(text, context, memory)
 
 
 class UnavailableLLM:
@@ -221,7 +223,7 @@ class CaseRunner:
     async def _drive(
         self, case: EvalCase, container: Container, db: _Db, session: int, barrier: asyncio.Barrier | None
     ) -> CaseObservation:
-        thread = f"{case.id}-{session}"
+        conversation_id = f"{case.id}-{session}"
         patient = case.patient_id if barrier is None else f"{case.patient_id}-{session}"
         obs = CaseObservation(
             case_id=case.id, suite=case.suite, category=case.category, session=session, status="waiting"
@@ -233,7 +235,7 @@ class CaseRunner:
         try:
             msg = case.message
             result: TurnResult = await container.chat.send_message(
-                thread, patient, msg.text, msg.input_source, msg.stt_flags
+                conversation_id, patient, msg.text, msg.input_source, msg.stt_flags
             )
             while result.status == "waiting_user" and result.interrupt is not None:
                 payload = result.interrupt
@@ -248,20 +250,24 @@ class CaseRunner:
                     if barrier is not None and not stolen:
                         await barrier.wait()  # mọi phiên cùng chốt một lúc -> tranh chấp thật
                     if case.faults.slot_taken_after_choice and not stolen:
-                        state = await container.chat.inspect_state(thread)
+                        state = await container.chat.inspect_state(conversation_id)
                         if state and state.selected_slot_id:
                             await container.toolbox.create_appointment(
-                                "intruder-patient", state.selected_slot_id, None, f"intruder-{thread}", case.now
+                                "intruder-patient",
+                                state.selected_slot_id,
+                                None,
+                                f"intruder-{conversation_id}",
+                                case.now,
                             )
                     stolen = True
                 reply = replies.pop(0)
-                result = await container.chat.resume(thread, patient, UserDecision(**reply.model_dump()))
+                result = await container.chat.resume(conversation_id, patient, UserDecision(**reply.model_dump()))
             obs.status = "done" if result.status == "done" else "waiting"
             if result.response is not None:
                 obs.outcome = result.response.kind.value
                 obs.response_text = result.response.text
             obs.replies_left = len(replies)
-            state = await container.chat.inspect_state(thread)
+            state = await container.chat.inspect_state(conversation_id)
             if state is not None:
                 obs.intent = state.intent.value if state.intent else None
                 obs.outcome_code = state.outcome.code if state.outcome else None

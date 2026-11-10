@@ -18,6 +18,7 @@ class Intent(StrEnum):
     LIST_APPOINTMENTS = "list_appointments"
     GET_PATIENT_INFO = "get_patient_info"
     ANSWER_FAQ = "answer_faq"
+    GET_DOCTOR_INFO = "get_doctor_info"  # hỏi phòng khám có những khoa / bác sĩ nào (danh mục, không phải hồ sơ)
     SMALL_TALK = "small_talk"  # chào hỏi, cảm ơn, hỏi trợ lý là ai — trả lời tự nhiên, không chạy nghiệp vụ
     UNKNOWN = "unknown"
 
@@ -35,6 +36,27 @@ _INTENT_PHRASES: dict[Intent, tuple[str, ...]] = {
         "kế hoạch điều trị",
         "tình hình của tôi",
         "tổng quan",
+        # Hỏi về bệnh nhân khác: vẫn vào đây, nhưng chỉ trả dữ liệu của chính người đang đăng nhập.
+        "những bệnh nhân",
+        "các bệnh nhân",
+        "danh sách bệnh nhân",
+        "bệnh nhân nào",
+        "bao nhiêu bệnh nhân",
+        "bệnh nhân khác",
+    ),
+    Intent.GET_DOCTOR_INFO: (
+        "thông tin bác sĩ",
+        "danh sách bác sĩ",
+        "các bác sĩ",
+        "những bác sĩ",
+        "bác sĩ nào",
+        "bác sĩ khoa",
+        "bác sĩ của khoa",
+        "danh sách khoa",
+        "các khoa",
+        "những khoa",
+        "khoa nào có",
+        "có khoa",
     ),
     Intent.LIST_APPOINTMENTS: ("lịch hẹn của tôi", "xem lịch hẹn", "lịch đã đặt", "tôi có lịch hẹn", "các lịch hẹn"),
     Intent.GET_REPORT_HISTORY: ("báo cáo trước", "lịch sử báo cáo", "các báo cáo", "xem báo cáo", "báo cáo cũ"),
@@ -46,6 +68,8 @@ _INTENT_PHRASES: dict[Intent, tuple[str, ...]] = {
         "hẹn tái khám",
         "lấy lịch khám",
         "book lịch",
+        "đặt thêm",  # "đặt thêm một lịch như vậy"
+        "đặt một lịch",
     ),
     Intent.CREATE_REPORT: (
         "đau mức",
@@ -112,6 +136,7 @@ _INTENT_KEYWORDS: dict[Intent, tuple[str, ...]] = {
     Intent.GET_REPORT_HISTORY: ("báo cáo", "lịch sử", "trước", "cũ", "tiến triển"),
     Intent.CREATE_REPORT: ("đau", "tập", "mức", "triệu chứng", "báo cáo", "gửi"),
     Intent.ANSWER_FAQ: ("hỏi", "cách", "nên", "hướng dẫn", "chườm", "bài tập", "tại sao", "gì"),
+    Intent.GET_DOCTOR_INFO: ("bác sĩ", "khoa", "chuyên khoa"),
 }
 
 
@@ -152,7 +177,8 @@ def asks_about_assistant_context(text: str) -> bool:
     return contains_phrase(text, _ASSISTANT_CONTEXT) is not None
 
 
-# "lưu đi", "làm tiếp": nối lại việc dang dở ở lượt trước.
+# "lưu đi", "làm tiếp", "lấy thông tin cũ": nối lại việc dang dở ở lượt trước, dùng lại những gì đã nói.
+# Không dùng "vừa rồi" (hay gặp trong báo cáo: "tuần vừa rồi tôi đau...").
 _CONTINUE = (
     "lưu đi",
     "lưu lại",
@@ -167,7 +193,25 @@ _CONTINUE = (
     "quay lại",
     "lúc nãy",
     "hồi nãy",
+    "khi nãy",
+    "ban nãy",
+    "vừa nãy",
+    "thông tin cũ",
+    "thông tin trước",
+    "đã trả lời",
+    "đã nói",
+    "phía trên",
+    "ở trên",
+    "như trên",
+    "như cũ",
 )
+
+
+_QUESTION_WORDS = ("nào", "gì", "sao", "bao nhiêu", "mấy", "ai", "ở đâu", "khi nào", "được không", "có không")
+
+
+def looks_like_question(text: str) -> bool:
+    return "?" in text or contains_phrase(text, _QUESTION_WORDS) is not None
 
 
 def is_continuation(text: str) -> bool:
@@ -187,6 +231,11 @@ def rank_intents(text: str) -> list[tuple[Intent, float]]:
 
 _OTHER_PATIENT = (
     "bệnh nhân khác",
+    "những bệnh nhân",
+    "các bệnh nhân",
+    "danh sách bệnh nhân",
+    "bệnh nhân nào",
+    "bao nhiêu bệnh nhân",
     "người khác",
     "của mẹ tôi",
     "của bố tôi",
@@ -232,6 +281,9 @@ def classify_by_rules(text: str) -> IntentGuess:
         positions.pop(Intent.SMALL_TALK)
     if Intent.ANSWER_FAQ in positions and len(positions) > 1:
         positions.pop(Intent.ANSWER_FAQ)
+    # "đặt lịch với bác sĩ nào" là đặt lịch; chỉ hỏi về bác sĩ/khoa khi không kèm việc khác.
+    if Intent.GET_DOCTOR_INFO in positions and len(positions) > 1:
+        positions.pop(Intent.GET_DOCTOR_INFO)
     ordered = sorted(positions, key=positions.__getitem__)
     if not ordered:
         return IntentGuess(None)

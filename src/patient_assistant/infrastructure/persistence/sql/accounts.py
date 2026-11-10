@@ -122,7 +122,7 @@ class SqlSessionRepository:
 
 def _summary(row: ConversationRow) -> ConversationSummary:
     return ConversationSummary(
-        thread_id=row.thread_id,
+        conversation_id=row.conversation_id,
         patient_id=row.patient_id,
         user_id=row.user_id,
         title=row.title,
@@ -137,15 +137,15 @@ class SqlConversationLog:
     def __init__(self, sessions: Sessions) -> None:
         self._sessions = sessions
 
-    async def open(self, thread_id: str, user_id: str, patient_id: str, title: str, now: datetime) -> str:
+    async def open(self, conversation_id: str, user_id: str, patient_id: str, title: str, now: datetime) -> str:
         try:
             async with self._sessions.begin() as session:
-                row = await session.get(ConversationRow, thread_id)
+                row = await session.get(ConversationRow, conversation_id)
                 if row is not None:
                     return row.patient_id
                 session.add(
                     ConversationRow(
-                        thread_id=thread_id,
+                        conversation_id=conversation_id,
                         patient_id=patient_id,
                         user_id=user_id,
                         title=title,
@@ -154,20 +154,20 @@ class SqlConversationLog:
                     )
                 )
                 return patient_id
-        except IntegrityError:  # hai request cùng tạo một thread -> đọc lại chủ sở hữu thật
-            owner = await self.owner(thread_id)
+        except IntegrityError:  # hai request cùng tạo một hội thoại -> đọc lại chủ sở hữu thật
+            owner = await self.owner(conversation_id)
             assert owner is not None
             return owner
 
-    async def owner(self, thread_id: str) -> str | None:
+    async def owner(self, conversation_id: str) -> str | None:
         async with self._sessions() as session:
-            row = await session.get(ConversationRow, thread_id)
+            row = await session.get(ConversationRow, conversation_id)
             return row.patient_id if row else None
 
     async def add_message(self, message: ChatMessage) -> None:
         async with self._sessions.begin() as session:
             session.add(ChatMessageRow(**message.model_dump()))
-            conv = await session.get(ConversationRow, message.thread_id)
+            conv = await session.get(ConversationRow, message.conversation_id)
             assert conv is not None
             conv.message_count += 1
             conv.updated_at = message.created_at
@@ -181,13 +181,15 @@ class SqlConversationLog:
         async with self._sessions() as session:
             return [_summary(r) for r in await session.scalars(query)]
 
-    async def list_messages(self, thread_id: str) -> list[ChatMessage]:
-        query = select(ChatMessageRow).where(ChatMessageRow.thread_id == thread_id).order_by(ChatMessageRow.seq)
+    async def list_messages(self, conversation_id: str) -> list[ChatMessage]:
+        query = (
+            select(ChatMessageRow).where(ChatMessageRow.conversation_id == conversation_id).order_by(ChatMessageRow.seq)
+        )
         async with self._sessions() as session:
             return [
                 ChatMessage(
                     id=r.id,
-                    thread_id=r.thread_id,
+                    conversation_id=r.conversation_id,
                     role=r.role,
                     action=r.action,
                     text=r.text,

@@ -118,6 +118,15 @@ async def test_cancel_and_unclear_confirmation(make_app: Any) -> None:
     assert await _history(app) == []
 
 
+async def test_unclear_confirmation_is_asked_again_before_handoff(make_app: Any) -> None:
+    app = await _good_app(make_app)
+    waiting(await app.chat.send_message("t6b", PATIENT, GOOD), "confirm_report")
+    for _ in range(3):
+        waiting(await app.chat.resume("t6b", PATIENT, UserDecision(action="reply", text="ờ")), "confirm_report")
+    final = done(await app.chat.resume("t6b", PATIENT, UserDecision(action="reply", text="ờ")), "handoff")
+    assert "nhân viên" in final.response.text and await _history(app) == []
+
+
 async def test_user_edit_is_revalidated(make_app: Any) -> None:
     app = await _good_app(make_app)
     waiting(await app.chat.send_message("t7", PATIENT, GOOD), "confirm_report")

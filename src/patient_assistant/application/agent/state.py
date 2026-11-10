@@ -1,4 +1,4 @@
-"""State của LangGraph. Định danh (thread_id, patient_id, now) do API/use case đặt, không bao giờ do LLM."""
+"""State của LangGraph. Định danh (conversation_id, patient_id, now) do API/use case đặt, không bao giờ do LLM."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from typing import Any, Literal, get_args
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel, Field
 
+from patient_assistant.application.agent.memory import MemoryRef, TurnNote
 from patient_assistant.application.tools.result import ToolCallRecord
 from patient_assistant.domain.booking.models import BookingRequest, SlotOption
 from patient_assistant.domain.common import Origin, SttFlag, ValidationIssue
@@ -105,7 +106,7 @@ class Carryover(BaseModel):
 
 class AgentState(BaseModel):
     # -- định danh lượt
-    thread_id: str
+    conversation_id: str
     patient_id: str
     now: datetime
 
@@ -120,15 +121,21 @@ class AgentState(BaseModel):
     intent_source: Literal["rule", "llm", "context"] | None = None
     safety: SafetyKind = SafetyKind.OK
 
-    # -- ngữ cảnh từ lượt trước của cùng thread
+    # -- ngữ cảnh từ lượt trước của cùng hội thoại
     carryover: Carryover | None = None
     context_sources: list[str] = Field(default_factory=list)  # lời người dùng ở việc dang dở đã nối lại
+    # Ghi chú các lượt đã kết thúc trong hội thoại này (code soạn) — chỉ để hiểu câu nói, không phải evidence.
+    memory: list[TurnNote] = Field(default_factory=list)
+    turn_note: TurnNote | None = None  # ghi chú của chính lượt này, node respond điền
+    memory_ref: MemoryRef | None = None  # khoa/bác sĩ lấy lại từ lượt trước theo cụm "như vậy", "bác sĩ đó"
 
     # -- dùng chung cho các flow
     user_replies: list[str] = Field(default_factory=list)
     issues: list[ValidationIssue] = Field(default_factory=list)
     correction_count: int = 0
-    clarify_rounds: int = 0
+    clarify_rounds: int = 0  # số lần đã hỏi lại liên tiếp đúng câu `last_question` (0 = lần hỏi đầu)
+    last_question: str | None = None
+    questions_asked: int = 0
     last_output: dict[str, Any] | None = None
     decision: UserDecision | None = None
     attempts: list[AttemptRecord] = Field(default_factory=list)
@@ -141,6 +148,7 @@ class AgentState(BaseModel):
     # -- booking_flow
     booking_request: BookingRequest | None = None
     department_from_plan: bool = False
+    department_from_memory: bool = False  # khoa lấy theo cụm "như vậy"/"bác sĩ đó"/"khoa đó" (xem memory_ref)
     resolved_window: DateWindow | None = None
     date_issues: list[ValidationIssue] = Field(default_factory=list)
     doctor_id: str | None = None

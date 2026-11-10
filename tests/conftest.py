@@ -91,8 +91,10 @@ class ScriptedLLM:
         self.replies = list(replies or [])
         self.report_prompts: list[ReportPrompt] = []
         self.booking_prompts: list[BookingPrompt] = []
+        self.memories: list[str | None] = []  # ghi chú lịch sử nhận được ở mỗi lần gọi classify/answer/converse
 
-    async def classify_intent(self, text: str) -> list[Intent]:
+    async def classify_intent(self, text: str, memory: str | None = None) -> list[Intent]:
+        self.memories.append(memory)
         return _next(self.intents, [])
 
     async def extract_report(self, prompt: ReportPrompt) -> dict[str, Any]:
@@ -106,8 +108,11 @@ class ScriptedLLM:
     async def choose_slot(self, reply: str, options: list[SlotOption]) -> int | None:
         return _next(self.slots, None)
 
-    async def answer_question(self, question: str, tools: list[ToolSpec], max_tool_calls: int) -> GroundedAnswer:
+    async def answer_question(
+        self, question: str, tools: list[ToolSpec], max_tool_calls: int, memory: str | None = None
+    ) -> GroundedAnswer:
         """Kịch bản là câu truy vấn: gọi tool tìm tài liệu thật rồi trả lời bằng tài liệu đầu tiên."""
+        self.memories.append(memory)
         query = _next(self.searches, None)
         search = next((t for t in tools if t.name == "search_approved_knowledge"), None)
         if query is None or search is None:
@@ -119,12 +124,13 @@ class ScriptedLLM:
         top = docs[0]
         return GroundedAnswer(text=f"{top['content']} ({top['doc_id']})", source_ids=[top["doc_id"]], tool_calls=1)
 
-    async def converse(self, text: str, context: str | None = None) -> str:
+    async def converse(self, text: str, context: str | None = None, memory: str | None = None) -> str:
+        self.memories.append(memory)
         return _next(self.replies, "Chào bạn! Mình là trợ lý ảo của phòng khám.")
 
 
 class FailingLLM(ScriptedLLM):
-    async def classify_intent(self, text: str) -> list[Intent]:
+    async def classify_intent(self, text: str, memory: str | None = None) -> list[Intent]:
         raise LLMError("unavailable", "down", retryable=True)
 
     async def extract_report(self, prompt: ReportPrompt) -> dict[str, Any]:
@@ -133,10 +139,12 @@ class FailingLLM(ScriptedLLM):
     async def choose_slot(self, reply: str, options: list[SlotOption]) -> int | None:
         raise LLMError("unavailable", "down")
 
-    async def answer_question(self, question: str, tools: list[ToolSpec], max_tool_calls: int) -> GroundedAnswer:
+    async def answer_question(
+        self, question: str, tools: list[ToolSpec], max_tool_calls: int, memory: str | None = None
+    ) -> GroundedAnswer:
         raise LLMError("unavailable", "down")
 
-    async def converse(self, text: str, context: str | None = None) -> str:
+    async def converse(self, text: str, context: str | None = None, memory: str | None = None) -> str:
         raise LLMError("unavailable", "down")
 
 
@@ -163,14 +171,19 @@ def booking_out(
     time: str | None = None,
     doctor: str | None = None,
     reason: str | None = None,
+    mentioned: str | None = None,
 ) -> dict[str, Any]:
-    """Đầu ra extract_booking: khoa kèm trích dẫn, các cụm còn lại là nguyên văn lời người dùng."""
+    """Đầu ra extract_booking: khoa kèm trích dẫn, các cụm còn lại là nguyên văn lời người dùng.
+
+    `mentioned`: tên khoa người dùng nói nhưng không có trong danh mục (department_code để null).
+    """
     found = {"date_expression": date, "time_expression": time, "doctor_name": doctor, "reason": reason}
     evidence = [{"field": k, "quote": v} for k, v in found.items() if v]
     if department:
         evidence.insert(0, {"field": "department_code", "quote": department[1]})
     return {
         "department_code": department[0] if department else None,
+        "department_mentioned": mentioned or (department[1] if department else None),
         **found,
         "missing_fields": [k for k, v in (("department_code", department), ("date_expression", date)) if not v],
         "evidence": evidence,
