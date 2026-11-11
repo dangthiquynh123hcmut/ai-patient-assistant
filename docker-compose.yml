@@ -71,6 +71,23 @@ services:
     expose:
       - "8000"
 
+  # Job theo lịch: xóa phiên đăng nhập đã hết hạn mỗi PA_SESSION_PURGE_EVERY_MINUTES phút (mặc định 60).
+  # Dùng lại image backend, không cần cài cron. Muốn dùng crontab của máy chủ thì bỏ service này và chạy
+  # `docker compose run --rm migrate python -m patient_assistant.interface.cli.purge_sessions` theo lịch.
+  session-cleaner:
+    image: patient-assistant-backend
+    restart: unless-stopped
+    environment: *backend-env
+    command:
+      - "python"
+      - "-m"
+      - "patient_assistant.interface.cli.purge_sessions"
+      - "--every"
+      - "${PA_SESSION_PURGE_EVERY_MINUTES:-60}"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   # Test chạy trong container (Linux) với Postgres thật: mỗi test một schema riêng, xóa khi xong.
   # Mã nguồn được mount vào nên sửa code không cần build lại; đổi dependency thì thêm --build.
   test:

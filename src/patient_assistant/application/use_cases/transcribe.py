@@ -1,4 +1,4 @@
-"""Use case STT: audio -> transcript + cờ độ tin cậy. Chạy ngoài graph để người dùng duyệt trước (FR-01.3)."""
+"""Use case STT: audio -> transcript + cờ độ tin cậy. Chạy ngoài graph; UI gửi thẳng kết quả vào lượt chat (FR-01.3)."""
 
 from __future__ import annotations
 

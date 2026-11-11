@@ -117,6 +117,18 @@ class AuthService:
     async def logout(self, token: str) -> None:
         await self._sessions.delete(_token_hash(token))
 
+    async def logout_everywhere(self, user_id: str) -> None:
+        """Thu hồi mọi phiên của người dùng (mọi thiết bị, kể cả phiên đang dùng)."""
+        await self._sessions.delete_for_user(user_id)
+
+    async def purge_expired_sessions(self) -> int:
+        """Xóa mọi phiên đã hết hạn; trả số phiên đã xóa.
+
+        Chỉ là dọn dẹp: phiên hết hạn vốn đã bị `authenticate` từ chối. Chạy theo lịch bởi
+        `patient_assistant.interface.cli.purge_sessions` (service `session-cleaner` trong docker-compose).
+        """
+        return await self._sessions.delete_expired(self._clock.now())
+
     # ------------------------------------------------------------------ tự đăng ký
 
     async def register(self, registration: Registration) -> User:

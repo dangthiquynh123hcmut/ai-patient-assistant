@@ -76,6 +76,7 @@ export const api = {
     request<User>("/v1/auth/register", { method: "POST", json: registration, allowUnauthorized: true }),
   authOptions: () => request<{ allow_registration: boolean }>("/v1/auth/options", { allowUnauthorized: true }),
   logout: () => request<void>("/v1/auth/logout", { method: "POST", allowUnauthorized: true }),
+  logoutAll: () => request<void>("/v1/auth/logout-all", { method: "POST", allowUnauthorized: true }),
   me: () => request<User>("/v1/auth/me", { allowUnauthorized: true }),
   meta: () => request<Meta>("/v1/meta"),
 

@@ -12,7 +12,6 @@ import { Composer } from "./Composer";
 import { HistoryPanel } from "./HistoryPanel";
 import { InterruptCard } from "./InterruptCard";
 import { OutcomeCard } from "./OutcomeCard";
-import { TranscriptCard } from "./TranscriptCard";
 import { useChat } from "./useChat";
 
 const SAMPLES = [
@@ -63,7 +62,9 @@ export function ChatPage() {
               STT: {meta.stt_enabled ? `${meta.stt_model} · ${meta.stt_language}` : "tắt"}
             </span>
             <span className="badge">Hôm nay: {slotWhen(meta.now).split(" · ")[0]}</span>
-            <span className="badge">Khoa: {meta.departments.map((d) => d.name).join(", ")}</span>
+            <span className="badge long" title={meta.departments.map((d) => d.name).join(", ")}>
+              Khoa: {meta.departments.map((d) => d.name).join(", ")}
+            </span>
           </div>
         )}
       </TopBar>
@@ -119,19 +120,6 @@ export function ChatPage() {
                       </span>
                       {e.text}
                     </div>
-                  );
-                case "transcript":
-                  return (
-                    <TranscriptCard
-                      key={e.id}
-                      review={e.review}
-                      done={e.done}
-                      onSend={(text, flags) => {
-                        chat.closeTranscript(e.id, false);
-                        void chat.send(text, "voice", flags);
-                      }}
-                      onDiscard={() => chat.closeTranscript(e.id, true)}
-                    />
                   );
               }
             })}

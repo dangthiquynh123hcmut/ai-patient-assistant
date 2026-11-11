@@ -19,6 +19,7 @@ Agent LangGraph hỗ trợ bệnh nhân (dữ liệu giả lập, dự án học
               │      │                    · lịch sử hội thoại (chat_messages)    │
               │      │                    · checkpoint LangGraph (câu hỏi đang chờ)
               │   migrate (chạy 1 lần mỗi lần up): alembic upgrade head + seed   │
+              │   session-cleaner (chạy nền): xóa phiên hết hạn mỗi 60 phút       │
               └──────────────────────────────────────────────────────────────────┘
                                                  │ IAM (~/.aws mount chỉ đọc)
                                                  ▼
@@ -28,6 +29,7 @@ Agent LangGraph hỗ trợ bệnh nhân (dữ liệu giả lập, dự án học
 - **frontend/** — React 19 + TypeScript, build bằng Vite thành file tĩnh; nginx phục vụ và proxy `/v1/` về backend nên trình duyệt chỉ thấy một origin (cookie phiên HttpOnly, không cần CORS). nginx đặt CSP và các security header.
 - **backend** — chỉ là API. Không giữ state trong RAM: hội thoại đang chờ người dùng trả lời nằm trong checkpoint Postgres, khóa đăng nhập nằm trong bảng `users`, nên chạy nhiều worker/instance được.
 - **migrate** — schema do Alembic quản lý ([sql/migrations/](src/patient_assistant/infrastructure/persistence/sql/migrations/)); seed idempotent (danh mục, tài khoản demo, bổ sung slot khám cho đủ số ngày tới, bảng checkpoint).
+- **session-cleaner** — job theo lịch dùng lại image backend, xóa phiên đăng nhập đã hết hạn mỗi `PA_SESSION_PURGE_EVERY_MINUTES` phút ([purge_sessions.py](src/patient_assistant/interface/cli/purge_sessions.py)). Lỡ vài lần chạy cũng không sao: phiên hết hạn vốn đã bị từ chối ở mỗi request.
 - Container backend chạy bằng user thường (uid 1000), Postgres không mở cổng ra ngoài.
 
 ## Chạy bằng Docker
@@ -181,7 +183,9 @@ Mở frontend (Docker: **http://localhost:8080**, dev: **http://localhost:5173**
 
 **Tự đăng ký:** ở trang đăng nhập bấm **Đăng ký** (trang `/register`), nhập họ tên, tên đăng nhập và mật khẩu (tối thiểu 8 ký tự). Hệ thống tạo một hồ sơ bệnh nhân mới cùng tài khoản `patient` gắn với hồ sơ đó, rồi đăng nhập luôn. Người tự đăng ký không chọn được vai trò hay hồ sơ bệnh nhân có sẵn: tài khoản `staff`/`admin`, hoặc tài khoản gắn vào hồ sơ đã có, vẫn chỉ admin tạo được. Bệnh nhân mới xuất hiện ngay trong danh sách bệnh nhân của trang nhân viên. Tắt chức năng này bằng `PA_ALLOW_REGISTRATION=false` (nút Đăng ký ẩn đi, API trả 403).
 
-- Mật khẩu băm bằng scrypt; phiên đăng nhập là token ngẫu nhiên trong cookie HttpOnly (DB chỉ lưu hash của token). Phiên hết hạn sau `PA_SESSION_TTL_HOURS` (mặc định 12 giờ).
+- Mật khẩu băm bằng scrypt; phiên đăng nhập là token ngẫu nhiên trong cookie HttpOnly (DB chỉ lưu hash của token). Phiên hết hạn sau `PA_SESSION_TTL_HOURS` (mặc định 12 giờ). Phiên hết hạn bị từ chối ngay ở mỗi request; ngoài ra service `session-cleaner` xóa chúng khỏi DB mỗi `PA_SESSION_PURGE_EVERY_MINUTES` phút (mặc định 60). Không dùng Docker thì đặt lịch cho lệnh `python -m patient_assistant.interface.cli.purge_sessions` (chạy một lần rồi thoát) bằng crontab hoặc công cụ tương tự.
+- **Đăng xuất** (`POST /v1/auth/logout`) xóa phiên hiện tại ở DB và xóa cookie, nên token cũ không dùng lại được. Nếu request đăng xuất lỗi (vd. mất mạng), UI báo lỗi và vẫn giữ trạng thái đăng nhập, vì phiên chưa bị thu hồi.
+- **Đăng xuất mọi thiết bị** (bấm vào tên người dùng ở góc phải, hoặc `POST /v1/auth/logout-all`) thu hồi mọi phiên của tài khoản, kể cả phiên đang dùng.
 - Sai mật khẩu 5 lần liên tiếp thì username đó bị khóa đăng nhập 5 phút.
 - Khóa tài khoản hoặc đổi mật khẩu sẽ đăng xuất mọi phiên đang mở của tài khoản đó.
 - Quyền được kiểm tra ở API cho từng request: bệnh nhân không đọc/gửi/trả lời được hội thoại của người khác, kể cả khi biết `conversation_id`.
@@ -192,7 +196,7 @@ Mở frontend (Docker: **http://localhost:8080**, dev: **http://localhost:5173**
 
 Đăng nhập bằng tài khoản bệnh nhân.
 
-- **Bên trái — hội thoại.** Gõ hoặc chọn câu mẫu. Bấm 🎙 để ghi âm, hoặc ⤒ để tải file audio (cần bật STT). Transcript được hiện ra để bạn sửa trước khi gửi; các từ nhận dạng kém được tô vàng.
+- **Bên trái — hội thoại.** Gõ hoặc chọn câu mẫu. Bấm 🎙 để ghi âm, hoặc ⤒ để tải file audio (cần bật STT). Ghi âm xong, transcript được gửi thẳng như một tin nhắn giọng nói; nếu có từ nhận dạng kém (số, ngày, giờ, khoa…), trợ lý sẽ hỏi lại.
 - **Khi agent hỏi lại hoặc cần xác nhận,** câu hỏi hiện thành thẻ có nút bấm: chọn slot, xác nhận, sửa bản nháp, hủy. Bạn cũng có thể trả lời tự do như khi nói, ví dụ "cái thứ hai" hay "đổi sang buổi chiều".
 - **Khi agent chưa hiểu,** nó nhắc lại câu bạn vừa nói, đoán các việc gần nhất bằng điểm từ khóa, và đưa nút để bấm chọn (lựa chọn được đoán cao nhất được tô đậm).
 - **Tra cứu thông tin:** "tôi muốn tra cứu thông tin bệnh nhân" trả về hồ sơ, kế hoạch theo dõi, các báo cáo gần đây (kèm xu hướng mức đau do code tính) và lịch hẹn sắp tới — chỉ của tài khoản đang đăng nhập.
@@ -256,7 +260,7 @@ Test mặc định dùng LLM giả có kịch bản định sẵn (`ScriptedLLM`
 ## Luồng gọi API
 
 0. `POST /v1/auth/login` `{"username": "benhnhan1", "password": "demo1234"}`: đặt cookie `pa_session`. Client không phải trình duyệt có thể gửi `Authorization: Bearer <giá trị cookie>`. `POST /v1/auth/logout` để đăng xuất, `GET /v1/auth/me` để xem tài khoản hiện tại. Tự đăng ký: `POST /v1/auth/register` `{"username": "...", "display_name": "...", "password": "..."}` trả 201 và đặt cookie phiên như đăng nhập (409 nếu trùng tên đăng nhập, 403 nếu đang tắt); `GET /v1/auth/options` (không cần đăng nhập) cho biết có cho đăng ký không.
-1. (giọng nói) `POST /v1/stt/transcribe` (multipart `audio`): trả về transcript và `flags` (những từ nhận dạng kém) để người dùng duyệt.
+1. (giọng nói) `POST /v1/stt/transcribe` (multipart `audio`): trả về transcript và `flags` (những từ nhận dạng kém). UI gửi thẳng cả hai sang bước 2 với `input_source="voice"`.
 2. `POST /v1/chat/{conversation_id}/messages` `{"text": "...", "input_source": "voice", "stt_flags": [...]}`.
 3. Nếu `status = "waiting_user"`: hiển thị `interrupt` (`clarify` / `confirm_report` / `choose_slot` / `confirm_booking`), rồi gọi `POST /v1/chat/{conversation_id}/resume` với một trong các dạng:
    - `{"action": "reply", "text": "cái thứ hai"}` (câu trả lời bằng lời, kể cả giọng nói)

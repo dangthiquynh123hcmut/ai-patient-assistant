@@ -10,7 +10,10 @@ interface AuthState {
   login: (username: string, password: string) => Promise<User>;
   /** Tạo tài khoản bệnh nhân rồi đăng nhập luôn (backend đặt cookie phiên). */
   register: (registration: Registration) => Promise<User>;
+  /** Ném lỗi nếu server chưa thu hồi được phiên (vd. mất mạng) — khi đó người dùng vẫn đang đăng nhập. */
   logout: () => Promise<void>;
+  /** Thu hồi mọi phiên của tài khoản này trên mọi thiết bị. */
+  logoutAll: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -61,15 +64,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [load],
   );
 
-  const logout = useCallback(async () => {
-    await api.logout().catch(() => undefined);
+  /**
+   * Chỉ coi là đã đăng xuất khi server xác nhận đã thu hồi phiên (hoặc phiên vốn đã hết hạn — 401).
+   * Lỗi mạng / server thì ném lỗi ra để UI báo, vì cookie và phiên phía server vẫn còn hiệu lực.
+   */
+  const endSession = useCallback(async (call: () => Promise<void>) => {
+    try {
+      await call();
+    } catch (err) {
+      if (!(err instanceof ApiError && err.status === 401)) throw err;
+    }
     setUser(null);
     setMeta(null);
   }, []);
 
+  const logout = useCallback(() => endSession(api.logout), [endSession]);
+  const logoutAll = useCallback(() => endSession(api.logoutAll), [endSession]);
+
   const value = useMemo(
-    () => ({ user, meta, login, register, logout }),
-    [user, meta, login, register, logout],
+    () => ({ user, meta, login, register, logout, logoutAll }),
+    [user, meta, login, register, logout, logoutAll],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

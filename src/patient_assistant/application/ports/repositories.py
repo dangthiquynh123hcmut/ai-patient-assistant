@@ -116,6 +116,9 @@ class SessionRepository(Protocol):
 
     async def delete(self, token_hash: str) -> None: ...
     async def delete_for_user(self, user_id: str) -> None: ...
+    async def delete_expired(self, now: datetime) -> int:
+        """Xóa mọi phiên đã hết hạn; trả số phiên đã xóa."""
+        ...
 
 
 class ConversationLogRepository(Protocol):

@@ -19,7 +19,6 @@ export type ChatEntry =
   | { type: "user"; id: number; text: string; meta: string }
   | { type: "interrupt"; id: number; payload: InterruptPayload; answered: boolean }
   | { type: "outcome"; id: number; response: AgentResponse }
-  | { type: "transcript"; id: number; review: TranscriptReview; done: boolean }
   // Câu trả lời của trợ lý ở các lượt trước, đọc lại từ lịch sử (chỉ để xem, không còn nút bấm).
   | { type: "history"; id: number; kind: string; text: string; at: string };
 
@@ -97,35 +96,36 @@ export function useChat(onError: (message: string) => void) {
         await resume({ action: "reply", text }, text, source === "voice" ? "bạn (giọng nói) trả lời" : "bạn trả lời");
         return;
       }
-      push({ type: "user", text, meta: source === "voice" ? "bạn · giọng nói (đã duyệt transcript)" : "bạn" });
+      push({ type: "user", text, meta: source === "voice" ? "bạn · giọng nói" : "bạn" });
       await run(text, () => api.sendMessage(conversationId, text, source, flags));
     },
     [pending, push, resume, run, conversationId],
   );
 
+  /** Ghi âm xong: chuyển thành chữ rồi gửi luôn (kèm cờ từ STT không chắc để agent hỏi lại nếu cần). */
   const transcribe = useCallback(
     async (audio: Blob, filename: string, language?: SttLanguage) => {
+      if (busyRef.current) return;
       busyRef.current = true;
       setBusy(true);
+      let review: TranscriptReview | null = null;
       try {
-        push({ type: "transcript", review: await api.transcribe(audio, filename, language), done: false });
+        review = await api.transcribe(audio, filename, language);
       } catch (err) {
         onError(`STT lỗi: ${errorText(err)}`);
       } finally {
         busyRef.current = false;
         setBusy(false);
       }
+      if (!review) return;
+      if (!review.text.trim()) {
+        onError("Không nghe rõ, bạn thử ghi âm lại nhé.");
+        return;
+      }
+      await send(review.text, "voice", review.flags);
     },
-    [onError, push],
+    [onError, send],
   );
-
-  const closeTranscript = useCallback((id: number, remove: boolean) => {
-    setEntries((list) =>
-      remove
-        ? list.filter((e) => e.id !== id)
-        : list.map((e) => (e.id === id && e.type === "transcript" ? { ...e, done: true } : e)),
-    );
-  }, []);
 
   /** Mở lại một hội thoại cũ: hiện lại tin nhắn; nếu agent còn đang chờ trả lời thì hiện câu hỏi đó để nói tiếp. */
   const open = useCallback(
@@ -179,7 +179,6 @@ export function useChat(onError: (message: string) => void) {
     send,
     resume,
     transcribe,
-    closeTranscript,
     open,
     reset,
   };

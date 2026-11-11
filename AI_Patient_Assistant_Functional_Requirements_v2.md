@@ -26,7 +26,7 @@ Xây dựng một ứng dụng portfolio để thực hành các thành phần c
 ### Trong phạm vi
 
 - Chat bằng văn bản.
-- Chuyển giọng nói thành văn bản (STT), hiển thị transcript để người dùng kiểm tra.
+- Chuyển giọng nói thành văn bản (STT) và gửi thẳng vào Agent; từ nhận dạng kém được gắn cờ để Agent hỏi lại.
 - Đặt lịch khám bằng văn bản hoặc giọng nói trên **dữ liệu lịch giả lập** (khoa, bác sĩ, slot), có xác nhận trước khi đặt; xem các lịch hẹn sắp tới của mình.
 - Một Agent workflow có state và các bước rõ ràng.
 - Function calling với một số tool có đầu vào/đầu ra được định nghĩa bằng schema.
@@ -58,7 +58,7 @@ Mức ưu tiên: **P0** = bắt buộc cho MVP; **P1** = bổ sung sau MVP.
 |---|---|---|
 | FR-01.1 | Người dùng có thể gửi yêu cầu bằng văn bản. | P0 |
 | FR-01.2 | Người dùng có thể ghi âm và hệ thống chuyển âm thanh thành văn bản bằng STT. | P0 |
-| FR-01.3 | Transcript được hiển thị để người dùng kiểm tra/sửa trước khi xử lý các thông tin quan trọng. | P0 |
+| FR-01.3 | Ghi âm xong, transcript được gửi thẳng vào Agent (không có bước duyệt/sửa thủ công), kèm cờ các từ STT nhận dạng kém. Transcript hiện trong khung chat như một tin nhắn giọng nói. Việc kiểm tra thông tin quan trọng do FR-01.4 và bước xác nhận trước khi ghi (FR-07) đảm nhận. | P0 |
 | FR-01.4 | Nếu transcript không rõ hoặc có khả năng nhận sai số, ngày, giờ, mức độ đau, tên hoạt động, tên khoa hay tên bác sĩ, Agent phải hỏi lại thay vì tự đoán. | P0 |
 | FR-01.5 | Đầu vào văn bản và transcript sau STT dùng chung một Agent workflow. | P0 |
 | FR-01.6 | MVP dùng STT chạy local trên CPU; cấu hình model phải thay đổi được mà không viết lại Agent. | P0 |
@@ -189,7 +189,7 @@ Ví dụ cấu trúc giải thích:
 
 ### FR-09. Đặt lịch khám bằng văn bản và giọng nói
 
-Booking chạy trên dữ liệu giả lập và dùng chung các cơ chế của FR-01 đến FR-08: STT và kiểm tra transcript, validation nhiều lớp, evidence, xác nhận trước khi ghi, kiểm tra kết quả tool.
+Booking chạy trên dữ liệu giả lập và dùng chung các cơ chế của FR-01 đến FR-08: STT kèm cờ độ tin cậy, validation nhiều lớp, evidence, xác nhận trước khi ghi, kiểm tra kết quả tool.
 
 | ID | Yêu cầu | Ưu tiên |
 |---|---|---|
@@ -219,7 +219,7 @@ User text / Audio
 [STT nếu là audio]
        |
        v
-[Hiển thị transcript để kiểm tra]
+[Gửi thẳng transcript + cờ STT]
        |
        v
 [Intent + Agent State]
@@ -383,7 +383,7 @@ Thứ tự này khớp với §12 của `ARCHITECTURE.md`.
 6. **Bước 6 — Explanation/evidence:** trình bày căn cứ theo trường, nguồn và lý do pass/fail.
 7. **Bước 7 — Booking bằng text:** dữ liệu giả lập khoa/bác sĩ/slot, quy đổi ngày giờ bằng code, tool slot và lịch hẹn, workflow đặt lịch (tìm slot → chọn slot → đọc lại và xác nhận → đặt → kiểm tra), chống đặt trùng và test đồng thời.
 8. **Bước 8 — Evaluation:** xây bộ test có lỗi cố ý, đầu vào mơ hồ, transcript sai và tool failure cho cả báo cáo và booking.
-9. **Bước 9 — STT:** thêm audio input, transcript review và test riêng cho lỗi nhận dạng, gồm bộ audio đặt lịch (số, ngày, giờ, tên khoa, tên bác sĩ).
+9. **Bước 9 — STT:** thêm audio input (gửi thẳng transcript kèm cờ độ tin cậy) và test riêng cho lỗi nhận dạng, gồm bộ audio đặt lịch (số, ngày, giờ, tên khoa, tên bác sĩ).
 10. **Bước 10 (P1):** đổi/hủy lịch, giữ chỗ slot tạm thời, TTS đọc lại bản xác nhận.
 
 LangGraph được dựng từ bước 4 thay vì để cuối: các bước 1–3 là hàm thuần nên ghép vào graph sớm không tốn thêm công, và tránh viết một orchestrator tạm rồi bỏ. Booking làm bằng text trước giọng nói để lỗi logic đặt lịch được bắt bằng test text, rẻ và tái lập được.

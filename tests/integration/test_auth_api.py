@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 from datetime import timedelta
 from typing import Any
 
@@ -118,6 +120,75 @@ async def test_logout_revokes_token_server_side(make_app: Any) -> None:
         headers = await login(client, "benhnhan1")
         assert (await client.post("/v1/auth/logout", headers=headers)).status_code == 204
         assert (await client.get("/v1/auth/me", headers=headers)).status_code == 401
+
+
+async def test_logout_all_revokes_every_device(make_app: Any) -> None:
+    async with api_client(await make_app()) as client:
+        phone = await login(client, "benhnhan1")
+        laptop = await login(client, "benhnhan1")
+        other = await login(client, "benhnhan2")
+        client.cookies.clear()
+        assert (await client.post("/v1/auth/logout-all")).status_code == 401  # phải đăng nhập mới gọi được
+
+        r = await client.post("/v1/auth/logout-all", headers=laptop)
+        assert r.status_code == 204 and 'pa_session=""' in r.headers["set-cookie"]
+        for headers in (phone, laptop):
+            assert (await client.get("/v1/auth/me", headers=headers)).status_code == 401
+        assert (await client.get("/v1/auth/me", headers=other)).status_code == 200  # tài khoản khác không bị ảnh hưởng
+
+
+async def test_purge_removes_only_expired_sessions(make_storage: Any) -> None:
+    repos = (await make_storage()).repos
+    clock = FixedClock(NOW)
+    auth = AuthService(repos["users"], repos["sessions"], repos["patients"], clock, timedelta(hours=1))
+    stale, _ = await auth.login("bacsi", "demo1234")  # không bao giờ dùng lại -> không tự bị xóa
+    clock.now = lambda: NOW + timedelta(hours=2)  # type: ignore[method-assign]
+    fresh, _ = await auth.login("benhnhan1", "demo1234")
+    assert await repos["sessions"].get(_hash(stale)) is not None  # đăng nhập không còn tự dọn
+
+    assert await auth.purge_expired_sessions() == 1
+    assert await repos["sessions"].get(_hash(stale)) is None
+    assert await auth.authenticate(fresh) is not None  # phiên còn hạn giữ nguyên
+    assert await auth.purge_expired_sessions() == 0
+
+
+async def test_purge_job_once_and_on_a_schedule(make_storage: Any) -> None:
+    from patient_assistant.interface.cli import purge_sessions
+
+    repos = (await make_storage()).repos
+    clock = FixedClock(NOW)
+    auth = AuthService(repos["users"], repos["sessions"], repos["patients"], clock, timedelta(hours=1))
+    first, _ = await auth.login("bacsi", "demo1234")
+    clock.now = lambda: NOW + timedelta(hours=2)  # type: ignore[method-assign]
+    await purge_sessions.purge(auth)  # không --every: chạy một lần rồi thoát
+    assert await repos["sessions"].get(_hash(first)) is None
+
+    # Chạy theo lịch: lỗi một lần (vd. DB khởi động lại) không làm chết job, lần sau vẫn dọn tiếp.
+    second, _ = await auth.login("bacsi", "demo1234")
+    clock.now = lambda: NOW + timedelta(hours=4)  # type: ignore[method-assign]
+    real = auth.purge_expired_sessions
+    calls = 0
+
+    async def flaky() -> int:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ConnectionError("DB đang khởi động lại")
+        if calls == 3:
+            raise asyncio.CancelledError  # dừng vòng lặp của test
+        return await real()
+
+    auth.purge_expired_sessions = flaky  # type: ignore[method-assign]
+    with pytest.raises(asyncio.CancelledError):
+        await purge_sessions.purge(auth, every_minutes=0.0001)
+    assert calls == 3 and await repos["sessions"].get(_hash(second)) is None
+
+    with pytest.raises(SystemExit):
+        purge_sessions.main(["--every", "0"])
+
+
+def _hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 async def test_lockout_after_repeated_failures(make_app: Any) -> None:

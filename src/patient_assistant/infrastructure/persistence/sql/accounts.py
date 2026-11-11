@@ -119,6 +119,13 @@ class SqlSessionRepository:
         async with self._sessions.begin() as session:
             await session.execute(delete(SessionRow).where(SessionRow.user_id == user_id))
 
+    async def delete_expired(self, now: datetime) -> int:
+        async with self._sessions.begin() as session:
+            result = await session.execute(
+                delete(SessionRow).where(SessionRow.expires_at <= now).returning(SessionRow.token_hash)
+            )
+            return len(result.all())
+
 
 def _summary(row: ConversationRow) -> ConversationSummary:
     return ConversationSummary(

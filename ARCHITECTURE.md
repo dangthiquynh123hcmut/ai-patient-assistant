@@ -17,7 +17,7 @@
 | P3 | **Định danh lấy từ context, không từ LLM** | `patient_id` được inject từ session/auth vào tool; schema tool mà LLM nhìn thấy không có trường này. | FR-03.2 |
 | P4 | **Mọi vòng lặp đều có trần** | `max_correction_attempts`, `max_tool_calls`, `recursion_limit` của LangGraph. | FR-02.5, FR-06.3 |
 | P5 | **Lỗi là dữ liệu, không phải exception lọt ra ngoài** | Mọi tool/LLM/STT trả `Result` chuẩn hóa; node đọc `status` rồi route. | FR-02.6, FR-03.7 |
-| P6 | **Human-in-the-loop là trạng thái của graph** | Dùng `interrupt()` + checkpointer Postgres: graph dừng thật, resume bằng `Command(resume=...)`. | FR-01.3, FR-02.4, FR-07 |
+| P6 | **Human-in-the-loop là trạng thái của graph** | Dùng `interrupt()` + checkpointer Postgres: graph dừng thật, resume bằng `Command(resume=...)`. | FR-02.4, FR-07 |
 | P7 | **Mọi thứ đều đo được** | Mỗi attempt, validation issue, tool call được ghi vào bảng riêng để chạy metric. | FR-06.6, FR-08 |
 | P8 | **Ngày giờ và slot do code giải quyết** | LLM chỉ trích nguyên văn cụm thời gian ("thứ Ba tuần sau", "sáng mai"); code quy đổi ra ngày theo múi giờ `Asia/Ho_Chi_Minh`. `slot_id` chỉ được lấy từ danh sách backend vừa trả về, LLM không tự tạo. | FR-09.3, FR-09.4 |
 | P9 | **Mỗi luồng là một subgraph** | `report_flow` và `booking_flow` là subgraph riêng, dùng chung validator pipeline, cơ chế interrupt và tool contract. Thêm luồng mới không phải sửa luồng cũ. | FR-02.3 |
@@ -61,7 +61,7 @@
 |---|---|---|
 | Tracing LLM/graph | **Langfuse self-host** hoặc **OpenTelemetry** | Self-host để dữ liệu không ra dịch vụ ngoài (FR-08.8). LangSmith chỉ dùng khi chắc chắn toàn dữ liệu giả lập. |
 | RAG vector | **pgvector** + embedding qua Bedrock | MVP bắt đầu bằng Postgres full-text search là đủ cho tập tài liệu nhỏ; chuyển sang vector khi cần. |
-| UI demo | **Streamlit** hoặc trang HTML tĩnh gọi API | Cần 3 màn hình: chat, xem/sửa transcript, xem/sửa/xác nhận bản nháp. |
+| UI demo | **Streamlit** hoặc trang HTML tĩnh gọi API | Cần 2 màn hình: chat (kể cả ghi âm), xem/sửa/xác nhận bản nháp. |
 
 ### 1.4 Vì sao dùng Anthropic SDK thay vì `langchain-aws`?
 
@@ -118,7 +118,7 @@ Nếu sau này muốn dùng hệ sinh thái LangChain (`ToolNode`, `with_structu
                                                      └────────────────────────────────────────────┘
 ```
 
-**STT nằm ngoài graph** (gọi qua endpoint riêng) để người dùng xem/sửa transcript trước khi bắt đầu một lượt agent (FR-01.3). Transcript đã duyệt cùng metadata độ tin cậy được gửi vào graph như text bình thường → hai loại đầu vào dùng chung một workflow (FR-01.5).
+**STT nằm ngoài graph** (gọi qua endpoint riêng). Ghi âm xong, UI gửi thẳng transcript vào graph, không có bước duyệt thủ công (FR-01.3). Transcript cùng metadata độ tin cậy (`stt_flags`) được gửi vào graph như text bình thường; từ bị gắn cờ khiến validator grounding chuyển trường liên quan sang `ask_user` (FR-01.4) → hai loại đầu vào dùng chung một workflow (FR-01.5).
 
 ---
 
@@ -387,7 +387,7 @@ Tool cho LLM khai báo với `strict: true` và `additionalProperties: false`; t
 
 ## 7. Đặt lịch khám bằng giọng nói (booking)
 
-Booking dùng lại toàn bộ hạ tầng của luồng báo cáo: STT → transcript review → cùng graph chính → subgraph `booking_flow` → validator pipeline → `interrupt` xác nhận → tool ghi do code gọi → kiểm tra kết quả. Phần mới chủ yếu là **quy đổi ngày giờ**, **chọn slot từ danh sách backend** và **chống đặt trùng khi nhiều người tranh cùng slot**.
+Booking dùng lại toàn bộ hạ tầng của luồng báo cáo: STT (transcript + cờ độ tin cậy) → cùng graph chính → subgraph `booking_flow` → validator pipeline → `interrupt` xác nhận → tool ghi do code gọi → kiểm tra kết quả. Phần mới chủ yếu là **quy đổi ngày giờ**, **chọn slot từ danh sách backend** và **chống đặt trùng khi nhiều người tranh cùng slot**.
 
 Toàn bộ khoa, bác sĩ, slot và lịch hẹn đều là **dữ liệu giả lập** trong Postgres; không tích hợp HIS.
 
@@ -540,7 +540,7 @@ Kết quả luôn là một `option_no` thuộc danh sách đã đưa ra — dù
 
 | Rủi ro | Ví dụ | Biện pháp |
 |---|---|---|
-| Nhầm số ngày/giờ | "hai" ↔ "hai mươi", "bảy giờ" ↔ "bảy" | STT flag theo xác suất từ gần token số/ngày; UI tô sáng khi duyệt transcript; đọc lại dạng đầy đủ "Thứ Ba, 03/11/2026, 09:00". |
+| Nhầm số ngày/giờ | "hai" ↔ "hai mươi", "bảy giờ" ↔ "bảy" | STT flag theo xác suất từ gần token số/ngày → agent hỏi lại; đọc lại dạng đầy đủ "Thứ Ba, 03/11/2026, 09:00". |
 | Nhầm tên khoa | "khoa nội" ↔ "khoa ngoại" | Khoa chỉ nhận giá trị trong danh mục; điểm fuzzy match thấp hoặc gần hai khoa → hỏi lại. |
 | Xác nhận mơ hồ | "ừ", "ờ được" lẫn tiếng ồn | Xác nhận đặt lịch bằng giọng nói chỉ chấp nhận cụm rõ ("đồng ý", "xác nhận", "đặt đi") hoặc nút bấm; còn lại hỏi lại. |
 | Tên bác sĩ nhận sai | "BS. An" ↔ "BS. Anh" | So khớp với danh sách bác sĩ của khoa; không khớp chắc chắn → bỏ ràng buộc bác sĩ và báo rõ điều đó. |
@@ -567,7 +567,7 @@ class SttResult(BaseModel):
 
 - Implementation mặc định: `FasterWhisperProvider(model_size=settings.stt_model, device="cpu", compute_type="int8")`, `word_timestamps=True`, `vad_filter=True`.
 - Model cấu hình qua env (`STT_MODEL=small|medium|large-v3|<đường dẫn model đã convert>`). Có thể thử bản Whisper fine-tune tiếng Việt (ví dụ PhoWhisper) sau khi convert sang CTranslate2 — chỉ đổi config, không đổi agent (FR-01.6).
-- **Gắn cờ (FR-01.4) bằng code:** từ có `probability < ngưỡng` nằm gần token số/ngày/giờ/thứ trong tuần/mức đau/tên hoạt động/tên khoa/tên bác sĩ → `SttFlag`. UI tô sáng các đoạn này khi người dùng duyệt transcript; nếu người dùng không sửa, validator grounding chuyển trường liên quan sang `ask_user`.
+- **Gắn cờ (FR-01.4) bằng code:** từ có `probability < ngưỡng` nằm gần token số/ngày/giờ/thứ trong tuần/mức đau/tên hoạt động/tên khoa/tên bác sĩ → `SttFlag`. Cờ được gửi kèm transcript vào graph; validator grounding chuyển trường có evidence trùng đoạn bị gắn cờ sang `ask_user`.
 - Truyền `initial_prompt`/hotwords chứa danh mục khoa và tên bác sĩ giả lập để tăng độ chính xác nhận dạng tên riêng (đọc từ DB lúc khởi động; danh mục thay đổi thì khởi động lại).
 - Model load một lần lúc khởi động (FastAPI lifespan); chạy trong threadpool (`run_in_threadpool`) để không chặn event loop.
 
@@ -697,7 +697,7 @@ Chi tiết ở [docs/EVALUATION.md](docs/EVALUATION.md). Tóm tắt:
 | 6 | `FieldExplanation` + `respond` + `rag_answer` có citation | — |
 | 7 | Booking bằng text: dữ liệu seed khoa/bác sĩ/slot, `vi_dates`, `booking_rules`, subgraph `booking_flow`, `match_selection`, test đồng thời | holidays |
 | 8 | Dataset + runner + metric (báo cáo và booking) | pandas, jiwer |
-| 9 | STT endpoint + cờ độ tin cậy + UI duyệt transcript; bộ audio test cho cả báo cáo và booking (số, ngày, giờ, tên khoa) | faster-whisper, streamlit |
+| 9 | STT endpoint + cờ độ tin cậy + UI ghi âm gửi thẳng; bộ audio test cho cả báo cáo và booking (số, ngày, giờ, tên khoa) | faster-whisper, streamlit |
 | 10 (P1) | Đổi/hủy lịch, giữ chỗ slot có TTL, TTS đọc lại xác nhận | — |
 
 Booking được làm bằng text trước (bước 7) rồi mới thêm giọng nói (bước 9): vì giọng nói chỉ là STT đi vào cùng workflow, mọi lỗi logic đặt lịch được bắt bằng test text — rẻ và tái lập được — trước khi thêm biến số nhận dạng giọng nói.

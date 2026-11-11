@@ -137,6 +137,12 @@ def create_app(container_factory: Callable[[], AbstractAsyncContextManager[Conta
             await c.auth.logout(token)
         response.delete_cookie(SESSION_COOKIE, path="/")
 
+    @app.post("/v1/auth/logout-all", status_code=204)
+    async def logout_all(user: U, response: Response, c: C) -> None:
+        """Đăng xuất mọi thiết bị: thu hồi mọi phiên của tài khoản, kể cả phiên đang gọi."""
+        await c.auth.logout_everywhere(user.id)
+        response.delete_cookie(SESSION_COOKIE, path="/")
+
     @app.get("/v1/auth/me")
     async def me(user: U) -> User:
         return user

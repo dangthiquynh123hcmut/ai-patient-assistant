@@ -61,14 +61,13 @@
 
 <section id="overview">
   <h2>1. Tổng thể hệ thống</h2>
-  <p class="desc">STT chạy ngoài graph để người dùng duyệt transcript trước. Text và transcript đã duyệt đi vào cùng một LangGraph. LLM chỉ được gọi qua <code>LLMProvider</code>; tool ghi chỉ do code gọi.</p>
+  <p class="desc">STT chạy ngoài graph; ghi âm xong, transcript được gửi thẳng kèm cờ độ tin cậy. Text và transcript đi vào cùng một LangGraph. LLM chỉ được gọi qua <code>LLMProvider</code>; tool ghi chỉ do code gọi.</p>
   <div class="diagram"><pre class="mermaid">
 flowchart TB
   U(["👤 Người dùng"]):::user
   subgraph UI["UI (Streamlit)"]
     direction TB
-    ui1["Chat"]
-    ui2["Duyệt / sửa transcript"]
+    ui1["Chat · ghi âm (gửi thẳng)"]
     ui3["Chọn slot · Xác nhận bản nháp"]
   end
   subgraph API["FastAPI"]
@@ -272,10 +271,9 @@ sequenceDiagram
   UI->>API: POST /stt/transcribe (audio)
   API->>STT: transcribe(vi)
   STT-->>API: text + xác suất<br/>từng từ + cờ
-  API-->>UI: transcript, tô sáng đoạn nghi ngờ
-  U->>UI: duyệt / sửa transcript
-  UI->>API: POST /chat/{thread}/messages
-  API->>G: ainvoke(transcript đã duyệt)
+  API-->>UI: transcript + cờ
+  UI->>API: POST /chat/{thread}/messages<br/>(gửi thẳng, input_source=voice)
+  API->>G: ainvoke(transcript + stt_flags)
   G->>G: ingest → guard_input<br/>→ classify = book_appointment
   G->>L: extract_booking (structured output)
   L-->>G: BookingRequest + evidence

@@ -132,7 +132,7 @@ class SessionRow(Base):
     __tablename__ = "sessions"
     token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    expires_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)  # job dọn phiên hết hạn
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
 
 

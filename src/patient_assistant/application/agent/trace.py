@@ -114,7 +114,7 @@ def _decision(update: dict[str, Any]) -> str:
 def _summary(node: str, u: dict[str, Any]) -> str:  # noqa: C901 - một nhánh cho mỗi loại node
     outcome = _outcome(u)
     if node == "ingest":
-        return "Chuẩn hóa văn bản đầu vào (text hoặc transcript đã duyệt)."
+        return "Chuẩn hóa văn bản đầu vào (text hoặc transcript từ giọng nói)."
     if node == "guard_input":
         kind = u.get("safety", "ok")
         return (
