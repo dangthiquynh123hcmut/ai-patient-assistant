@@ -60,7 +60,7 @@ export function ChatPage() {
           <div className="badges">
             <span className="badge on">LLM: {meta.llm_model}</span>
             <span className={`badge ${meta.stt_enabled ? "on" : "off"}`}>
-              STT: {meta.stt_enabled ? meta.stt_model : "tắt"}
+              STT: {meta.stt_enabled ? `${meta.stt_model} · ${meta.stt_language}` : "tắt"}
             </span>
             <span className="badge">Hôm nay: {slotWhen(meta.now).split(" · ")[0]}</span>
             <span className="badge">Khoa: {meta.departments.map((d) => d.name).join(", ")}</span>
@@ -156,8 +156,9 @@ export function ChatPage() {
             pendingKind={chat.pending?.kind ?? null}
             busy={chat.busy}
             sttEnabled={meta?.stt_enabled ?? false}
+            defaultLanguage={meta?.stt_language ?? "en"}
             onSend={(text) => void chat.send(text)}
-            onAudio={(audio, name) => void chat.transcribe(audio, name)}
+            onAudio={(audio, name, language) => void chat.transcribe(audio, name, language)}
           />
         </section>
 

@@ -7,7 +7,7 @@ from typing import Any
 from patient_assistant.evaluation.harness import CaseObservation
 from patient_assistant.evaluation.metrics import EvalReport, Rate
 
-HARD_ZERO = ("false_success", "slot_hallucination", "double_booking")
+HARD_ZERO = ("false_success", "slot_hallucination", "double_booking", "own_schedule_overlap")
 
 
 def _fmt(value: Any) -> str:

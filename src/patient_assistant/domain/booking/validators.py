@@ -13,7 +13,7 @@ from patient_assistant.domain.booking.models import BookingRequest, Department, 
 from patient_assistant.domain.booking.policy import BookingPolicy, window_issues
 from patient_assistant.domain.common import Layer, Resolution, SttFlag, ValidationIssue
 from patient_assistant.domain.text.grounding import overlapping_flags, quote_in_sources
-from patient_assistant.domain.text.normalize import contains_phrase, normalize
+from patient_assistant.domain.text.normalize import contains_phrase, normalize, unaccent
 from patient_assistant.domain.text.vi_dates import DateResolution
 
 VERBATIM_FIELDS = ("doctor_name", "date_expression", "time_expression", "reason")
@@ -94,11 +94,16 @@ def department_in_text(text: str, departments: list[Department]) -> Department |
 
 def find_doctor(name: str, department_code: str | None, doctors: list[Doctor]) -> Doctor | None:
     """Khớp tên bác sĩ theo chuỗi con đã chuẩn hóa; chỉ trả về khi khớp đúng một người."""
-    wanted = normalize(name).removeprefix("bác sĩ ").removeprefix("bs ").strip()
+    wanted = normalize(name)
+    for prefix in ("bác sĩ ", "bs ", "doctor ", "dr "):
+        wanted = wanted.removeprefix(prefix)
+    wanted = wanted.strip()
     if not wanted:
         return None
     pool = [d for d in doctors if department_code is None or d.department_code == department_code]
     matches = [d for d in pool if f" {wanted} " in f" {normalize(d.name)} "]
+    if not matches:  # gõ/nói không dấu hoặc tiếng Anh: "doctor Binh"
+        matches = [d for d in pool if f" {unaccent(wanted)} " in f" {unaccent(d.name)} "]
     return matches[0] if len(matches) == 1 else None
 
 

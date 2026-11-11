@@ -149,6 +149,12 @@ async def seed_demo_data(
             existing = set(await session.scalars(select(key)))
             session.add_all(row for k, row in rows.items() if k not in existing)
             await session.flush()
+        # Tên gọi khác mới thêm vào JSON (ví dụ tên khoa tiếng Anh) cũng bổ sung cho khoa đã có; không xóa tên cũ.
+        wanted = {d.code: list(d.aliases) for d in seed.DEPARTMENTS}
+        for row in await session.scalars(select(DepartmentRow)):
+            merged = list(dict.fromkeys([*row.aliases, *wanted.get(row.code, [])]))
+            if merged != list(row.aliases):
+                row.aliases = merged
     if not fresh:
         await _fill_patient_details(sessions)
         return await ensure_slots(sessions, today, tz)  # slot cho bác sĩ mới (và các ngày tới còn thiếu)

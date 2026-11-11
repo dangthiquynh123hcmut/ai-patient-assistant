@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
 
-from patient_assistant.evaluation.cases import WRITE_TOOLS, EvalCase
+from patient_assistant.evaluation.cases import WRITE_TOOLS, EvalCase, OfferExpect
 from patient_assistant.evaluation.harness import CaseObservation
 
 SUCCESS_OUTCOMES = {"report_saved": "Đã lưu báo cáo", "appointment_booked": "Đã đặt lịch"}
@@ -59,6 +60,7 @@ class EvalReport(BaseModel):
     false_success: Rate
     slot_hallucination: Rate
     double_booking: Rate
+    own_schedule_overlap: Rate  # đề xuất slot trùng giờ lịch hẹn bệnh nhân đã có
     latency_ms: dict[str, int]
     by_suite: dict[str, Rate]
     verdicts: list[CaseVerdict]
@@ -78,6 +80,32 @@ def is_false_success(obs: CaseObservation) -> bool:
     if obs.outcome == "appointment_booked":
         return not obs.booked_slot_ids
     return claims
+
+
+def offer_failures(expect: OfferExpect, offers: list[dict[str, Any]]) -> list[str]:
+    """So lần đề xuất slot đầu tiên với kỳ vọng của case."""
+    if not offers:
+        return ["offers: không có lần đề xuất slot nào"]
+    failures: list[str] = []
+    starts = [datetime.fromisoformat(o["start_at"]) for o in offers]
+    hhmm = [s.strftime("%H:%M") for s in starts]
+    if expect.on_date and any(s.date() != expect.on_date for s in starts):
+        failures.append(f"offers: expected all on {expect.on_date}, got {[s.date().isoformat() for s in starts]}")
+    if expect.department and any(o["department_code"] != expect.department for o in offers):
+        failures.append(
+            f"offers: expected department {expect.department}, got {[o['department_code'] for o in offers]}"
+        )
+    if expect.doctor and any(o["doctor_id"] != expect.doctor for o in offers):
+        failures.append(f"offers: expected doctor {expect.doctor}, got {[o['doctor_id'] for o in offers]}")
+    if expect.first_start and hhmm[0] != expect.first_start:
+        failures.append(f"offers: expected first slot at {expect.first_start}, got {hhmm[0]}")
+    if expect.min_start and any(h < expect.min_start for h in hhmm):
+        failures.append(f"offers: expected all from {expect.min_start}, got {hhmm}")
+    if expect.max_start and any(h > expect.max_start for h in hhmm):
+        failures.append(f"offers: expected all until {expect.max_start}, got {hhmm}")
+    if expect.hint is not None and any(bool(o.get("hint")) != expect.hint for o in offers):
+        failures.append(f"offers: expected hint={expect.hint}, got {[bool(o.get('hint')) for o in offers]}")
+    return failures
 
 
 def _first_attempt_fields(obs: CaseObservation, fields: dict[str, Any]) -> tuple[int, int]:
@@ -116,6 +144,13 @@ def verdict(case: EvalCase, obs: CaseObservation) -> CaseVerdict:
     for text in exp.response_contains:
         if text not in obs.response_text:
             failures.append(f"response missing {text!r}")
+    for text in exp.interrupt_contains:
+        if not any(text in m for m in obs.interrupt_messages):
+            failures.append(f"no question contains {text!r}")
+    if exp.offers is not None and case.concurrency is None:
+        failures += offer_failures(exp.offers, obs.first_offers)
+    if obs.own_overlap_slot_ids:
+        failures.append(f"offered slots overlapping own appointments {obs.own_overlap_slot_ids}")
     if is_false_success(obs):
         failures.append("FALSE SUCCESS")
     if obs.hallucinated_slot_ids:
@@ -295,6 +330,10 @@ def compute(cases: list[EvalCase], observations: list[CaseObservation]) -> EvalR
             sum(1 for o in observations if o.offered_slot_ids or o.booked_slot_ids),
         ),
         double_booking=Rate.of(len(double_cases), len(booking_cases)),
+        own_schedule_overlap=Rate.of(
+            sum(bool(o.own_overlap_slot_ids) for o in observations),
+            sum(1 for o in observations if o.offered_slot_ids),
+        ),
         latency_ms={
             "p50": _percentile(latencies, 0.5),
             "p95": _percentile(latencies, 0.95),

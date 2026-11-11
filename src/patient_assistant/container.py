@@ -91,14 +91,26 @@ def build_stt(settings: Settings) -> STTPort:
 
     if not settings.stt_enabled:
         return UnavailableSTT()
-    hint = (
-        "Khoa: "
-        + ", ".join(d.name for d in seed.DEPARTMENTS)
-        + ". Bác sĩ: "
-        + ", ".join(d.name for d in seed.DOCTORS)
-        + "."
-    )
-    return FasterWhisperSTT(settings.stt_model, compute_type=settings.stt_compute_type, initial_prompt=hint)
+    return FasterWhisperSTT(settings.stt_model, compute_type=settings.stt_compute_type, initial_prompts=stt_prompts())
+
+
+def stt_prompts() -> dict[str, str]:
+    """initial_prompt theo ngôn ngữ: từ vựng của phòng khám để whisper nhận đúng tên riêng."""
+    doctors = ", ".join(d.name.removeprefix("BS. ") for d in seed.DOCTORS)
+    return {
+        "vi": (
+            "Khoa: "
+            + ", ".join(d.name for d in seed.DEPARTMENTS)
+            + ". Bác sĩ: "
+            + ", ".join(d.name for d in seed.DOCTORS)
+            + "."
+        ),
+        "en": (
+            "A patient talks to a rehabilitation clinic assistant about booking an appointment "
+            "(department, doctor, day, morning or afternoon) or a weekly report "
+            f"(pain level from 0 to 10, exercise days, symptoms). Doctors: {doctors}."
+        ),
+    }
 
 
 @cache
@@ -175,7 +187,7 @@ def assemble(
         conversations=ConversationService(chat, repos["conversation_log"], clock),
         auth=auth,
         log=repos["conversation_log"],
-        transcribe=TranscribeUseCase(stt, settings.stt_confidence_threshold),
+        transcribe=TranscribeUseCase(stt, settings.stt_confidence_threshold, settings.stt_language),
         toolbox=toolbox,
         clock=clock,
         settings=settings,

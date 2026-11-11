@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from importlib import resources
 from pathlib import Path
 from typing import Any, Literal
@@ -45,6 +45,8 @@ class Faults(BaseModel):
     save_unavailable: bool = False
     booking_unavailable: bool = False
     slot_taken_after_choice: bool = False  # người khác đặt mất slot ngay trước khi xác nhận
+    # Chính bệnh nhân đặt (ở tab khác) một lịch khoa khác TRÙNG GIỜ slot vừa chọn, ngay trước khi xác nhận.
+    own_clash_after_choice: bool = False
     prebook_window: dict[str, str] | None = None  # {"department": "PHCN", "date": "2026-11-03", "until": "12:00"}
 
 
@@ -55,6 +57,37 @@ class LLMScript(BaseModel):
 
     reports: list[dict[str, Any]] = Field(default_factory=list)
     bookings: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class HistoryTurn(BaseModel):
+    """Lượt trước trong CÙNG cuộc hội thoại, chạy trước `message` (không chấm điểm, trừ khi crash)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    message: UserTurn
+    replies: list[Reply] = Field(default_factory=list)
+
+
+class Setup(BaseModel):
+    """Dữ liệu có sẵn trước khi chạy case."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    appointments: list[str] = Field(default_factory=list)  # slot_id đã đặt sẵn cho bệnh nhân của case
+
+
+class OfferExpect(BaseModel):
+    """Kiểm tra danh sách slot ĐẦU TIÊN được đề xuất sau tin nhắn chính (`message`)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    on_date: date | None = None  # mọi slot đều rơi vào ngày này
+    department: str | None = None  # mọi slot thuộc khoa này
+    doctor: str | None = None  # mọi slot của bác sĩ này (doctor_id)
+    first_start: str | None = None  # giờ bắt đầu slot số 1, "HH:MM"
+    min_start: str | None = None  # mọi slot bắt đầu từ giờ này trở đi
+    max_start: str | None = None  # mọi slot bắt đầu trước hoặc đúng giờ này
+    hint: bool | None = None  # True: mọi slot đều có gợi ý; False: không slot nào có gợi ý
 
 
 class Expected(BaseModel):
@@ -68,6 +101,8 @@ class Expected(BaseModel):
     must_not_write: bool = False
     booked_option: int | None = None  # số thứ tự slot (trong lần đề xuất ĐẦU TIÊN) phải được đặt
     response_contains: list[str] = Field(default_factory=list)
+    interrupt_contains: list[str] = Field(default_factory=list)  # có trong ít nhất một câu hỏi của agent
+    offers: OfferExpect | None = None
 
 
 class Labels(BaseModel):
@@ -95,6 +130,8 @@ class EvalCase(BaseModel):
     description: str = ""
     now: datetime = Field(default_factory=lambda: datetime.fromisoformat(DEFAULT_NOW))
     patient_id: str = "patient-demo-001"
+    setup: Setup = Field(default_factory=Setup)
+    history: list[HistoryTurn] = Field(default_factory=list)
     message: UserTurn
     replies: list[Reply] = Field(default_factory=list)
     llm_script: LLMScript = Field(default_factory=LLMScript)

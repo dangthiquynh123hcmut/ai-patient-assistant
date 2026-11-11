@@ -8,6 +8,7 @@ import type {
   InterruptPayload,
   StepTrace,
   SttFlag,
+  SttLanguage,
   TranscriptReview,
   TurnResult,
 } from "../../api/types";
@@ -103,11 +104,11 @@ export function useChat(onError: (message: string) => void) {
   );
 
   const transcribe = useCallback(
-    async (audio: Blob, filename: string) => {
+    async (audio: Blob, filename: string, language?: SttLanguage) => {
       busyRef.current = true;
       setBusy(true);
       try {
-        push({ type: "transcript", review: await api.transcribe(audio, filename), done: false });
+        push({ type: "transcript", review: await api.transcribe(audio, filename, language), done: false });
       } catch (err) {
         onError(`STT lỗi: ${errorText(err)}`);
       } finally {

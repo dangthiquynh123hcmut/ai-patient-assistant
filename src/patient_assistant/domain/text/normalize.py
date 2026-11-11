@@ -15,6 +15,12 @@ def normalize(text: str) -> str:
     return _SPACES.sub(" ", text).strip()
 
 
+def unaccent(text: str) -> str:
+    """normalize + bỏ dấu tiếng Việt: "BS. Lê Thị Bình" -> "bs le thi binh" (người gõ/nói không dấu, tiếng Anh)."""
+    decomposed = unicodedata.normalize("NFD", normalize(text).replace("đ", "d"))
+    return unicodedata.normalize("NFC", "".join(c for c in decomposed if unicodedata.category(c) != "Mn"))
+
+
 def tokens(text: str) -> list[str]:
     norm = normalize(text)
     return norm.split(" ") if norm else []

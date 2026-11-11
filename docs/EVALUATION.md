@@ -6,7 +6,7 @@ Code nằm ở `src/patient_assistant/evaluation/`:
 
 | File | Vai trò |
 |---|---|
-| `datasets/*.jsonl` | Dataset: `report.jsonl` (23 case), `booking.jsonl` (26), `conversation.jsonl` (11) |
+| `datasets/*.jsonl` | Dataset: `report.jsonl` (23 case), `booking.jsonl` (37), `conversation.jsonl` (27) |
 | `cases.py` | Schema case (Pydantic) và hàm `load_cases` (báo lỗi theo `file:dòng`, chặn id trùng) |
 | `harness.py` | Chạy case qua `ChatUseCase`, trả lời các interrupt theo kịch bản, tiêm lỗi, ghi `CaseObservation` |
 | `metrics.py` | Hàm thuần: (case, observation) → metric và verdict từng case |
@@ -47,10 +47,13 @@ Mỗi dòng JSONL là một case. Các trường:
 | `patient_id` | Mặc định `patient-demo-001` (có kế hoạch theo dõi ở khoa PHCN); `patient-no-plan` là bệnh nhân chưa có kế hoạch |
 | `message` | Tin nhắn đầu tiên: `text`, `input_source` (`text`/`voice`), `stt_flags` (giả lập STT nhận dạng kém) |
 | `replies` | Câu trả lời cho các interrupt, dùng lần lượt. Hết danh sách thì dừng, kết quả là `waiting` |
+| `setup.appointments` | slot_id đặt sẵn cho bệnh nhân trước khi chạy (đo lọc trùng lịch, gợi ý cùng ngày, giới hạn số lịch). Không tính là lịch do case tạo ra |
+| `history` | Các lượt trước trong **cùng** cuộc hội thoại (`message` + `replies`), chạy trước `message` và không chấm điểm. Dùng cho bộ nhớ hội thoại ("như vậy", "bác sĩ đó", "khoa đó") |
 | `llm_script.reports` / `llm_script.bookings` | Đầu ra LLM **tiêm sẵn** (cố ý sai) cho các lần trích xuất đầu. Hết danh sách thì dùng LLM thật |
-| `faults` | `llm_unavailable`, `save_unavailable`, `booking_unavailable`, `slot_taken_after_choice`, `prebook_window` |
+| `faults` | `llm_unavailable`, `save_unavailable`, `booking_unavailable`, `slot_taken_after_choice`, `own_clash_after_choice` (chính bệnh nhân đặt lịch khoa khác trùng giờ ngay trước khi xác nhận), `prebook_window` |
 | `concurrency.sessions` | Chạy N phiên (N bệnh nhân) song song, cùng chốt một slot vào cùng một thời điểm |
-| `expected` | `intent`, `outcome`, `should_clarify`, `fields`, `tools`, `must_not_write`, `booked_option`, `response_contains` |
+| `expected` | `intent`, `outcome`, `should_clarify`, `fields`, `tools`, `must_not_write`, `booked_option`, `response_contains`, `interrupt_contains` (có trong ít nhất một câu hỏi của agent), `offers` |
+| `expected.offers` | Kiểm tra lần đề xuất slot **đầu tiên** sau `message`: `on_date`, `department`, `doctor`, `first_start`, `min_start`, `max_start` (giờ dạng `HH:MM`), `hint` (mọi slot có / không có gợi ý cùng ngày) |
 | `labels` | Nhãn cho validator: `injected_error`, `first_attempt_valid`, `issue_codes` |
 
 Ví dụ một case tiêm lỗi:
@@ -83,9 +86,24 @@ Ví dụ một case tiêm lỗi:
 | **False-success** (= 0) | Agent báo `report_saved` / `appointment_booked` nhưng backend không có bản ghi tương ứng, hoặc kết quả không phải thành công mà câu trả lời vẫn chứa "Đã lưu báo cáo" / "Đã đặt lịch" |
 | **Slot hallucination** (= 0) | Slot được đề xuất không có trong kho slot, hoặc slot đã đặt không nằm trong danh sách vừa đề xuất cho người dùng |
 | **Double-booking** (= 0) | Sau khi chạy xong case, có slot nào có hơn một lịch hẹn hiệu lực. Case `bk-conc-01` dùng 5 phiên chốt cùng lúc, và phải có đúng 1 phiên đặt được |
+| **Own-schedule overlap** (= 0) | Slot được đề xuất trùng giờ một lịch hẹn mà bệnh nhân **đã có tại thời điểm đề xuất** (từ `setup`, lượt `history`, hoặc lịch tự đặt ở tab khác). Mẫu số: số phiên có đề xuất slot |
 | **Latency** | p50 / p95 / max thời gian chạy một case (mỗi phiên tính riêng) |
 
-Ba metric đánh dấu "= 0" là ngưỡng cứng. `--fail-on-hard-zero` trả exit code 1 nếu có metric nào khác 0, dùng được trong CI.
+Bốn metric đánh dấu "= 0" là ngưỡng cứng. `--fail-on-hard-zero` trả exit code 1 nếu có metric nào khác 0, dùng được trong CI.
+
+## Nhóm case theo tính năng (bổ sung 2026-11)
+
+| Nhóm | Case | Đo gì |
+|---|---|---|
+| Lịch của chính bệnh nhân | `bk-own-01`, `bk-clash-01`, `bk-max-01` | Không đề xuất slot trùng/sát lịch đã có; trùng lúc xác nhận thì giữ yêu cầu và chỉ đề xuất giờ khác; đủ 3 lịch thì báo lỗi, không báo thành công giả |
+| Gợi ý cùng ngày | `bk-rec-01`, `bk-rec-02`, `bk-rec-03` | Slot cùng ngày với lịch đã có lên đầu, kèm gợi ý; vẫn giữ khung giờ người dùng nói; không có lịch thì không có gợi ý |
+| Bộ nhớ hội thoại | `conv-mem-01` … `conv-mem-05` | "như vậy" / "the same as before" dùng lại khoa + bác sĩ của lịch vừa đặt; "bác sĩ đó"; "khoa đó"; tham chiếu mơ hồ thì hỏi lại khoa |
+| Tiếng Anh | `bk-en-01` … `bk-en-04`, `conv-en-*` | Ngày giờ tiếng Anh do code quy đổi; "yes" chưa đủ là xác nhận; cụm mơ hồ được hỏi lại; cấp cứu / xin tư vấn thuốc bằng tiếng Anh bị chặn |
+| Hồi quy | `bk-mot-01` | "ngày mốt" không bị đọc thành "ngày 1" |
+
+`tests/integration/test_eval_new_cases.py` chạy các case này với một LLM thay thế trả đúng đầu ra trích xuất (không cần
+Bedrock) để kiểm tra dataset và harness, kèm một mutation test: tắt bộ lọc theo lịch bệnh nhân thì
+`own_schedule_overlap` phải khác 0 và hai case `bk-own-01`, `bk-rec-01` phải thất bại.
 
 ## Kết quả baseline cũ (LLM offline theo luật, 2026-10-28 — chế độ này đã bị xóa)
 

@@ -37,6 +37,10 @@ _INTENT_PHRASES: dict[Intent, tuple[str, ...]] = {
         "tình hình của tôi",
         "tổng quan",
         # Hỏi về bệnh nhân khác: vẫn vào đây, nhưng chỉ trả dữ liệu của chính người đang đăng nhập.
+        "my information",
+        "my profile",
+        "my treatment plan",
+        "my plan",
         "những bệnh nhân",
         "các bệnh nhân",
         "danh sách bệnh nhân",
@@ -57,9 +61,35 @@ _INTENT_PHRASES: dict[Intent, tuple[str, ...]] = {
         "những khoa",
         "khoa nào có",
         "có khoa",
+        "which doctors",
+        "list of doctors",
+        "what doctors",
+        "which departments",
+        "what departments",
+        "list of departments",
     ),
-    Intent.LIST_APPOINTMENTS: ("lịch hẹn của tôi", "xem lịch hẹn", "lịch đã đặt", "tôi có lịch hẹn", "các lịch hẹn"),
-    Intent.GET_REPORT_HISTORY: ("báo cáo trước", "lịch sử báo cáo", "các báo cáo", "xem báo cáo", "báo cáo cũ"),
+    Intent.LIST_APPOINTMENTS: (
+        "lịch hẹn của tôi",
+        "xem lịch hẹn",
+        "lịch đã đặt",
+        "tôi có lịch hẹn",
+        "các lịch hẹn",
+        "my appointments",
+        "my upcoming appointments",
+        "show my appointment",
+        "list my appointment",
+    ),
+    Intent.GET_REPORT_HISTORY: (
+        "báo cáo trước",
+        "lịch sử báo cáo",
+        "các báo cáo",
+        "xem báo cáo",
+        "báo cáo cũ",
+        "my reports",
+        "previous reports",
+        "past reports",
+        "report history",
+    ),
     Intent.BOOK_APPOINTMENT: (
         "đặt lịch",
         "hẹn khám",
@@ -70,6 +100,16 @@ _INTENT_PHRASES: dict[Intent, tuple[str, ...]] = {
         "book lịch",
         "đặt thêm",  # "đặt thêm một lịch như vậy"
         "đặt một lịch",
+        "book an appointment",
+        "book appointment",
+        "book a",
+        "book another",
+        "book me",
+        "make an appointment",
+        "schedule an appointment",
+        "schedule a",
+        "see a doctor",
+        "see the doctor",
     ),
     Intent.CREATE_REPORT: (
         "đau mức",
@@ -81,6 +121,11 @@ _INTENT_PHRASES: dict[Intent, tuple[str, ...]] = {
         "không tập",
         "báo cáo tuần",
         "báo cáo theo dõi",
+        "pain level",
+        "my pain",
+        "weekly report",
+        "send my report",
+        "i exercised",
     ),
     Intent.ANSWER_FAQ: (
         "có nên",
@@ -94,6 +139,11 @@ _INTENT_PHRASES: dict[Intent, tuple[str, ...]] = {
         "cần mang",
         "bao nhiêu",
         "ở đâu",
+        "how do i",
+        "how should i",
+        "how long",
+        "should i",
+        "what should i",
     ),
     Intent.SMALL_TALK: (
         "xin chào",
@@ -114,6 +164,10 @@ _INTENT_PHRASES: dict[Intent, tuple[str, ...]] = {
         "bạn giúp được gì",
         "bạn có thể làm gì",
         "bạn có thể giúp gì",
+        "who are you",
+        "what can you do",
+        "good morning",
+        "good afternoon",
     ),
 }
 
@@ -204,10 +258,22 @@ _CONTINUE = (
     "ở trên",
     "như trên",
     "như cũ",
+    "continue",
+    "carry on",
+    "go on",
+    "save it",
+    "as before",
+    "like before",
+    "what i said",
+    "i already said",
+    "i told you",
 )
 
 
-_QUESTION_WORDS = ("nào", "gì", "sao", "bao nhiêu", "mấy", "ai", "ở đâu", "khi nào", "được không", "có không")
+_QUESTION_WORDS = (
+    *("nào", "gì", "sao", "bao nhiêu", "mấy", "ai", "ở đâu", "khi nào", "được không", "có không"),
+    *("what", "which", "how", "when", "where", "who", "why", "can i", "do i", "is there", "are there"),
+)
 
 
 def looks_like_question(text: str) -> bool:
@@ -314,6 +380,22 @@ _EMERGENCY = (
     "liệt nửa người",
     "muốn tự tử",
     "bất tỉnh",
+    "chest pain",
+    "can t breathe",
+    "cannot breathe",
+    "can not breathe",
+    "shortness of breath",
+    "short of breath",
+    "fainted",
+    "passed out",
+    "seizure",
+    "bleeding heavily",
+    "heavy bleeding",
+    "unconscious",
+    "stroke",
+    "suicide",
+    "kill myself",
+    "emergency",
 )
 _MEDICAL_ADVICE = (
     "chẩn đoán",
@@ -331,6 +413,18 @@ _MEDICAL_ADVICE = (
     "nên khám khoa nào",
     "khám khoa nào",
     "có phải bị",
+    "diagnose",
+    "diagnosis",
+    "what disease",
+    "what illness",
+    "which medicine",
+    "what medicine",
+    "what medication",
+    "dosage",
+    "prescribe",
+    "prescription",
+    "stop taking",
+    "which department should",
 )
 
 
@@ -350,7 +444,10 @@ def check_input_safety(text: str) -> SafetyVerdict:
     return SafetyVerdict(SafetyKind.OK)
 
 
-_UNSAFE_OUTPUT = ("bạn bị", "chẩn đoán", "nên uống", "liều dùng", "ngưng thuốc", "tăng liều", "giảm liều", "kê đơn")
+_UNSAFE_OUTPUT = (
+    *("bạn bị", "chẩn đoán", "nên uống", "liều dùng", "ngưng thuốc", "tăng liều", "giảm liều", "kê đơn"),
+    *("diagnosis", "you should take", "dosage", "stop taking", "increase the dose", "reduce the dose", "prescribe"),
+)
 
 
 def output_is_safe(text: str) -> bool:
@@ -366,9 +463,17 @@ class ConfirmIntent(StrEnum):
     UNCLEAR = "unclear"
 
 
-_CONFIRM = ("đồng ý", "xác nhận", "đặt đi", "lưu đi", "chốt", "ok đặt", "đúng rồi lưu", "được đặt đi", "đồng ý lưu")
+_CONFIRM = (
+    *("đồng ý", "xác nhận", "đặt đi", "lưu đi", "chốt", "ok đặt", "đúng rồi lưu", "được đặt đi", "đồng ý lưu"),
+    # Tiếng Anh: chỉ cụm rõ ràng; "yes", "ok", "sure" đứng một mình bị coi là chưa rõ (giống "ừ").
+    *("confirm", "i confirm", "confirmed", "book it", "save it", "go ahead", "yes book", "yes save", "i agree"),
+)
 # Không dùng "thôi" đứng một mình: "tập 5 ngày thôi" không phải hủy.
-_CANCEL = ("hủy", "huỷ", "không đặt", "không lưu", "thôi khỏi", "thôi không", "dừng lại", "bỏ qua")
+_CANCEL = (
+    *("hủy", "huỷ", "không đặt", "không lưu", "thôi khỏi", "thôi không", "dừng lại", "bỏ qua"),
+    *("cancel", "never mind", "nevermind", "forget it", "don t book", "do not book", "don t save"),
+    *("do not save", "don t confirm", "do not confirm"),
+)
 
 
 def interpret_confirmation(text: str) -> ConfirmIntent:
@@ -400,6 +505,14 @@ _IMPORTANT_WORDS = set(DIGITS) | {
     "sĩ",
     "đau",
     "tập",
+}
+# Audio tiếng Anh: số, ngày giờ và các từ khóa nghiệp vụ cũng phải được gắn cờ khi nhận dạng kém (FR-01.4).
+_IMPORTANT_WORDS |= {
+    *["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"],
+    *["twenty", "thirty", "half", "quarter", "am", "pm"],
+    *["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
+    *["today", "tomorrow", "week", "morning", "afternoon", "evening", "noon"],
+    *["doctor", "department", "pain", "exercise", "exercised", "days"],
 }
 
 

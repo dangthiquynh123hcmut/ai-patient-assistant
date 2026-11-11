@@ -41,9 +41,13 @@ from patient_assistant.domain.conversation import ConfirmIntent
 from patient_assistant.domain.text.normalize import contains_phrase
 from patient_assistant.domain.text.vi_dates import DateResolution, mentions_when, resolve
 
-_EDIT = ("đổi", "sửa", "chuyển sang", "thay")
-_OTHER_TIME = ("giờ khác", "ngày khác", "lịch khác", "đổi ngày", "đổi giờ", "không được", "không hợp")
-_ORDINAL_WORDS = ("cái", "số", "phương án", "lựa chọn", "option")
+_EDIT = ("đổi", "sửa", "chuyển sang", "thay", "change", "edit", "switch to", "instead", "move it")
+_OTHER_TIME = (
+    *("giờ khác", "ngày khác", "lịch khác", "đổi ngày", "đổi giờ", "không được", "không hợp"),
+    *("another time", "other time", "different time", "another day", "other day", "different day"),
+    *("other options", "other slots", "something else", "none of these", "doesn t work", "does not work"),
+)
+_ORDINAL_WORDS = ("cái", "số", "phương án", "lựa chọn", "option", "number", "choice")
 
 
 class BookingNodes:

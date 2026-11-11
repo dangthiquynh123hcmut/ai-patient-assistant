@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from patient_assistant.domain.booking.models import Department, Doctor
 from patient_assistant.domain.booking.validators import department_in_text
 from patient_assistant.domain.conversation import Intent
-from patient_assistant.domain.text.normalize import contains_phrase, normalize
+from patient_assistant.domain.text.normalize import contains_phrase, normalize, unaccent
 from patient_assistant.domain.text.vi_dates import WEEKDAY_NAMES
 
 MAX_TURNS = 8
@@ -38,6 +38,12 @@ SAME_AS_BEFORE = (
     "như lịch đó",
     "giống lịch đó",
     "như lịch vừa rồi",
+    "the same as before",
+    "same as before",
+    "same as last time",
+    "like last time",
+    "like that one",
+    "same one",
 )
 DOCTOR_REF = (
     "bác sĩ đó",
@@ -50,6 +56,10 @@ DOCTOR_REF = (
     "cùng bác sĩ",
     "bs đó",
     "bs ấy",
+    "that doctor",
+    "the same doctor",
+    "same doctor",
+    "this doctor",
 )
 DEPARTMENT_REF = (
     "khoa đó",
@@ -59,6 +69,10 @@ DEPARTMENT_REF = (
     "khoa vừa rồi",
     "khoa lúc nãy",
     "cùng khoa",
+    "that department",
+    "the same department",
+    "same department",
+    "this department",
 )
 
 
@@ -113,17 +127,19 @@ def _short(text: str) -> str:
 
 
 def doctors_mentioned(text: str, doctors: list[Doctor]) -> list[str]:
-    """Bác sĩ người dùng gọi tên ("bác sĩ An", "BS. Trần Văn An"); chỉ nhận tên khớp đúng một người."""
-    norm = f" {normalize(text)} "
+    """Bác sĩ người dùng gọi tên ("bác sĩ An", "BS. Trần Văn An", "doctor Binh"); chỉ nhận tên khớp đúng một người.
+    So khớp không dấu để nhận cả người gõ/nói không dấu hoặc tiếng Anh."""
+    plain = f" {unaccent(text)} "
     found: list[str] = []
     for d in doctors:
-        full = normalize(d.name).removeprefix("bs ").strip()
+        full = unaccent(d.name).removeprefix("bs ").strip()
         given = full.split(" ")[-1]
-        if f" {full} " in norm:
+        if f" {full} " in plain:
             found.append(d.id)
             continue
-        same_given = [o for o in doctors if normalize(o.name).split(" ")[-1] == given]
-        if len(same_given) == 1 and contains_phrase(text, (f"bác sĩ {given}", f"bs {given}")):
+        same_given = [o for o in doctors if unaccent(o.name).split(" ")[-1] == given]
+        titles = ("bac si", "bs", "doctor", "dr")
+        if len(same_given) == 1 and any(f" {t} {given} " in plain for t in titles):
             found.append(d.id)
     return found
 

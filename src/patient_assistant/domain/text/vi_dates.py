@@ -1,4 +1,4 @@
-"""Quy đổi cụm ngày giờ tiếng Việt thành khoảng thời gian cụ thể.
+"""Quy đổi cụm ngày giờ tiếng Việt (và tiếng Anh, qua `en_dates`) thành khoảng thời gian cụ thể.
 
 Nguyên tắc: LLM chỉ trích nguyên văn cụm thời gian; mọi phép tính ngày nằm ở đây, là code thuần,
 nhận `now` từ bên ngoài để test/eval tái lập được. Cụm mơ hồ hoặc mâu thuẫn -> trả issue `ask_user`,
@@ -14,6 +14,7 @@ from datetime import date, datetime, time, timedelta
 from pydantic import BaseModel, ConfigDict
 
 from patient_assistant.domain.common import Layer, Resolution, ValidationIssue
+from patient_assistant.domain.text.en_dates import english_to_vi
 from patient_assistant.domain.text.normalize import contains_phrase, normalize
 from patient_assistant.domain.text.vi_numbers import digitize
 
@@ -121,20 +122,21 @@ def _explicit_date(text: str, today: date) -> tuple[date | None, ValidationIssue
 
 
 def _resolve_date(raw: str, today: date) -> tuple[DateWindow | None, list[ValidationIssue]]:
-    norm = expand_weekday_abbrev(normalize(raw))
+    norm = expand_weekday_abbrev(english_to_vi(normalize(raw)))
     if not norm:
         return None, [_issue("date_expression", "date_missing", "Chưa có ngày muốn khám.")]
 
     # Cụm phải kiểm tra trước khi digitize ("mốt" bị đọc thành số 1).
     relative: tuple[date, str] | None = None
-    if contains_phrase(norm, ("ngày kia", "ngày mốt", "mốt")):
+    if hit := contains_phrase(norm, ("ngày kia", "ngày mốt", "mốt")):
         relative = (today + timedelta(days=2), "day_after_tomorrow")
-    elif contains_phrase(norm, ("ngày mai", "mai")):
+    elif hit := contains_phrase(norm, ("ngày mai", "mai")):
         relative = (today + timedelta(days=1), "tomorrow")
-    elif contains_phrase(norm, ("hôm nay",)):
+    elif hit := contains_phrase(norm, ("hôm nay",)):
         relative = (today, "today")
 
-    text = digitize(norm)
+    # Bỏ cụm tương đối đã nhận trước khi đổi chữ số: "ngày mốt" không được đọc thành "ngày 1".
+    text = digitize(f" {norm} ".replace(f" {hit} ", " ") if relative and hit else norm)
     weekday = _weekday_mentioned(text)
     explicit, err = _explicit_date(text, today)
     if err:
@@ -193,7 +195,7 @@ def _resolve_date(raw: str, today: date) -> tuple[DateWindow | None, list[Valida
 
 
 def _resolve_time(raw: str, parts: DayParts) -> tuple[tuple[time, time] | None, str | None, list[ValidationIssue]]:
-    text = digitize(raw)
+    text = digitize(english_to_vi(normalize(raw)))
     if not text:
         return None, None, []
     part: str | None = None

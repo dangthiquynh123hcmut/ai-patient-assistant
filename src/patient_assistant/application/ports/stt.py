@@ -22,5 +22,10 @@ class STTError(Exception):
     pass
 
 
+STT_LANGUAGES = ("en", "vi", "auto")
+
+
 class STTPort(Protocol):
-    async def transcribe(self, audio: bytes, language: str = "vi") -> SttResult: ...
+    async def transcribe(self, audio: bytes, language: str | None) -> SttResult:
+        """`language`: mã ngôn ngữ ("en", "vi"); None = để model tự nhận ngôn ngữ."""
+        ...

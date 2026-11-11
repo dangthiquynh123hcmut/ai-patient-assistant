@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     stt_enabled: bool = False
     stt_model: str = "small"
     stt_compute_type: str = "int8"
+    # Ngôn ngữ mặc định khi client không gửi: "en", "vi" hoặc "auto" (whisper tự nhận ngôn ngữ).
+    # Ép sai ngôn ngữ làm whisper giải mã lại nhiều lần: chậm gấp nhiều lần và dễ "dịch" bừa.
+    stt_language: Literal["en", "vi", "auto"] = "en"
     stt_confidence_threshold: float = 0.6
 
     # Giới hạn agent

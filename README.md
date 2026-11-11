@@ -121,7 +121,7 @@ cd frontend && npm run typecheck
 .venv/bin/python -m patient_assistant.evaluation.runner
 ```
 
-Lệnh trên chạy 60 case JSONL qua agent thật, rồi xuất báo cáo vào `eval_reports/`. Báo cáo gồm field accuracy, tool call, FP/FN của validator, self-correction, tỷ lệ hỏi lại, và ba metric bắt buộc bằng 0: false-success, slot hallucination, double-booking. Định nghĩa từng metric ở [docs/EVALUATION.md](docs/EVALUATION.md). Eval luôn gọi Claude thật trên Bedrock nên **tốn phí**.
+Lệnh trên chạy 87 case JSONL qua agent thật, rồi xuất báo cáo vào `eval_reports/`. Báo cáo gồm field accuracy, tool call, FP/FN của validator, self-correction, tỷ lệ hỏi lại, và bốn metric bắt buộc bằng 0: false-success, slot hallucination, double-booking, own-schedule overlap. Định nghĩa từng metric ở [docs/EVALUATION.md](docs/EVALUATION.md). Eval luôn gọi Claude thật trên Bedrock nên **tốn phí**.
 
 ## Dữ liệu demo và database
 

@@ -52,6 +52,7 @@ export interface Meta {
   llm_model: string;
   stt_enabled: boolean;
   stt_model: string | null;
+  stt_language: SttLanguage;
   now: string;
   patients: PatientOption[];
   departments: Department[];
@@ -161,10 +162,15 @@ export interface SttFlag {
   reason: string;
 }
 
+/** Ngôn ngữ STT: "auto" = để model tự nhận. */
+export type SttLanguage = "en" | "vi" | "auto";
+
 export interface TranscriptReview {
   text: string;
   words: { word: string; probability: number }[];
   flags: SttFlag[];
+  /** Ngôn ngữ model đã dùng (hoặc tự nhận ra khi chọn "auto"). */
+  language: string;
 }
 
 // ------------------------------------------------------------------ state của agent (panel "cách agent ra quyết định")

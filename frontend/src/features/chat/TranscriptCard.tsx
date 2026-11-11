@@ -32,7 +32,9 @@ export function TranscriptCard({ review, done, onSend, onDiscard }: Props) {
   const [text, setText] = useState(review.text);
   return (
     <div className={`card transcript${done ? " answered" : ""}`}>
-      <h3>Kiểm tra transcript trước khi gửi</h3>
+      <h3>
+        Kiểm tra transcript trước khi gửi <span className="badge">ngôn ngữ: {review.language}</span>
+      </h3>
       <p className="muted">
         Đoạn tô vàng là từ quan trọng (số, ngày, giờ, khoa…) mà STT không chắc. Sửa nếu sai rồi bấm Gửi.
       </p>

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 
-import type { InterruptKind } from "../../api/types";
+import type { InterruptKind, SttLanguage } from "../../api/types";
 import { errorText, useToast } from "../../components/Toast";
 
 const PLACEHOLDER: Record<InterruptKind, string> = {
@@ -10,17 +10,41 @@ const PLACEHOLDER: Record<InterruptKind, string> = {
   confirm_report: "Ví dụ: xác nhận · hủy",
 };
 
+const LANGUAGE_LABEL: Record<SttLanguage, string> = { en: "English", vi: "Tiếng Việt", auto: "Tự nhận" };
+const LANGUAGE_KEY = "pa.sttLanguage";
+
+function storedLanguage(): SttLanguage | null {
+  try {
+    const v = localStorage.getItem(LANGUAGE_KEY);
+    return v === "en" || v === "vi" || v === "auto" ? v : null;
+  } catch {
+    return null;
+  }
+}
+
 interface Props {
   pendingKind: InterruptKind | null;
   busy: boolean;
   sttEnabled: boolean;
+  defaultLanguage: SttLanguage;
   onSend: (text: string) => void;
-  onAudio: (audio: Blob, filename: string) => void;
+  onAudio: (audio: Blob, filename: string, language: SttLanguage) => void;
 }
 
-export function Composer({ pendingKind, busy, sttEnabled, onSend, onAudio }: Props) {
+export function Composer({ pendingKind, busy, sttEnabled, defaultLanguage, onSend, onAudio }: Props) {
   const toast = useToast();
   const [text, setText] = useState("");
+  // Ngôn ngữ nói: nhớ lựa chọn của người dùng trên trình duyệt này, mặc định theo cấu hình server.
+  const [language, setLanguage] = useState<SttLanguage>(() => storedLanguage() ?? defaultLanguage);
+
+  function chooseLanguage(value: SttLanguage) {
+    setLanguage(value);
+    try {
+      localStorage.setItem(LANGUAGE_KEY, value);
+    } catch {
+      /* trình duyệt chặn lưu trữ: chỉ áp dụng cho phiên này */
+    }
+  }
   const [recording, setRecording] = useState(false);
   const recorder = useRef<MediaRecorder | null>(null);
 
@@ -58,7 +82,7 @@ export function Composer({ pendingKind, busy, sttEnabled, onSend, onAudio }: Pro
       rec.onstop = () => {
         stream.getTracks().forEach((t) => t.stop());
         setRecording(false);
-        onAudio(new Blob(chunks, { type: rec.mimeType || "audio/webm" }), "ghi-am.webm");
+        onAudio(new Blob(chunks, { type: rec.mimeType || "audio/webm" }), "ghi-am.webm", language);
       };
       recorder.current = rec;
       rec.start();
@@ -85,6 +109,20 @@ export function Composer({ pendingKind, busy, sttEnabled, onSend, onAudio }: Pro
           aria-label="Tin nhắn"
         />
         <div className="composer-actions">
+          <select
+            className="stt-language"
+            value={language}
+            onChange={(e) => chooseLanguage(e.target.value as SttLanguage)}
+            disabled={recording}
+            title="Ngôn ngữ bạn sẽ nói (chọn đúng giúp nhận dạng nhanh và chính xác hơn)"
+            aria-label="Ngôn ngữ ghi âm"
+          >
+            {(Object.keys(LANGUAGE_LABEL) as SttLanguage[]).map((l) => (
+              <option key={l} value={l}>
+                {LANGUAGE_LABEL[l]}
+              </option>
+            ))}
+          </select>
           <button
             className={`btn icon${recording ? " recording" : ""}`}
             type="button"
@@ -104,7 +142,7 @@ export function Composer({ pendingKind, busy, sttEnabled, onSend, onAudio }: Pro
                 const file = e.target.files?.[0];
                 if (file) {
                   if (!sttEnabled) toast("STT đang tắt — server sẽ trả lỗi 503.");
-                  onAudio(file, file.name);
+                  onAudio(file, file.name, language);
                 }
                 e.target.value = "";
               }}

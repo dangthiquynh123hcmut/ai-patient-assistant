@@ -75,6 +75,12 @@ async def test_http_api_round_trip(make_app: Any) -> None:
         assert (await client.post("/v1/chat/api-1/messages", json={"text": "hi"})).status_code == 401
         stt = await client.post("/v1/stt/transcribe", headers=headers, files={"audio": ("a.wav", b"123")})
         assert stt.status_code == 503
+        for lang, code in (("vi", 503), ("auto", 503), ("fr", 422)):
+            r = await client.post(
+                "/v1/stt/transcribe", headers=headers, files={"audio": ("a.wav", b"123")}, data={"language": lang}
+            )
+            assert r.status_code == code, lang
+        assert (await client.get("/v1/meta", headers=headers)).json()["stt_language"] == "en"
 
 
 async def test_meta_and_decision_trace_endpoints(make_app: Any) -> None:

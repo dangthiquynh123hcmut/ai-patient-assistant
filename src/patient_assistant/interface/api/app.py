@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
-from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 
 from patient_assistant.application.agent.state import InterruptPayload, UserDecision
 from patient_assistant.application.ports.repositories import UsernameTakenError
@@ -151,6 +151,7 @@ def create_app(container_factory: Callable[[], AbstractAsyncContextManager[Conta
             "llm_model": s.llm_model_id,
             "stt_enabled": s.stt_enabled,
             "stt_model": s.stt_model if s.stt_enabled else None,
+            "stt_language": s.stt_language,
             "now": c.clock.now().isoformat(),
             "patients": [
                 {
@@ -196,12 +197,17 @@ def create_app(container_factory: Callable[[], AbstractAsyncContextManager[Conta
         return {"status": "ok"}
 
     @app.post("/v1/stt/transcribe", response_model=TranscriptReview)
-    async def transcribe(c: C, _: P, audio: Annotated[UploadFile, File()]) -> TranscriptReview:
+    async def transcribe(
+        c: C,
+        _: P,
+        audio: Annotated[UploadFile, File()],
+        language: Annotated[Literal["en", "vi", "auto"] | None, Form()] = None,
+    ) -> TranscriptReview:
         data = await audio.read(MAX_AUDIO_BYTES + 1)
         if len(data) > MAX_AUDIO_BYTES:
             raise HTTPException(413, "Audio quá lớn")
         try:
-            return await c.transcribe.transcribe(data)
+            return await c.transcribe.transcribe(data, language)
         except STTError as exc:
             raise HTTPException(503, str(exc)) from exc
 

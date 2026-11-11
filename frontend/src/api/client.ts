@@ -10,6 +10,7 @@ import type {
   NewUser,
   Registration,
   SttFlag,
+  SttLanguage,
   TranscriptReview,
   TurnResult,
   User,
@@ -89,9 +90,10 @@ export const api = {
   pending: (conversationId: string) =>
     request<InterruptPayload | null>(`/v1/chat/${enc(conversationId)}/pending`),
   state: (conversationId: string) => request<AgentState>(`/v1/chat/${enc(conversationId)}/state`),
-  transcribe: (audio: Blob, filename: string) => {
+  transcribe: (audio: Blob, filename: string, language?: SttLanguage) => {
     const form = new FormData();
     form.append("audio", audio, filename);
+    if (language) form.append("language", language);
     return request<TranscriptReview>("/v1/stt/transcribe", { method: "POST", body: form });
   },
   myConversations: () => request<ConversationSummary[]>("/v1/me/conversations"),

@@ -1,10 +1,10 @@
 [
-  {"code": "PHCN", "name": "Phục hồi chức năng", "aliases": ["phcn", "vật lý trị liệu", "tập phục hồi"]},
-  {"code": "CXK", "name": "Cơ xương khớp", "aliases": ["xương khớp", "khoa khớp"]},
-  {"code": "NOI", "name": "Nội tổng quát", "aliases": ["khoa nội", "nội khoa"]},
-  {"code": "DL", "name": "Da liễu", "aliases": ["khoa da", "khoa da liễu"]},
-  {"code": "TM", "name": "Tim mạch", "aliases": ["khoa tim", "khoa tim mạch"]},
-  {"code": "TK", "name": "Nội thần kinh", "aliases": ["khoa thần kinh", "khám thần kinh", "chuyên khoa thần kinh"]},
-  {"code": "TMH", "name": "Tai mũi họng", "aliases": ["tmh", "khoa tai mũi họng"]},
-  {"code": "MAT", "name": "Nhãn khoa", "aliases": ["khoa mắt", "khám mắt", "chuyên khoa mắt"]}
+  {"code": "PHCN", "name": "Phục hồi chức năng", "aliases": ["phcn", "vật lý trị liệu", "tập phục hồi", "rehabilitation", "rehab", "physical therapy", "physiotherapy"]},
+  {"code": "CXK", "name": "Cơ xương khớp", "aliases": ["xương khớp", "khoa khớp", "orthopedics", "orthopaedics", "musculoskeletal", "bone and joint"]},
+  {"code": "NOI", "name": "Nội tổng quát", "aliases": ["khoa nội", "nội khoa", "internal medicine", "general medicine"]},
+  {"code": "DL", "name": "Da liễu", "aliases": ["khoa da", "khoa da liễu", "dermatology", "skin department"]},
+  {"code": "TM", "name": "Tim mạch", "aliases": ["khoa tim", "khoa tim mạch", "cardiology", "heart department"]},
+  {"code": "TK", "name": "Nội thần kinh", "aliases": ["khoa thần kinh", "khám thần kinh", "chuyên khoa thần kinh", "neurology"]},
+  {"code": "TMH", "name": "Tai mũi họng", "aliases": ["tmh", "khoa tai mũi họng", "ent", "ear nose and throat", "otolaryngology"]},
+  {"code": "MAT", "name": "Nhãn khoa", "aliases": ["khoa mắt", "khám mắt", "chuyên khoa mắt", "ophthalmology", "eye department", "eye clinic"]}
 ]
