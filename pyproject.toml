@@ -17,6 +17,7 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "alembic>=1.13",
     "structlog>=24.1",
+    "pyjwt>=2.9",
     "holidays>=0.60",
     "tzdata>=2024.1; sys_platform == 'win32'",
 ]

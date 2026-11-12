@@ -655,7 +655,7 @@ tests/
 | `agent_attempts` | `conversation_id`, `turn_id`, `attempt_no`, `kind` (extract/correct), `draft_json`, `issues_json`, `model_id`, `latency_ms`, `tokens` (FR-06.6). |
 | `tool_calls` | `tool_name`, `args_json` (đã che PII), `status`, `error_code`, `latency_ms`, `called_by` (llm/code). |
 | `users` | Tài khoản: `username UNIQUE`, `role` (patient/staff/admin), `patient_id` (bắt buộc với patient), `password_hash` (scrypt), `active`, `failed_logins`, `locked_until`. |
-| `sessions` | Phiên đăng nhập: `token_hash` (SHA-256 của token, không lưu bản rõ), `user_id`, `expires_at`. |
+| `sessions` | Phiên đăng nhập JWT: `id` (claim `sid`), `user_id`, `refresh_hash` (SHA-256 `jti` của refresh token hiện hành, không lưu bản rõ), `previous_refresh_hash` + `rotated_at` (phát hiện dùng lại token đã xoay), `expires_at` (hạn tuyệt đối của phiên). |
 | `conversations` | Một dòng mỗi hội thoại: `conversation_id`, `patient_id` (chủ sở hữu), `title`, `message_count`, `last_kind`, `updated_at`. |
 | `chat_messages` | Mọi câu bệnh nhân gửi và câu trợ lý trả lời: `seq` (thứ tự), `conversation_id`, `role`, `action`, `text`, `intent`, `created_at`. |
 | `checkpoints*` | Do `AsyncPostgresSaver.setup()` tạo — chạy trong bước seed (`cli/seed.py`), không chạy lúc backend khởi động. |

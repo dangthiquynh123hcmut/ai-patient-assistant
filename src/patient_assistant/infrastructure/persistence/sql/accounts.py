@@ -1,4 +1,4 @@
-"""Repository SQLAlchemy cho tài khoản, phiên đăng nhập và lịch sử hội thoại."""
+"""Repository SQLAlchemy cho tài khoản, phiên đăng nhập (JWT) và lịch sử hội thoại."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from patient_assistant.application.ports.repositories import UsernameTakenError
+from patient_assistant.application.ports.repositories import AuthSession, UsernameTakenError
 from patient_assistant.domain.account import ChatMessage, ConversationSummary, Role, User
 from patient_assistant.infrastructure.persistence.sql.models import (
     ChatMessageRow,
@@ -102,18 +102,38 @@ class SqlSessionRepository:
     def __init__(self, sessions: Sessions) -> None:
         self._sessions = sessions
 
-    async def add(self, token_hash: str, user_id: str, expires_at: datetime) -> None:
+    async def add(self, session_id: str, user_id: str, refresh_hash: str, expires_at: datetime) -> None:
         async with self._sessions.begin() as session:
-            session.add(SessionRow(token_hash=token_hash, user_id=user_id, expires_at=expires_at))
+            session.add(SessionRow(id=session_id, user_id=user_id, refresh_hash=refresh_hash, expires_at=expires_at))
 
-    async def get(self, token_hash: str) -> tuple[str, datetime] | None:
+    async def get(self, session_id: str) -> AuthSession | None:
         async with self._sessions() as session:
-            row = await session.get(SessionRow, token_hash)
-            return (row.user_id, row.expires_at) if row else None
+            row = await session.get(SessionRow, session_id)
+            if row is None:
+                return None
+            return AuthSession(
+                id=row.id,
+                user_id=row.user_id,
+                refresh_hash=row.refresh_hash,
+                previous_refresh_hash=row.previous_refresh_hash,
+                rotated_at=row.rotated_at,
+                expires_at=row.expires_at,
+            )
 
-    async def delete(self, token_hash: str) -> None:
+    async def rotate(self, session_id: str, current_hash: str, new_hash: str, now: datetime) -> bool:
+        # UPDATE có điều kiện: hai request refresh cùng lúc bằng một token thì chỉ một request thắng.
         async with self._sessions.begin() as session:
-            await session.execute(delete(SessionRow).where(SessionRow.token_hash == token_hash))
+            result = await session.execute(
+                update(SessionRow)
+                .where(SessionRow.id == session_id, SessionRow.refresh_hash == current_hash)
+                .values(refresh_hash=new_hash, previous_refresh_hash=current_hash, rotated_at=now)
+                .returning(SessionRow.id)
+            )
+            return result.first() is not None
+
+    async def delete(self, session_id: str) -> None:
+        async with self._sessions.begin() as session:
+            await session.execute(delete(SessionRow).where(SessionRow.id == session_id))
 
     async def delete_for_user(self, user_id: str) -> None:
         async with self._sessions.begin() as session:
@@ -122,7 +142,7 @@ class SqlSessionRepository:
     async def delete_expired(self, now: datetime) -> int:
         async with self._sessions.begin() as session:
             result = await session.execute(
-                delete(SessionRow).where(SessionRow.expires_at <= now).returning(SessionRow.token_hash)
+                delete(SessionRow).where(SessionRow.expires_at <= now).returning(SessionRow.id)
             )
             return len(result.all())
 

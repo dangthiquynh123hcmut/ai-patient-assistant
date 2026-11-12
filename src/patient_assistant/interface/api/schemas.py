@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from patient_assistant.domain.account import MIN_PASSWORD_LENGTH
+from patient_assistant.domain.account import MIN_PASSWORD_LENGTH, User
 from patient_assistant.domain.common import SttFlag
 
 
@@ -28,6 +28,15 @@ class ResumeIn(BaseModel):
 class LoginIn(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=1, max_length=128)
+
+
+class TokenOut(BaseModel):
+    """Trả về khi đăng nhập / đăng ký / refresh. Refresh token KHÔNG nằm ở đây mà ở cookie HttpOnly."""
+
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+    expires_in: int  # giây tới khi access token hết hạn
+    user: User
 
 
 class UserUpdateIn(BaseModel):

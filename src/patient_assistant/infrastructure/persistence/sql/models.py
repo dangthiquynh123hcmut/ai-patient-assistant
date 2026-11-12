@@ -129,9 +129,14 @@ class UserRow(Base):
 
 
 class SessionRow(Base):
+    """Phiên đăng nhập JWT: một dòng cho mỗi chuỗi refresh token (xem AuthSession)."""
+
     __tablename__ = "sessions"
-    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)  # claim `sid` trong JWT
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    refresh_hash: Mapped[str] = mapped_column(String(64))
+    previous_refresh_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    rotated_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     expires_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)  # job dọn phiên hết hạn
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
 

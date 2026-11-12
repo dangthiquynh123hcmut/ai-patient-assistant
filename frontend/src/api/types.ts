@@ -15,6 +15,14 @@ export interface User {
   locked_until: string | null;
 }
 
+/** Trả về từ /v1/auth/login, /register, /refresh. Refresh token nằm ở cookie HttpOnly, không có ở đây. */
+export interface TokenResponse {
+  access_token: string;
+  token_type: "bearer";
+  expires_in: number;
+  user: User;
+}
+
 export interface NewUser {
   username: string;
   display_name: string;

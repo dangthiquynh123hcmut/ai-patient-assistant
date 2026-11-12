@@ -1,7 +1,12 @@
 """FastAPI: lớp mỏng chuyển HTTP <-> use case. Không chứa nghiệp vụ.
 
 Chỉ phục vụ API (`/v1/...`, `/health`). Frontend React được build riêng (`frontend/`) và do nginx phục vụ,
-nginx proxy `/v1/` về đây — cùng origin nên cookie phiên dùng được mà không cần CORS.
+nginx proxy `/v1/` về đây — cùng origin nên cookie refresh token dùng được mà không cần CORS.
+
+Xác thực JWT:
+- Access token (ngắn hạn) trả trong body, client giữ trong bộ nhớ và gửi `Authorization: Bearer <token>`.
+- Refresh token nằm trong cookie HttpOnly `pa_refresh` (path `/v1/auth`, SameSite=Strict): JavaScript không đọc được,
+  trình duyệt chỉ gửi nó tới `/v1/auth/*`. `POST /v1/auth/refresh` đổi nó lấy access token mới (xoay vòng).
 """
 
 from __future__ import annotations
@@ -15,17 +20,18 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Respon
 from patient_assistant.application.agent.state import InterruptPayload, UserDecision
 from patient_assistant.application.ports.repositories import UsernameTakenError
 from patient_assistant.application.ports.stt import STTError
-from patient_assistant.application.services.auth_service import AuthError
+from patient_assistant.application.services.auth_service import AuthError, IssuedTokens, RefreshRaceError
 from patient_assistant.application.use_cases.chat import NoPendingQuestion, TurnResult
 from patient_assistant.application.use_cases.conversation import NotAllowed
 from patient_assistant.application.use_cases.transcribe import TranscriptReview
 from patient_assistant.config import Settings
 from patient_assistant.container import Container, build_container
 from patient_assistant.domain.account import ChatMessage, ConversationSummary, NewUser, Registration, User
-from patient_assistant.interface.api.schemas import LoginIn, MessageIn, ResumeIn, UserUpdateIn
+from patient_assistant.interface.api.schemas import LoginIn, MessageIn, ResumeIn, TokenOut, UserUpdateIn
 
 MAX_AUDIO_BYTES = 10 * 1024 * 1024
-SESSION_COOKIE = "pa_session"
+REFRESH_COOKIE = "pa_refresh"
+REFRESH_COOKIE_PATH = "/v1/auth"  # chỉ gửi kèm request tới endpoint xác thực, không đi theo mọi API
 
 
 def _container(request: Request) -> Container:
@@ -37,11 +43,11 @@ C = Annotated[Container, Depends(_container)]
 
 
 def _token(request: Request) -> str | None:
-    """Token phiên: cookie HttpOnly (trình duyệt) hoặc `Authorization: Bearer` (client API, test)."""
+    """Access token JWT trong `Authorization: Bearer`. Không đọc từ cookie, nên API không bị CSRF."""
     header = request.headers.get("authorization", "")
     if header.lower().startswith("bearer "):
         return header[7:].strip() or None
-    return request.cookies.get(SESSION_COOKIE)
+    return None
 
 
 async def _current_user(request: Request, c: C) -> User:
@@ -91,15 +97,27 @@ def create_app(container_factory: Callable[[], AbstractAsyncContextManager[Conta
 
     # ------------------------------------------------------------------ đăng nhập
 
-    def set_session(response: Response, c: Container, token: str) -> None:
+    def issue(response: Response, c: Container, tokens: IssuedTokens) -> TokenOut:
+        """Đặt refresh token vào cookie HttpOnly, trả access token trong body."""
         response.set_cookie(
-            SESSION_COOKIE,
-            token,
-            max_age=int(c.auth.session_ttl.total_seconds()),
+            REFRESH_COOKIE,
+            tokens.refresh_token,
+            max_age=max(0, int((tokens.refresh_expires_at - c.clock.now()).total_seconds())),
             httponly=True,
-            samesite="lax",
+            samesite="strict",
             secure=c.settings.cookie_secure,
-            path="/",
+            path=REFRESH_COOKIE_PATH,
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return TokenOut(access_token=tokens.access_token, expires_in=tokens.access_expires_in, user=tokens.user)
+
+    def clear_refresh(response: Response, c: Container) -> None:
+        response.delete_cookie(
+            REFRESH_COOKIE,
+            path=REFRESH_COOKIE_PATH,
+            httponly=True,
+            samesite="strict",
+            secure=c.settings.cookie_secure,
         )
 
     @app.get("/v1/auth/options")
@@ -108,40 +126,53 @@ def create_app(container_factory: Callable[[], AbstractAsyncContextManager[Conta
         return {"allow_registration": c.settings.allow_registration}
 
     @app.post("/v1/auth/login")
-    async def login(body: LoginIn, response: Response, c: C) -> User:
+    async def login(body: LoginIn, response: Response, c: C) -> TokenOut:
         try:
-            token, user = await c.auth.login(body.username, body.password)
+            tokens = await c.auth.login(body.username, body.password)
         except AuthError as exc:
             raise HTTPException(401, str(exc)) from exc
-        set_session(response, c, token)
-        return user
+        return issue(response, c, tokens)
+
+    @app.post("/v1/auth/refresh")
+    async def refresh(request: Request, response: Response, c: C) -> TokenOut:
+        """Đổi refresh token (cookie) lấy access token mới; cookie được thay bằng refresh token mới."""
+        token = request.cookies.get(REFRESH_COOKIE)
+        if not token:
+            raise HTTPException(401, "Chưa đăng nhập hoặc phiên đã hết hạn")
+        try:
+            tokens = await c.auth.refresh(token)
+        except RefreshRaceError as exc:
+            raise HTTPException(409, str(exc)) from exc  # cookie đã có token mới: client gửi lại là được
+        except AuthError as exc:
+            raise HTTPException(401, str(exc)) from exc
+        return issue(response, c, tokens)
 
     @app.post("/v1/auth/register", status_code=201)
-    async def register(body: Registration, response: Response, c: C) -> User:
+    async def register(body: Registration, response: Response, c: C) -> TokenOut:
         """Tự tạo tài khoản bệnh nhân (kèm hồ sơ bệnh nhân mới) rồi đăng nhập luôn."""
         if not c.settings.allow_registration:
             raise HTTPException(403, "Hệ thống đang tắt chức năng tự đăng ký")
         try:
             await c.auth.register(body)
-            token, user = await c.auth.login(body.username, body.password)
+            tokens = await c.auth.login(body.username, body.password)
         except UsernameTakenError as exc:
             raise HTTPException(409, "Tên đăng nhập đã có người dùng") from exc
         except AuthError as exc:
             raise HTTPException(400, str(exc)) from exc
-        set_session(response, c, token)
-        return user
+        return issue(response, c, tokens)
 
     @app.post("/v1/auth/logout", status_code=204)
     async def logout(request: Request, response: Response, c: C) -> None:
-        if token := _token(request):
-            await c.auth.logout(token)
-        response.delete_cookie(SESSION_COOKIE, path="/")
+        """Thu hồi phiên hiện tại (theo refresh cookie hoặc access token); không cần access token còn hạn."""
+        for token in {request.cookies.get(REFRESH_COOKIE), _token(request)} - {None}:
+            await c.auth.logout(token)  # type: ignore[arg-type]
+        clear_refresh(response, c)
 
     @app.post("/v1/auth/logout-all", status_code=204)
     async def logout_all(user: U, response: Response, c: C) -> None:
         """Đăng xuất mọi thiết bị: thu hồi mọi phiên của tài khoản, kể cả phiên đang gọi."""
         await c.auth.logout_everywhere(user.id)
-        response.delete_cookie(SESSION_COOKIE, path="/")
+        clear_refresh(response, c)
 
     @app.get("/v1/auth/me")
     async def me(user: U) -> User:

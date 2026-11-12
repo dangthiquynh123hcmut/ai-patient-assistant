@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
-import { ApiError, api, setUnauthorizedHandler } from "../api/client";
+import { ApiError, api, clearSession, setUnauthorizedHandler } from "../api/client";
 import type { Meta, Registration, User } from "../api/types";
 
 interface AuthState {
@@ -8,7 +8,7 @@ interface AuthState {
   user: User | null | undefined;
   meta: Meta | null;
   login: (username: string, password: string) => Promise<User>;
-  /** Tạo tài khoản bệnh nhân rồi đăng nhập luôn (backend đặt cookie phiên). */
+  /** Tạo tài khoản bệnh nhân rồi đăng nhập luôn (backend trả access token và đặt cookie refresh). */
   register: (registration: Registration) => Promise<User>;
   /** Ném lỗi nếu server chưa thu hồi được phiên (vd. mất mạng) — khi đó người dùng vẫn đang đăng nhập. */
   logout: () => Promise<void>;
@@ -35,14 +35,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    // Phiên hết hạn / bị admin thu hồi giữa chừng -> quay về trạng thái chưa đăng nhập.
+    // Phiên hết hạn / bị admin thu hồi giữa chừng (refresh thất bại) -> quay về trạng thái chưa đăng nhập.
     setUnauthorizedHandler(() => {
+      clearSession();
       setUser(null);
       setMeta(null);
     });
+    // Access token chỉ nằm trong bộ nhớ: tải lại trang thì lấy lại bằng refresh cookie.
     api
-      .me()
-      .then(() => load())
+      .restoreSession()
+      .then((ok) => (ok ? load() : setUser(null)))
       .catch(() => setUser(null));
   }, [load]);
 
@@ -66,7 +68,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   /**
    * Chỉ coi là đã đăng xuất khi server xác nhận đã thu hồi phiên (hoặc phiên vốn đã hết hạn — 401).
-   * Lỗi mạng / server thì ném lỗi ra để UI báo, vì cookie và phiên phía server vẫn còn hiệu lực.
+   * Lỗi mạng / server thì ném lỗi ra để UI báo, vì phiên phía server vẫn còn hiệu lực.
    */
   const endSession = useCallback(async (call: () => Promise<void>) => {
     try {
@@ -74,6 +76,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       if (!(err instanceof ApiError && err.status === 401)) throw err;
     }
+    clearSession();
     setUser(null);
     setMeta(null);
   }, []);

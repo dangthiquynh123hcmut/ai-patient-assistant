@@ -3,19 +3,36 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 from datetime import timedelta
 from typing import Any
 
+import jwt
 import pytest
 
-from patient_assistant.application.services.auth_service import AuthService, hash_password, verify_password
+from patient_assistant.application.services.auth_service import (
+    REFRESH_REUSE_GRACE,
+    AuthError,
+    AuthService,
+    hash_password,
+    verify_password,
+)
 from patient_assistant.domain.account import NewUser
 from patient_assistant.infrastructure.clock import FixedClock
 from patient_assistant.infrastructure.persistence import seed
 from patient_assistant.infrastructure.persistence.sql import accounts
 from patient_assistant.infrastructure.persistence.sql import repositories as sql
-from tests.conftest import NOW, PATIENT, ScriptedLLM, api_client, booking_out, done, login, report_out
+from patient_assistant.infrastructure.security.jwt_codec import JwtCodec
+from tests.conftest import (
+    NOW,
+    PATIENT,
+    TEST_JWT_SECRET,
+    ScriptedLLM,
+    api_client,
+    booking_out,
+    done,
+    login,
+    report_out,
+)
 
 BOOK = "Cho tôi đặt lịch khoa phục hồi chức năng thứ ba tuần sau buổi sáng"
 
@@ -43,15 +60,23 @@ async def test_login_logout_and_bad_credentials(make_app: Any) -> None:
         assert unknown.json()["detail"] == bad.json()["detail"]  # không lộ username nào có thật
 
         r = await client.post("/v1/auth/login", json={"username": "BenhNhan1", "password": "demo1234"})
-        assert r.status_code == 200 and r.json()["role"] == "patient"
+        body = r.json()
+        assert r.status_code == 200 and body["user"]["role"] == "patient" and body["token_type"] == "bearer"
+        assert body["expires_in"] == 15 * 60 and "refresh_token" not in body and "password" not in r.text
         cookie = r.headers["set-cookie"].lower()
-        assert "httponly" in cookie and "samesite=lax" in cookie
-        assert (await client.get("/v1/auth/me")).json()["username"] == "benhnhan1"  # cookie dùng được
-        assert "password" not in r.text
+        assert cookie.startswith("pa_refresh=") and "httponly" in cookie and "samesite=strict" in cookie
+        assert "path=/v1/auth" in cookie
+        assert r.headers["cache-control"] == "no-store"
+        claims = jwt.decode(body["access_token"], options={"verify_signature": False})
+        assert (claims["typ"], claims["sub"], claims["role"]) == ("access", body["user"]["id"], "patient")
 
-        assert (await client.post("/v1/auth/logout")).status_code == 204
-        client.cookies.clear()
-        assert (await client.get("/v1/auth/me")).status_code == 401
+        assert (await client.get("/v1/auth/me")).status_code == 401  # cookie refresh không thay được access token
+        bearer = {"Authorization": f"Bearer {body['access_token']}"}
+        assert (await client.get("/v1/auth/me", headers=bearer)).json()["username"] == "benhnhan1"
+
+        assert (await client.post("/v1/auth/logout")).status_code == 204  # chỉ cần cookie refresh
+        assert (await client.get("/v1/auth/me", headers=bearer)).status_code == 401  # access token mất hiệu lực ngay
+        assert (await client.post("/v1/auth/refresh")).status_code == 401
 
 
 NEW_ACCOUNT = {"username": "Nguyen.Van_A", "display_name": "  Nguyễn   Văn A ", "password": "matkhau123"}
@@ -65,14 +90,15 @@ async def test_register_creates_patient_and_logs_in(make_app: Any) -> None:
             "/v1/auth/register", json={**NEW_ACCOUNT, "role": "admin", "patient_id": "patient-demo-001"}
         )
         assert r.status_code == 201, r.text
-        user = r.json()
+        user = r.json()["user"]
         assert (user["username"], user["display_name"], user["role"]) == ("nguyen.van_a", "Nguyễn Văn A", "patient")
         assert user["patient_id"].startswith("patient-") and user["patient_id"] != "patient-demo-001"
         assert "httponly" in r.headers["set-cookie"].lower() and "password" not in r.text
 
-        me = (await client.get("/v1/auth/me")).json()  # đã đăng nhập ngay bằng cookie
+        bearer = {"Authorization": f"Bearer {r.json()['access_token']}"}
+        me = (await client.get("/v1/auth/me", headers=bearer)).json()  # đã đăng nhập ngay
         assert me["id"] == user["id"]
-        reports = await client.get("/v1/me/reports")
+        reports = await client.get("/v1/me/reports", headers=bearer)
         assert reports.status_code == 200 and reports.json() == []  # hồ sơ mới, chưa có dữ liệu
         client.cookies.clear()
 
@@ -131,23 +157,38 @@ async def test_logout_all_revokes_every_device(make_app: Any) -> None:
         assert (await client.post("/v1/auth/logout-all")).status_code == 401  # phải đăng nhập mới gọi được
 
         r = await client.post("/v1/auth/logout-all", headers=laptop)
-        assert r.status_code == 204 and 'pa_session=""' in r.headers["set-cookie"]
+        assert r.status_code == 204 and 'pa_refresh=""' in r.headers["set-cookie"]
         for headers in (phone, laptop):
             assert (await client.get("/v1/auth/me", headers=headers)).status_code == 401
         assert (await client.get("/v1/auth/me", headers=other)).status_code == 200  # tài khoản khác không bị ảnh hưởng
 
 
+def _auth(repos: dict[str, Any], clock: FixedClock, hours: float = 1) -> AuthService:
+    return AuthService(
+        repos["users"],
+        repos["sessions"],
+        repos["patients"],
+        clock,
+        timedelta(hours=hours),
+        tokens=JwtCodec(TEST_JWT_SECRET),
+    )
+
+
+def _sid(token: str) -> str:
+    return str(jwt.decode(token, options={"verify_signature": False})["sid"])
+
+
 async def test_purge_removes_only_expired_sessions(make_storage: Any) -> None:
     repos = (await make_storage()).repos
     clock = FixedClock(NOW)
-    auth = AuthService(repos["users"], repos["sessions"], repos["patients"], clock, timedelta(hours=1))
-    stale, _ = await auth.login("bacsi", "demo1234")  # không bao giờ dùng lại -> không tự bị xóa
+    auth = _auth(repos, clock)
+    stale = (await auth.login("bacsi", "demo1234")).access_token  # không bao giờ dùng lại -> không tự bị xóa
     clock.now = lambda: NOW + timedelta(hours=2)  # type: ignore[method-assign]
-    fresh, _ = await auth.login("benhnhan1", "demo1234")
-    assert await repos["sessions"].get(_hash(stale)) is not None  # đăng nhập không còn tự dọn
+    fresh = (await auth.login("benhnhan1", "demo1234")).access_token
+    assert await repos["sessions"].get(_sid(stale)) is not None  # đăng nhập không còn tự dọn
 
     assert await auth.purge_expired_sessions() == 1
-    assert await repos["sessions"].get(_hash(stale)) is None
+    assert await repos["sessions"].get(_sid(stale)) is None
     assert await auth.authenticate(fresh) is not None  # phiên còn hạn giữ nguyên
     assert await auth.purge_expired_sessions() == 0
 
@@ -157,14 +198,14 @@ async def test_purge_job_once_and_on_a_schedule(make_storage: Any) -> None:
 
     repos = (await make_storage()).repos
     clock = FixedClock(NOW)
-    auth = AuthService(repos["users"], repos["sessions"], repos["patients"], clock, timedelta(hours=1))
-    first, _ = await auth.login("bacsi", "demo1234")
+    auth = _auth(repos, clock)
+    first = (await auth.login("bacsi", "demo1234")).access_token
     clock.now = lambda: NOW + timedelta(hours=2)  # type: ignore[method-assign]
     await purge_sessions.purge(auth)  # không --every: chạy một lần rồi thoát
-    assert await repos["sessions"].get(_hash(first)) is None
+    assert await repos["sessions"].get(_sid(first)) is None
 
     # Chạy theo lịch: lỗi một lần (vd. DB khởi động lại) không làm chết job, lần sau vẫn dọn tiếp.
-    second, _ = await auth.login("bacsi", "demo1234")
+    second = (await auth.login("bacsi", "demo1234")).access_token
     clock.now = lambda: NOW + timedelta(hours=4)  # type: ignore[method-assign]
     real = auth.purge_expired_sessions
     calls = 0
@@ -181,14 +222,10 @@ async def test_purge_job_once_and_on_a_schedule(make_storage: Any) -> None:
     auth.purge_expired_sessions = flaky  # type: ignore[method-assign]
     with pytest.raises(asyncio.CancelledError):
         await purge_sessions.purge(auth, every_minutes=0.0001)
-    assert calls == 3 and await repos["sessions"].get(_hash(second)) is None
+    assert calls == 3 and await repos["sessions"].get(_sid(second)) is None
 
     with pytest.raises(SystemExit):
         purge_sessions.main(["--every", "0"])
-
-
-def _hash(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
 
 
 async def test_lockout_after_repeated_failures(make_app: Any) -> None:
@@ -200,14 +237,113 @@ async def test_lockout_after_repeated_failures(make_app: Any) -> None:
         await login(client, "benhnhan1")  # tài khoản khác không bị ảnh hưởng
 
 
-async def test_session_expires(make_storage: Any) -> None:
+async def test_access_token_expires_and_refresh_rotates(make_storage: Any) -> None:
     repos = (await make_storage()).repos
     clock = FixedClock(NOW)
-    auth = AuthService(repos["users"], repos["sessions"], repos["patients"], clock, timedelta(hours=1))
-    token, _ = await auth.login("bacsi", "demo1234")
-    assert await auth.authenticate(token) is not None
-    clock.now = lambda: NOW + timedelta(hours=2)  # type: ignore[method-assign]
-    assert await auth.authenticate(token) is None
+    auth = _auth(repos, clock, hours=12)
+    first = await auth.login("bacsi", "demo1234")
+    assert await auth.authenticate(first.access_token) is not None
+    assert await auth.authenticate(first.refresh_token) is None  # refresh token không dùng làm access token được
+
+    clock.now = lambda: NOW + timedelta(minutes=16)  # type: ignore[method-assign]
+    assert await auth.authenticate(first.access_token) is None  # access token hết hạn sau 15 phút
+    second = await auth.refresh(first.refresh_token)
+    assert second.refresh_token != first.refresh_token and second.user == first.user
+    assert await auth.authenticate(second.access_token) is not None
+    with pytest.raises(AuthError):
+        await auth.refresh(second.access_token)  # access token không dùng để refresh được
+
+    # Hạn phiên là tuyệt đối: refresh không kéo dài; access token cuối cùng không sống quá hạn phiên.
+    clock.now = lambda: NOW + timedelta(hours=11, minutes=55)  # type: ignore[method-assign]
+    last = await auth.refresh(second.refresh_token)
+    assert last.access_expires_in == 5 * 60
+    clock.now = lambda: NOW + timedelta(hours=12)  # type: ignore[method-assign]
+    assert await auth.authenticate(last.access_token) is None
+    with pytest.raises(AuthError):
+        await auth.refresh(last.refresh_token)
+
+
+async def test_reused_refresh_token_revokes_session(make_storage: Any) -> None:
+    repos = (await make_storage()).repos
+    clock = FixedClock(NOW)
+    auth = _auth(repos, clock, hours=12)
+    stolen = await auth.login("benhnhan1", "demo1234")
+    current = await auth.refresh(stolen.refresh_token)
+
+    # Ngay sau khi xoay (vd. hai tab cùng refresh): token cũ bị từ chối nhưng phiên vẫn còn.
+    with pytest.raises(AuthError, match="nơi khác"):
+        await auth.refresh(stolen.refresh_token)
+    assert await auth.authenticate(current.access_token) is not None
+
+    # Quá thời gian ân hạn mà token cũ vẫn được dùng: coi là bị đánh cắp, thu hồi cả phiên.
+    clock.now = lambda: NOW + REFRESH_REUSE_GRACE + timedelta(seconds=1)  # type: ignore[method-assign]
+    with pytest.raises(AuthError, match="thu hồi"):
+        await auth.refresh(stolen.refresh_token)
+    assert await auth.authenticate(current.access_token) is None
+    with pytest.raises(AuthError):
+        await auth.refresh(current.refresh_token)
+
+
+async def test_forged_tokens_are_rejected(make_storage: Any) -> None:
+    repos = (await make_storage()).repos
+    auth = _auth(repos, FixedClock(NOW))
+    real = await auth.login("admin", "demo1234")
+    claims = jwt.decode(real.access_token, options={"verify_signature": False})
+    forged = [
+        jwt.encode(claims, "khoa-sai-" + "y" * 40, algorithm="HS256"),  # sai khóa
+        jwt.encode(claims, None, algorithm="none"),  # không ký
+        jwt.encode({**claims, "iss": "ke-khac"}, TEST_JWT_SECRET, algorithm="HS256"),  # sai issuer
+        jwt.encode({**claims, "sid": "khong-co"}, TEST_JWT_SECRET, algorithm="HS256"),  # phiên không tồn tại
+        "khong-phai-jwt",
+    ]
+    for token in forged:
+        assert await auth.authenticate(token) is None, token
+    with pytest.raises(ValueError):
+        JwtCodec("qua-ngan")  # khóa HS256 dưới 256 bit bị từ chối
+
+
+def _refresh_cookie(value: str | None) -> dict[str, str]:
+    assert value
+    return {"Cookie": f"pa_refresh={value}"}
+
+
+async def test_refresh_endpoint_rotates_cookie(make_app: Any) -> None:
+    app = await make_app()
+    async with api_client(app) as client:
+        login_r = await client.post("/v1/auth/login", json={"username": "benhnhan1", "password": "demo1234"})
+        old_cookie = client.cookies.get("pa_refresh")
+        app.clock.now = lambda: NOW + timedelta(minutes=20)  # type: ignore[method-assign]
+        expired = {"Authorization": f"Bearer {login_r.json()['access_token']}"}
+        assert (await client.get("/v1/auth/me", headers=expired)).status_code == 401
+
+        r = await client.post("/v1/auth/refresh")
+        assert r.status_code == 200 and r.json()["user"]["username"] == "benhnhan1"
+        assert client.cookies.get("pa_refresh") not in (None, old_cookie)  # cookie đã được thay
+        fresh = {"Authorization": f"Bearer {r.json()['access_token']}"}
+        assert (await client.get("/v1/me/reports", headers=fresh)).status_code == 200
+
+        # Gửi lại cookie cũ ngay sau khi xoay (vd. tab khác): 409, phiên vẫn còn.
+        new_cookie = client.cookies.get("pa_refresh")
+        client.cookies.clear()
+        assert (await client.post("/v1/auth/refresh", headers=_refresh_cookie(old_cookie))).status_code == 409
+        assert (await client.get("/v1/me/reports", headers=fresh)).status_code == 200
+        assert (await client.post("/v1/auth/refresh", headers=_refresh_cookie(new_cookie))).status_code == 200
+
+        client.cookies.clear()
+        assert (await client.post("/v1/auth/refresh")).status_code == 401  # không có cookie
+
+
+async def test_deactivated_user_cannot_refresh(make_app: Any) -> None:
+    async with api_client(await make_app()) as client:
+        admin = await login(client, "admin")
+        await client.post("/v1/auth/login", json={"username": "benhnhan2", "password": "demo1234"})
+        patient_cookie = client.cookies.get("pa_refresh")
+        client.cookies.clear()
+        users = (await client.get("/v1/admin/users", headers=admin)).json()
+        target = next(u for u in users if u["username"] == "benhnhan2")
+        assert (await client.patch(f"/v1/admin/users/{target['id']}", headers=admin, json={"active": False})).is_success
+        refresh = await client.post("/v1/auth/refresh", headers=_refresh_cookie(patient_cookie))
+        assert refresh.status_code == 401 and "không hợp lệ" in refresh.json()["detail"]
 
 
 @pytest.mark.parametrize(
@@ -355,12 +491,14 @@ async def test_sql_accounts_sessions_and_log(make_storage: Any) -> None:
         sql.SqlPatientRepository(sessions),
         FixedClock(NOW),
         timedelta(hours=12),
+        tokens=JwtCodec(TEST_JWT_SECRET),
     )
     await auth.seed(seed.demo_accounts("demo1234"))
     await auth.seed(seed.demo_accounts("khac-mat-khau"))  # chạy lại không tạo trùng / không đổi mật khẩu
     assert await users.count() == len(seed.demo_accounts("demo1234"))
 
-    token, user = await auth.login("benhnhan1", "demo1234")
+    issued = await auth.login("benhnhan1", "demo1234")
+    token, user = issued.access_token, issued.user
     assert (await auth.authenticate(token)) == user and user.patient_id == PATIENT
     with pytest.raises(Exception, match="Sai"):
         await auth.login("benhnhan1", "khac-mat-khau")
@@ -404,7 +542,7 @@ async def test_register_with_birth_date_and_phone(make_app: Any) -> None:
     app = await make_app()
     async with api_client(app) as client:
         body = {**NEW_ACCOUNT, "date_of_birth": "1990-05-17", "phone": "+84 912 345 678"}
-        user = (await client.post("/v1/auth/register", json=body)).json()
+        user = (await client.post("/v1/auth/register", json=body)).json()["user"]
         profile = await app.toolbox._patients.get_profile(user["patient_id"])
         assert (str(profile.date_of_birth), profile.phone) == ("1990-05-17", "0912345678")  # +84 -> 0, bỏ khoảng trắng
         client.cookies.clear()

@@ -132,22 +132,6 @@ export function Composer({ pendingKind, busy, sttEnabled, defaultLanguage, onSen
           >
             🎙
           </button>
-          <label className="btn icon" title="Tải file audio">
-            ⤒
-            <input
-              type="file"
-              accept="audio/*"
-              hidden
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) {
-                  if (!sttEnabled) toast("STT đang tắt — server sẽ trả lỗi 503.");
-                  onAudio(file, file.name, language);
-                }
-                e.target.value = "";
-              }}
-            />
-          </label>
           <button className="btn primary" type="submit" disabled={busy}>
             {busy ? "Đang xử lý…" : "Gửi"}
           </button>

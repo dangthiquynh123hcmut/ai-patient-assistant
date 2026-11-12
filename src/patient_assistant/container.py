@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import secrets
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
@@ -20,6 +22,7 @@ from patient_assistant.application.ports.clock import Clock
 from patient_assistant.application.ports.llm import LLMPort
 from patient_assistant.application.ports.repositories import ConversationLogRepository
 from patient_assistant.application.ports.stt import STTPort
+from patient_assistant.application.ports.tokens import TokenCodec
 from patient_assistant.application.services.auth_service import AuthService, hash_password
 from patient_assistant.application.services.booking_service import BookingService
 from patient_assistant.application.services.report_service import ReportService
@@ -44,6 +47,9 @@ from patient_assistant.infrastructure.persistence.sql.setup import (
     migrate,
     seed_demo_data,
 )
+from patient_assistant.infrastructure.security.jwt_codec import JwtCodec
+
+log = logging.getLogger("patient_assistant")
 
 
 @dataclass
@@ -134,6 +140,31 @@ async def seed_demo_users(sessions: async_sessionmaker[AsyncSession], password: 
         await users.add(user, password_hash)
 
 
+@cache
+def _ephemeral_jwt_secret() -> str:
+    log.warning(
+        "PA_JWT_SECRET chưa đặt: dùng khóa JWT tạm sinh ngẫu nhiên cho tiến trình này. Token không dùng được giữa các "
+        "worker và mất hiệu lực khi khởi động lại — đặt PA_JWT_SECRET cho môi trường thật."
+    )
+    return secrets.token_urlsafe(48)
+
+
+def token_codec(settings: Settings) -> TokenCodec:
+    return JwtCodec(settings.jwt_secret or _ephemeral_jwt_secret())
+
+
+def build_auth(settings: Settings, repos: dict[str, Any], clock: Clock) -> AuthService:
+    return AuthService(
+        repos["users"],
+        repos["sessions"],
+        repos["patients"],
+        clock,
+        timedelta(hours=settings.session_ttl_hours),
+        tokens=token_codec(settings),
+        access_ttl=timedelta(minutes=settings.access_token_ttl_minutes),
+    )
+
+
 def sql_repositories(sessions: async_sessionmaker[AsyncSession], tz: Any) -> dict[str, Any]:
     return {
         "users": accounts.SqlUserRepository(sessions),
@@ -179,9 +210,7 @@ def assemble(
     deps = AgentDeps(llm=llm, tools=toolbox, audit=audit or StructlogAuditLog(), limits=limits)
     graph = build_agent_graph(deps, checkpointer)
     chat = ChatUseCase(graph, clock, limits.recursion_limit, SideTalk(llm, toolbox))
-    auth = AuthService(
-        repos["users"], repos["sessions"], repos["patients"], clock, timedelta(hours=settings.session_ttl_hours)
-    )
+    auth = build_auth(settings, repos, clock)
     return Container(
         chat=chat,
         conversations=ConversationService(chat, repos["conversation_log"], clock),

@@ -55,7 +55,11 @@ async def _ensure_database(url: str) -> None:
         await conn.close()
 
 
+TEST_JWT_SECRET = "khoa-jwt-chi-dung-cho-test-" + "x" * 32
+
+
 def pg_settings(**overrides: Any) -> Settings:
+    overrides.setdefault("jwt_secret", TEST_JWT_SECRET)
     return Settings(_env_file=None, database_url=TEST_DATABASE_URL, **overrides)  # type: ignore[call-arg]
 
 
@@ -243,9 +247,9 @@ def api_client(container: Container) -> Any:
 
 
 async def login(client: Any, username: str, password: str = DEMO_PASSWORD) -> dict[str, str]:
-    """Đăng nhập, trả header Bearer cho các request sau."""
+    """Đăng nhập, trả header Bearer (access token JWT) cho các request sau."""
     r = await client.post("/v1/auth/login", json={"username": username, "password": password})
     assert r.status_code == 200, r.text
-    token = r.cookies.get("pa_session")
-    client.cookies.clear()  # mỗi request tự chọn danh tính qua header, không dính cookie của lần đăng nhập trước
+    token = r.json()["access_token"]
+    client.cookies.clear()  # bỏ refresh cookie: mỗi request tự chọn danh tính qua header
     return {"Authorization": f"Bearer {token}"}

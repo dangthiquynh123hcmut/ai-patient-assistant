@@ -106,15 +106,29 @@ class UserRepository(Protocol):
     async def set_login_state(self, user_id: str, failed_logins: int, locked_until: datetime | None) -> None: ...
 
 
-class SessionRepository(Protocol):
-    """Phiên đăng nhập. Chỉ lưu hash của token — lộ DB không dùng được token."""
+class AuthSession(BaseModel):
+    """Một phiên đăng nhập = một chuỗi refresh token (mỗi lần refresh xoay sang token mới).
 
-    async def add(self, token_hash: str, user_id: str, expires_at: datetime) -> None: ...
-    async def get(self, token_hash: str) -> tuple[str, datetime] | None:
-        """(user_id, expires_at) hoặc None."""
+    Chỉ lưu SHA-256 của `jti` refresh token — lộ DB không dùng được token. Access token mang `sid` của phiên,
+    nên xóa phiên là access token của phiên đó hết hiệu lực ngay.
+    """
+
+    id: str
+    user_id: str
+    refresh_hash: str  # refresh token hiện hành
+    previous_refresh_hash: str | None = None  # token vừa bị xoay đi: phát hiện dùng lại token cũ
+    rotated_at: datetime | None = None
+    expires_at: datetime  # hạn tuyệt đối của phiên, không kéo dài khi refresh
+
+
+class SessionRepository(Protocol):
+    async def add(self, session_id: str, user_id: str, refresh_hash: str, expires_at: datetime) -> None: ...
+    async def get(self, session_id: str) -> AuthSession | None: ...
+    async def rotate(self, session_id: str, current_hash: str, new_hash: str, now: datetime) -> bool:
+        """Đổi refresh token hiện hành nếu nó vẫn là `current_hash` (so-và-đổi nguyên tử). False nếu đã bị đổi."""
         ...
 
-    async def delete(self, token_hash: str) -> None: ...
+    async def delete(self, session_id: str) -> None: ...
     async def delete_for_user(self, user_id: str) -> None: ...
     async def delete_expired(self, now: datetime) -> int:
         """Xóa mọi phiên đã hết hạn; trả số phiên đã xóa."""

@@ -16,15 +16,13 @@ import argparse
 import asyncio
 import logging
 import sys
-from datetime import timedelta
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from patient_assistant.application.services.auth_service import AuthService
 from patient_assistant.config import Settings
+from patient_assistant.container import build_auth, sql_repositories
 from patient_assistant.infrastructure.clock import SystemClock
-from patient_assistant.infrastructure.persistence.sql import accounts
-from patient_assistant.infrastructure.persistence.sql import repositories as sql
 from patient_assistant.infrastructure.persistence.sql.setup import make_engine
 
 log = logging.getLogger("patient_assistant.purge_sessions")
@@ -51,13 +49,8 @@ async def run(settings: Settings, every_minutes: float | None = None) -> None:
     engine = make_engine(settings.database_url)
     try:
         sessions = async_sessionmaker(engine, expire_on_commit=False)
-        auth = AuthService(
-            accounts.SqlUserRepository(sessions),
-            accounts.SqlSessionRepository(sessions),
-            sql.SqlPatientRepository(sessions),
-            SystemClock(settings.timezone),
-            timedelta(hours=settings.session_ttl_hours),
-        )
+        clock = SystemClock(settings.timezone)
+        auth = build_auth(settings, sql_repositories(sessions, clock.now().tzinfo), clock)
         await purge(auth, every_minutes)
     finally:
         await engine.dispose()

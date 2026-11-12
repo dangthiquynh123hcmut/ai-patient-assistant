@@ -31,8 +31,13 @@ class Settings(BaseSettings):
     checkpointer_pool_size: int = 10
     seed_demo_data: bool = True
 
-    # Đăng nhập. Tài khoản demo (demo_data/users.json) còn thiếu theo username được tạo khi seed.
-    session_ttl_hours: int = 12
+    # Đăng nhập bằng JWT. Tài khoản demo (demo_data/users.json) còn thiếu theo username được tạo khi seed.
+    # Khóa ký HS256, tối thiểu 32 byte, giống nhau ở mọi worker/instance. Tạo: python -c "import secrets;
+    # print(secrets.token_urlsafe(48))". Để trống: mỗi tiến trình tự sinh khóa tạm (chỉ hợp cho dev một worker —
+    # khởi động lại là mọi người phải đăng nhập lại).
+    jwt_secret: str | None = None
+    access_token_ttl_minutes: int = 15
+    session_ttl_hours: int = 12  # hạn phiên = hạn refresh token (tuyệt đối, tính từ lúc đăng nhập)
     seed_password: str = "demo1234"
     cookie_secure: bool = False  # bật khi chạy sau HTTPS
     allow_registration: bool = True  # người dùng tự tạo tài khoản bệnh nhân ở trang đăng ký
