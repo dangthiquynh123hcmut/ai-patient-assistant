@@ -128,7 +128,7 @@ async def test_register_rejects_taken_username_and_bad_input(make_app: Any) -> N
             r = await client.post("/v1/auth/register", json={**NEW_ACCOUNT, "username": "khac", **bad})
             assert r.status_code == 422, (bad, r.text)
     # Đăng ký trùng không để lại hồ sơ bệnh nhân mồ côi.
-    profiles = await app.auth.list_patients()
+    profiles = await app.auth().list_patients()
     assert len(profiles) == len(seed.PATIENTS) + 1  # bệnh nhân demo + 1 tài khoản vừa đăng ký
 
 
@@ -312,7 +312,7 @@ async def test_refresh_endpoint_rotates_cookie(make_app: Any) -> None:
     async with api_client(app) as client:
         login_r = await client.post("/v1/auth/login", json={"username": "benhnhan1", "password": "demo1234"})
         old_cookie = client.cookies.get("pa_refresh")
-        app.clock.now = lambda: NOW + timedelta(minutes=20)  # type: ignore[method-assign]
+        app.clock().now = lambda: NOW + timedelta(minutes=20)  # type: ignore[method-assign]
         expired = {"Authorization": f"Bearer {login_r.json()['access_token']}"}
         assert (await client.get("/v1/auth/me", headers=expired)).status_code == 401
 
@@ -543,7 +543,7 @@ async def test_register_with_birth_date_and_phone(make_app: Any) -> None:
     async with api_client(app) as client:
         body = {**NEW_ACCOUNT, "date_of_birth": "1990-05-17", "phone": "+84 912 345 678"}
         user = (await client.post("/v1/auth/register", json=body)).json()["user"]
-        profile = await app.toolbox._patients.get_profile(user["patient_id"])
+        profile = await app.toolbox()._patients.get_profile(user["patient_id"])
         assert (str(profile.date_of_birth), profile.phone) == ("1990-05-17", "0912345678")  # +84 -> 0, bỏ khoảng trắng
         client.cookies.clear()
         for bad in ({"phone": "12345"}, {"date_of_birth": "2999-01-01"}):
@@ -565,8 +565,8 @@ async def test_staff_can_tell_apart_patients_with_identical_details(make_app: An
 
 async def test_patient_info_shows_birth_date_and_phone_but_llm_tool_does_not(make_app: Any) -> None:
     app = await make_app()
-    info = done(await app.chat.send_message("pi-1", PATIENT, "xem thông tin của tôi"), "patient_info")
+    info = done(await app.chat().send_message("pi-1", PATIENT, "xem thông tin của tôi"), "patient_info")
     assert "Ngày sinh: 15/01/1980" in info.response.text and "Số điện thoại: 0901000001" in info.response.text
-    summary = next(t for t in app.toolbox.read_only_specs(PATIENT, NOW) if t.name == "get_patient_summary")
+    summary = next(t for t in app.toolbox().read_only_specs(PATIENT, NOW) if t.name == "get_patient_summary")
     profile = (await summary.handler(None))["data"]["profile"]  # type: ignore[arg-type]
     assert profile["display_name"] == "Bệnh nhân Demo 1" and "phone" not in profile and "date_of_birth" not in profile

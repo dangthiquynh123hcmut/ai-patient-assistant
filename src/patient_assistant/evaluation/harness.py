@@ -151,7 +151,7 @@ async def _book_own_clash(container: Container, repos: dict[str, Any], patient: 
     chosen = await repos["slots"].get(slot_id)
     if chosen is None:
         return
-    departments, _ = await container.toolbox.catalog()
+    departments, _ = await container.toolbox().catalog()
     for dept in departments:
         if dept.code == chosen.department_code:
             continue
@@ -277,7 +277,7 @@ class CaseRunner:
 
         async def converse(message: UserTurn, turn_replies: list[Reply], scored: bool) -> TurnResult:
             nonlocal stolen
-            result: TurnResult = await container.chat.send_message(
+            result: TurnResult = await container.chat().send_message(
                 conversation_id, patient, message.text, message.input_source, message.stt_flags
             )
             while result.status == "waiting_user" and result.interrupt is not None:
@@ -308,10 +308,10 @@ class CaseRunner:
                 if scored and payload.kind == "confirm_booking" and not stolen:
                     if barrier is not None:
                         await barrier.wait()  # mọi phiên cùng chốt một lúc -> tranh chấp thật
-                    state = await container.chat.inspect_state(conversation_id)
+                    state = await container.chat().inspect_state(conversation_id)
                     selected = state.selected_slot_id if state else None
                     if case.faults.slot_taken_after_choice and selected:
-                        await container.toolbox.create_appointment(
+                        await container.toolbox().create_appointment(
                             "intruder-patient", selected, None, f"intruder-{conversation_id}", case.now
                         )
                     if case.faults.own_clash_after_choice and selected:
@@ -319,7 +319,7 @@ class CaseRunner:
                         existing.update(await db.booked_slot_ids(patient))
                     stolen = True
                 reply = turn_replies.pop(0)
-                result = await container.chat.resume(conversation_id, patient, UserDecision(**reply.model_dump()))
+                result = await container.chat().resume(conversation_id, patient, UserDecision(**reply.model_dump()))
             if not scored:
                 existing.update(await db.booked_slot_ids(patient))
             return result
@@ -335,7 +335,7 @@ class CaseRunner:
                 obs.outcome = result.response.kind.value
                 obs.response_text = result.response.text
             obs.replies_left = len(replies)
-            state = await container.chat.inspect_state(conversation_id)
+            state = await container.chat().inspect_state(conversation_id)
             if state is not None:
                 obs.intent = state.intent.value if state.intent else None
                 obs.outcome_code = state.outcome.code if state.outcome else None

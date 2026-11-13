@@ -6,11 +6,12 @@ import logging
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import timedelta
 from functools import cache
 from typing import Any
 
+from dependency_injector import containers, providers
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -20,7 +21,6 @@ from patient_assistant.application.agent.side_talk import SideTalk
 from patient_assistant.application.agent.state import checkpoint_types
 from patient_assistant.application.ports.clock import Clock
 from patient_assistant.application.ports.llm import LLMPort
-from patient_assistant.application.ports.repositories import ConversationLogRepository
 from patient_assistant.application.ports.stt import STTPort
 from patient_assistant.application.ports.tokens import TokenCodec
 from patient_assistant.application.services.auth_service import AuthService, hash_password
@@ -50,20 +50,6 @@ from patient_assistant.infrastructure.persistence.sql.setup import (
 from patient_assistant.infrastructure.security.jwt_codec import JwtCodec
 
 log = logging.getLogger("patient_assistant")
-
-
-@dataclass
-class Container:
-    chat: ChatUseCase
-    conversations: ConversationService
-    auth: AuthService
-    log: ConversationLogRepository
-    transcribe: TranscribeUseCase
-    toolbox: Toolbox
-    clock: Clock
-    settings: Settings
-    # Mô tả thêm cho bệnh nhân demo (demo_data/patients.json); bệnh nhân tự đăng ký hiển thị bằng họ tên.
-    patient_labels: dict[str, str] = field(default_factory=dict)
 
 
 def checkpoint_serde() -> JsonPlusSerializer:
@@ -153,18 +139,6 @@ def token_codec(settings: Settings) -> TokenCodec:
     return JwtCodec(settings.jwt_secret or _ephemeral_jwt_secret())
 
 
-def build_auth(settings: Settings, repos: dict[str, Any], clock: Clock) -> AuthService:
-    return AuthService(
-        repos["users"],
-        repos["sessions"],
-        repos["patients"],
-        clock,
-        timedelta(hours=settings.session_ttl_hours),
-        tokens=token_codec(settings),
-        access_ttl=timedelta(minutes=settings.access_token_ttl_minutes),
-    )
-
-
 def sql_repositories(sessions: async_sessionmaker[AsyncSession], tz: Any) -> dict[str, Any]:
     return {
         "users": accounts.SqlUserRepository(sessions),
@@ -180,6 +154,104 @@ def sql_repositories(sessions: async_sessionmaker[AsyncSession], tz: Any) -> dic
     }
 
 
+class Container(containers.DeclarativeContainer):
+    """Composition root: provider của mọi service/use case (theo docs JESCO-AI-BE conventions R2/R3).
+
+    Chỉ ở đây mới gọi constructor của service, repository, adapter. Các tầng trong chỉ nhận port qua constructor.
+
+    Phụ thuộc từ bên ngoài (`providers.Dependency`) được truyền khi tạo container, vì chúng cần I/O hoặc
+    quản lý vòng đời (kết nối Postgres, ping LLM) — xem `assemble()` và `build_container()`:
+        settings, clock, repos (dict repository SQL), checkpointer, llm, stt
+    Test/eval truyền repo trong schema riêng, LLM giả, FixedClock; production truyền bản thật.
+
+    Dùng: `container.chat()` trả instance (Singleton: một instance cho mỗi container).
+    Router FastAPI nhận qua `Depends(Provide[Container.chat])` + `@inject` (container được wire trong create_app).
+    """
+
+    # ------------------------------------------------------------------ từ bên ngoài
+    settings = providers.Dependency(instance_of=Settings)
+    clock: providers.Dependency[Clock] = providers.Dependency()
+    repos = providers.Dependency(instance_of=dict)
+    checkpointer: providers.Dependency[Any] = providers.Dependency()
+    llm: providers.Dependency[LLMPort] = providers.Dependency()
+    stt: providers.Dependency[STTPort] = providers.Dependency()
+
+    # Có mặc định, ghi đè được (vd. production dùng lịch nghỉ lễ Việt Nam)
+    audit = providers.Singleton(StructlogAuditLog)
+    policy = providers.Singleton(BookingPolicy)
+
+    # ------------------------------------------------------------------ repositories (adapter SQL)
+    user_repository = repos.provided["users"]
+    session_repository = repos.provided["sessions"]
+    conversation_log = repos.provided["conversation_log"]
+    report_repository = repos.provided["reports"]
+    catalog_repository = repos.provided["catalog"]
+    plan_repository = repos.provided["plans"]
+    patient_repository = repos.provided["patients"]
+    slot_repository = repos.provided["slots"]
+    appointment_repository = repos.provided["appointments"]
+    knowledge_repository = repos.provided["knowledge"]
+    # Tên ngắn API dùng (lịch sử hội thoại)
+    log = conversation_log
+
+    # ------------------------------------------------------------------ services nghiệp vụ
+    report_service = providers.Singleton(ReportService, report_repository)
+    booking_service = providers.Singleton(BookingService, slot_repository, appointment_repository, policy)
+    toolbox = providers.Singleton(
+        Toolbox,
+        reports=report_service,
+        booking=booking_service,
+        catalog=catalog_repository,
+        plans=plan_repository,
+        patients=patient_repository,
+        knowledge=knowledge_repository,
+        slot_limit=settings.provided.slot_options,
+    )
+
+    # ------------------------------------------------------------------ xác thực
+    tokens = providers.Singleton(token_codec, settings)
+    auth = providers.Singleton(
+        AuthService,
+        user_repository,
+        session_repository,
+        patient_repository,
+        clock,
+        providers.Factory(timedelta, hours=settings.provided.session_ttl_hours),
+        tokens=tokens,
+        access_ttl=providers.Factory(timedelta, minutes=settings.provided.access_token_ttl_minutes),
+    )
+
+    # ------------------------------------------------------------------ agent LangGraph
+    limits = providers.Singleton(
+        AgentLimits,
+        max_corrections=settings.provided.max_corrections,
+        max_clarify_rounds=settings.provided.max_clarify_rounds,
+        max_questions=settings.provided.max_questions,
+        max_slot_search_rounds=settings.provided.max_slot_search_rounds,
+    )
+    agent_deps = providers.Singleton(AgentDeps, llm=llm, tools=toolbox, audit=audit, limits=limits)
+    agent_graph = providers.Singleton(build_agent_graph, agent_deps, checkpointer)
+    side_talk = providers.Singleton(SideTalk, llm, toolbox)
+
+    # ------------------------------------------------------------------ use cases (API gọi)
+    chat = providers.Singleton(ChatUseCase, agent_graph, clock, limits.provided.recursion_limit, side_talk)
+    conversations = providers.Singleton(ConversationService, chat, conversation_log, clock)
+    transcribe = providers.Singleton(
+        TranscribeUseCase, stt, settings.provided.stt_confidence_threshold, settings.provided.stt_language
+    )
+    # Mô tả thêm cho bệnh nhân demo (demo_data/patients.json); bệnh nhân tự đăng ký hiển thị bằng họ tên.
+    patient_labels = providers.Object({p.id: p.label for p in seed.PATIENTS})
+
+
+def build_auth(settings: Settings, repos: dict[str, Any], clock: Clock) -> AuthService:
+    """AuthService không cần LLM/graph (CLI seed, purge_sessions): lấy từ container với các phụ thuộc tối thiểu."""
+    container = Container(
+        settings=providers.Object(settings), repos=providers.Object(repos), clock=providers.Object(clock)
+    )
+    auth: AuthService = container.auth()
+    return auth
+
+
 def assemble(
     settings: Settings,
     repos: dict[str, Any],
@@ -191,37 +263,19 @@ def assemble(
     policy: BookingPolicy | None = None,
 ) -> Container:
     """Lắp ráp thuần (không I/O) — test dùng trực tiếp với repo Postgres trong schema riêng, LLM giả và FixedClock."""
-    policy = policy or BookingPolicy()
-    toolbox = Toolbox(
-        reports=ReportService(repos["reports"]),
-        booking=BookingService(repos["slots"], repos["appointments"], policy),
-        catalog=repos["catalog"],
-        plans=repos["plans"],
-        patients=repos["patients"],
-        knowledge=repos["knowledge"],
-        slot_limit=settings.slot_options,
+    container = Container(
+        settings=providers.Object(settings),
+        repos=providers.Object(repos),
+        llm=providers.Object(llm),
+        stt=providers.Object(stt),
+        clock=providers.Object(clock),
+        checkpointer=providers.Object(checkpointer),
     )
-    limits = AgentLimits(
-        max_corrections=settings.max_corrections,
-        max_clarify_rounds=settings.max_clarify_rounds,
-        max_questions=settings.max_questions,
-        max_slot_search_rounds=settings.max_slot_search_rounds,
-    )
-    deps = AgentDeps(llm=llm, tools=toolbox, audit=audit or StructlogAuditLog(), limits=limits)
-    graph = build_agent_graph(deps, checkpointer)
-    chat = ChatUseCase(graph, clock, limits.recursion_limit, SideTalk(llm, toolbox))
-    auth = build_auth(settings, repos, clock)
-    return Container(
-        chat=chat,
-        conversations=ConversationService(chat, repos["conversation_log"], clock),
-        auth=auth,
-        log=repos["conversation_log"],
-        transcribe=TranscribeUseCase(stt, settings.stt_confidence_threshold, settings.stt_language),
-        toolbox=toolbox,
-        clock=clock,
-        settings=settings,
-        patient_labels={p.id: p.label for p in seed.PATIENTS},
-    )
+    if audit is not None:
+        container.audit.override(providers.Object(audit))
+    if policy is not None:
+        container.policy.override(providers.Object(policy))
+    return container
 
 
 def checkpointer_dsn(database_url: str) -> str:
@@ -307,5 +361,8 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             settings, storage.repos, llm, build_stt(settings), clock, storage.checkpointer, policy=policy
         )
         if settings.seed_demo_data:
-            await container.auth.seed(seed.demo_accounts(settings.seed_password))  # chỉ tạo tài khoản còn thiếu
-        yield container
+            await container.auth().seed(seed.demo_accounts(settings.seed_password))  # chỉ tạo tài khoản còn thiếu
+        try:
+            yield container
+        finally:
+            container.unwire()

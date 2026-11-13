@@ -19,6 +19,7 @@ dependencies = [
     "structlog>=24.1",
     "pyjwt>=2.9",
     "holidays>=0.60",
+    "dependency-injector>=4.46",
     "tzdata>=2024.1; sys_platform == 'win32'",
 ]
 

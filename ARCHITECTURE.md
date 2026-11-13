@@ -619,11 +619,12 @@ src/patient_assistant/
     persistence/  memory.py  seed.py  sql/{models,repositories,setup}.py
                   demo_data/*.json   # khoa, bác sĩ, lịch làm việc, bệnh nhân, kế hoạch, tài liệu, lịch sử demo
     calendar/vn_holidays.py  clock.py  audit.py
-  interface/api/  app.py  schemas.py
+  interface/api/  app.py  schemas.py  deps.py      # create_app wire Container vào router
+                  routers/{auth,chat,me,staff}_router.py   # Depends(Provide[Container.x]) + @inject
   interface/cli/  dump.py  seed.py  check_llm.py     # xuất dữ liệu; seed dữ liệu demo; kiểm tra Bedrock
   evaluation/                  # lớp ngoài cùng, giống interface: cases, harness, metrics, report, runner, datasets/
   config.py                    # Settings (env PA_*)
-  container.py                 # composition root: nơi duy nhất chọn implementation
+  container.py                 # composition root (dependency-injector DeclarativeContainer): nơi duy nhất chọn implementation
 src/.../persistence/sql/migrations/  # Alembic trong package: env.py (async), versions/0001_initial.py
 frontend/                      # React 19 + TypeScript (Vite); nginx/ (proxy /v1, security header); Dockerfile
   src/api/  auth/  components/  features/{chat,inspector,staff}/  lib/

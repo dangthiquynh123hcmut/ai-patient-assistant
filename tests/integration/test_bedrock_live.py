@@ -21,7 +21,7 @@ async def bedrock_app(make_app):  # noqa: ANN001, ANN201
 
 
 async def test_loose_report_is_understood_and_validated(bedrock_app) -> None:  # noqa: ANN001
-    result = await bedrock_app.chat.send_message(
+    result = await bedrock_app.chat().send_message(
         "live-1", PATIENT, "báo cáo tuần này: gối đau chừng 4 trên 10, tập được ba buổi, đỡ hơn tuần trước"
     )
     fields = {e.field: e.value for e in waiting(result, "confirm_report").interrupt.explanations}
@@ -29,7 +29,7 @@ async def test_loose_report_is_understood_and_validated(bedrock_app) -> None:  #
 
 
 async def test_vague_booking_goes_to_booking_flow(bedrock_app) -> None:  # noqa: ANN001
-    result = await bedrock_app.chat.send_message(
+    result = await bedrock_app.chat().send_message(
         "live-2", PATIENT, "dạo này gối hơi nhức, cho tôi hẹn gặp bác sĩ sáng mai"
     )
     assert result.interrupt is not None and result.interrupt.kind in {"choose_slot", "clarify"}
@@ -37,6 +37,6 @@ async def test_vague_booking_goes_to_booking_flow(bedrock_app) -> None:  # noqa:
 
 async def test_patient_info(bedrock_app) -> None:  # noqa: ANN001
     done(
-        await bedrock_app.chat.send_message("live-3", PATIENT, "cho mình xem tình hình của mình dạo này"),
+        await bedrock_app.chat().send_message("live-3", PATIENT, "cho mình xem tình hình của mình dạo này"),
         "patient_info",
     )

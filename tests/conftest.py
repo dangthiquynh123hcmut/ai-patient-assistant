@@ -241,8 +241,7 @@ def api_client(container: Container) -> Any:
 
     from patient_assistant.interface.api.app import create_app
 
-    app = create_app()
-    app.state.container = container
+    app = create_app(container)
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
 
 
