@@ -13,6 +13,8 @@ export const INTERRUPT_TITLE: Record<InterruptKind, string> = {
 export const OUTCOME_TITLE: Record<OutcomeKind, string> = {
   report_saved: "Đã lưu báo cáo",
   appointment_booked: "Đã đặt lịch",
+  appointment_cancelled: "Đã hủy lịch",
+  appointment_rescheduled: "Đã dời lịch",
   history: "Báo cáo trước",
   appointments: "Lịch hẹn",
   patient_info: "Thông tin bệnh nhân",
@@ -32,6 +34,8 @@ export const MESSAGE_KIND: Record<string, string> = {
   confirm_booking: "chờ xác nhận lịch",
   report_saved: "đã lưu báo cáo",
   appointment_booked: "đã đặt lịch",
+  appointment_cancelled: "đã hủy lịch",
+  appointment_rescheduled: "đã dời lịch",
   history: "báo cáo trước",
   appointments: "lịch hẹn",
   patient_info: "thông tin bệnh nhân",

@@ -1,12 +1,6 @@
 # AI Patient Assistant — Thiết kế kiến trúc (LangGraph)
 
 **Dựa trên:** `AI_Patient_Assistant_Functional_Requirements_v2.md` (v0.3)
-**Ngày:** 2026-10-28
-**Trạng thái:** Draft v2 — bổ sung **đặt lịch khám bằng giọng nói** (dữ liệu lịch giả lập) vào phạm vi MVP, xem §7.
-
-> **Thay đổi phạm vi so với FR v0.2 (đã cập nhật vào FR v0.3):** §2 của FR để "đặt/đổi/hủy lịch khám **thật**, tích hợp HIS/EMR" ngoài phạm vi. Bản kiến trúc này đưa vào **đặt lịch trên dữ liệu giả lập** (P0) và xem lịch đã đặt (P0); đổi/hủy lịch là P1. Tích hợp hệ thống bệnh viện thật vẫn nằm ngoài phạm vi. Tài liệu FR đã được cập nhật lên v0.3 (§2, FR-02.1, FR-03, FR-09) cho khớp.
-
----
 
 ## 0. Nguyên tắc thiết kế (rút ra từ FR)
 
@@ -21,6 +15,19 @@
 | P7 | **Mọi thứ đều đo được** | Mỗi attempt, validation issue, tool call được ghi vào bảng riêng để chạy metric. | FR-06.6, FR-08 |
 | P8 | **Ngày giờ và slot do code giải quyết** | LLM chỉ trích nguyên văn cụm thời gian ("thứ Ba tuần sau", "sáng mai"); code quy đổi ra ngày theo múi giờ `Asia/Ho_Chi_Minh`. `slot_id` chỉ được lấy từ danh sách backend vừa trả về, LLM không tự tạo. | FR-09.3, FR-09.4 |
 | P9 | **Mỗi luồng là một subgraph** | `report_flow` và `booking_flow` là subgraph riêng, dùng chung validator pipeline, cơ chế interrupt và tool contract. Thêm luồng mới không phải sửa luồng cũ. | FR-02.3 |
+
+> **Nới nguyên tắc ở chế độ agent (`PA_AGENT_MODE=booking|full`, §7.10).** Luồng cứng ở trên buộc người dùng trả lời
+> lần lượt khoa → ngày → giờ (hay mức đau → số ngày tập), nên không hiểu được câu như "đặt giống lịch hiện tại nhưng
+> cách 7 ngày", hay hai việc trong một câu. Ở chế độ agent:
+>
+> | # | Thay đổi | Phần vẫn giữ bằng code |
+> |---|---|---|
+> | P1 | LLM quyết định hỏi gì, gọi tool đọc nào, theo thứ tự nào; `full` bỏ cả bước `classify` | Chặn an toàn (`guard_input`), trần số lần gọi tool, trần số việc ghi mỗi lượt, `recursion_limit` |
+> | P2 | LLM được gọi `propose_booking` / `propose_reschedule` / `propose_cancel` / `propose_report`, nhưng các tool này chỉ **đề xuất** | Validator + thẻ xác nhận (interrupt) rồi mới ghi; ghi có idempotency key và đọc lại |
+> | P3 | Không đổi | `patient_id` gắn sẵn trong mọi tool; lịch đổi/hủy phải là lịch sắp tới của chính bệnh nhân |
+> | P8 | LLM tự tính ngày ("cách lịch hiện tại 7 ngày") | Khoảng ngày qua `window_issues` (quá khứ, quá xa, ngày nghỉ); `slot_id` phải là slot backend đã trả cho agent |
+>
+> Mặc định vẫn là `workflow`; các chế độ dùng chung node ghi + đọc lại (`create_booking`, `save`, `verify_*`).
 
 ---
 
@@ -61,7 +68,7 @@
 |---|---|---|
 | Tracing LLM/graph | **Langfuse self-host** hoặc **OpenTelemetry** | Self-host để dữ liệu không ra dịch vụ ngoài (FR-08.8). LangSmith chỉ dùng khi chắc chắn toàn dữ liệu giả lập. |
 | RAG vector | **pgvector** + embedding qua Bedrock | MVP bắt đầu bằng Postgres full-text search là đủ cho tập tài liệu nhỏ; chuyển sang vector khi cần. |
-| UI demo | **Streamlit** hoặc trang HTML tĩnh gọi API | Cần 2 màn hình: chat (kể cả ghi âm), xem/sửa/xác nhận bản nháp. |
+| UI | **React 19 + TypeScript** (Vite), nginx phục vụ — *đã hiện thực, xem §2* | Ban đầu dự kiến Streamlit hoặc trang HTML tĩnh; đã chọn React để có chat, ghi âm, thẻ xác nhận/sửa bản nháp, bảng diễn giải quyết định và trang nhân viên. |
 
 ### 1.4 Vì sao dùng Anthropic SDK thay vì `langchain-aws`?
 
@@ -73,50 +80,45 @@ LangGraph không bắt buộc dùng model của LangChain — một node chỉ l
 
 Nếu sau này muốn dùng hệ sinh thái LangChain (`ToolNode`, `with_structured_output`), chỉ cần thêm một implementation `LangChainBedrockProvider` dùng `ChatBedrockConverse` — workflow không đổi.
 
-### 1.5 Ghi chú về model Claude trên Bedrock
-
-- Model mặc định: **Claude Opus 4.6** qua inference profile `global.anthropic.claude-opus-4-6-v1` (bedrock-runtime). ID dạng `anthropic.claude-opus-5-5` sẽ đi qua Mantle. Đặt qua env (`LLM_MODEL_ID`) và kiểm tra lại ID/region khả dụng trong Bedrock console của tài khoản.
-- Có thể cấu hình model riêng theo từng node (`LLM_MODEL_EXTRACT`, `LLM_MODEL_RESPOND`…) để sau này thử model rẻ hơn cho bước đơn giản — chỉ đổi khi bộ eval chứng minh chất lượng giữ nguyên.
-- Những điểm khác API cần biết khi viết code cho Opus 5.5:
-  - Không gửi `temperature`/`top_p`/`top_k` (bị từ chối). Tính ổn định đến từ schema + validator, không đến từ temperature.
-  - Không tắt được thinking; điều khiển bằng `output_config.effort` (mặc định `medium`). Gợi ý: `low` cho phân loại/soạn câu trả lời, `medium` cho trích xuất và sửa lỗi.
-  - Không dùng `tool_choice` dạng `any`/`tool` (bị lỗi 400). Dùng `auto` + `strict: true`; khi chỉ cần JSON thì dùng structured output.
-  - Không dùng assistant prefill.
-  - Luôn kiểm tra `stop_reason` trước khi đọc nội dung. `refusal` → map thành `LLMError(code="refusal")` → route sang `handoff`. Trên Bedrock không có tham số `fallbacks` phía server; nếu muốn tự chuyển sang model dự phòng khi bị từ chối, dùng `BetaRefusalFallbackMiddleware` phía client của SDK.
-  - System prompt + định nghĩa tool cố định → bật prompt caching để giảm chi phí.
-
----
-
 ## 2. Kiến trúc tổng thể
 
 ```text
-┌──────────────┐   text / audio    ┌───────────────────────── FastAPI ──────────────────────────┐
-│  Client/UI   │ ────────────────▶ │ POST /stt/transcribe   POST /chat/{conversation_id}/messages      │
-│ (Streamlit)  │ ◀──────────────── │ POST /chat/{conversation_id}/resume   GET /reports                │
-└──────────────┘  response/interrupt└───────┬──────────────────────┬─────────────────────────────┘
-                                           │                      │
-                                   ┌───────▼──────┐      ┌────────▼─────────────────────────┐
-                                   │  stt/        │      │  agent/  (LangGraph StateGraph)  │
-                                   │ faster-whisper│     │  nodes · routing · retry policy  │
-                                   └──────────────┘      └──┬───────────┬───────────┬───────┘
-                                                            │           │           │
-                                               ┌────────────▼──┐ ┌──────▼─────┐ ┌───▼──────────┐
-                                               │ llm/          │ │ validators/│ │ tools/       │
-                                               │ LLMProvider   │ │ 6 lớp,     │ │ ToolResult   │
-                                               │ (Bedrock)     │ │ thuần code │ │ chuẩn hóa    │
-                                               └───────────────┘ └────────────┘ └──────┬───────┘
-                                                                                       │
-                                                                  ┌────────────────────▼───────┐
-                                                                  │ services/ → repositories/  │
-                                                                  │ quyền, nghiệp vụ, idempot. │
-                                                                  └────────────┬───────────────┘
-                                                                               │
-                                                     ┌─────────────────────────▼──────────────────┐
-                                                     │ PostgreSQL: patients, plans, reports,      │
-                                                     │ knowledge_docs, agent_attempts, tool_calls,│
-                                                     │ langgraph checkpoints                      │
-                                                     └────────────────────────────────────────────┘
+┌────────────────────────┐  HTTPS, cùng origin   ┌──────────── FastAPI (prefix /v1, JWT) ────────────────┐
+│ Trình duyệt            │ ────────────────────▶ │ /v1/auth/*        đăng nhập, refresh (cookie HttpOnly)│
+│ React 19 + TypeScript  │                       │ POST /v1/stt/transcribe                 (audio → text)│
+│ (Vite build, nginx     │ ◀──────────────────── │ POST /v1/chat/{conversation_id}/messages              │
+│  phục vụ + proxy /v1/) │   TurnResult:         │ POST /v1/chat/{conversation_id}/resume  (trả lời thẻ) │
+└────────────────────────┘   câu trả lời |       │ GET  /v1/chat/{id}/state · /pending · /v1/me/*        │
+                             interrupt + trace   │ GET  /v1/staff/* · /v1/admin/users      (nhân viên)   │
+                                                 └────────┬──────────────────────┬───────────────────────┘
+                                                          │                      │
+                                          ┌───────────────▼──┐      ┌────────────▼─────────────────────┐
+                                          │ stt/             │      │ agent/  (LangGraph StateGraph)   │
+                                          │ faster-whisper   │      │ workflow | agent_flow (§7.10)    │
+                                          └──────────────────┘      └──┬───────────┬───────────┬───────┘
+                                                                       │           │           │
+                                                          ┌────────────▼──┐ ┌──────▼─────┐ ┌───▼──────────┐
+                                                          │ llm/          │ │ validators │ │ tools/       │
+                                                          │ LLMPort       │ │ (domain),  │ │ ToolResult   │
+                                                          │ (Bedrock)     │ │ thuần code │ │ chuẩn hóa    │
+                                                          └───────────────┘ └────────────┘ └──────┬───────┘
+                                                                                                  │
+                                                                             ┌────────────────────▼───────┐
+                                                                             │ services/ → repositories/  │
+                                                                             │ quyền, nghiệp vụ, idempot. │
+                                                                             └────────────┬───────────────┘
+                                                                                          │
+                                                   ┌──────────────────────────────────────▼──────────────┐
+                                                   │ PostgreSQL: departments, doctors, slots,            │
+                                                   │ appointments, patients, patient_plans, reports,     │
+                                                   │ knowledge_docs, users, sessions, conversations,     │
+                                                   │ chat_messages + checkpoint LangGraph                │
+                                                   └─────────────────────────────────────────────────────┘
 ```
+
+**UI** là ứng dụng React 19 + TypeScript trong `frontend/`, build bằng Vite thành file tĩnh. nginx phục vụ các file này
+và proxy `/v1/` về backend, nên trình duyệt chỉ thấy một origin (cookie refresh token HttpOnly, không cần CORS). Attempt
+của LLM, lần gọi tool và lượt chat được ghi qua audit log có cấu trúc (structlog), không có bảng riêng.
 
 **STT nằm ngoài graph** (gọi qua endpoint riêng). Ghi âm xong, UI gửi thẳng transcript vào graph, không có bước duyệt thủ công (FR-01.3). Transcript cùng metadata độ tin cậy (`stt_flags`) được gửi vào graph như text bình thường; từ bị gắn cờ khiến validator grounding chuyển trường liên quan sang `ask_user` (FR-01.4) → hai loại đầu vào dùng chung một workflow (FR-01.5).
 
@@ -549,6 +551,52 @@ Kết quả luôn là một `option_no` thuộc danh sách đã đưa ra — dù
 
 `reschedule_appointment` và `cancel_appointment` dùng đúng khung trên: xác định lịch hẹn cần đổi từ `list_my_appointments` (người dùng chọn theo số thứ tự, không theo ID LLM tạo) → `present_*_draft` + interrupt → tool ghi do code gọi, có idempotency key → verify.
 
+### 7.10 Chế độ agent (`PA_AGENT_MODE=booking | full`)
+
+| Chế độ | Phạm vi |
+|---|---|
+| `workflow` (mặc định) | Luồng cứng như các mục trên |
+| `booking` | `classify` vẫn chạy; riêng đặt / dời / hủy lịch do agent đảm nhận |
+| `full` | Bỏ `classify` và các luồng cứng: `ingest → guard_input → agent_flow → respond` cho MỌI câu |
+
+(`PA_BOOKING_MODE=agent` cũ tương đương `PA_AGENT_MODE=booking`.)
+
+Subgraph `agent_flow` ([flows/agent_flow.py](src/patient_assistant/application/agent/flows/agent_flow.py)):
+
+```text
+agent (LLM + tool đọc) ──propose_*──▶ agent_confirm (interrupt) ──xác nhận──▶ ghi ──▶ đọc lại ──▶ agent_after_write
+   │  ▲  ▲                              │  │ sửa trên form (báo cáo): code áp + validate lại, hiện lại thẻ      │
+   │  │  └─── người dùng nhắn đổi ──────┘                                                                      │
+   │  └────────────── full: "đã xong việc X" → agent làm tiếp việc còn lại trong câu (tối đa 3 việc ghi) ─────┘
+   └── hỏi lại / trả lời bằng lời tự nhiên ─▶ agent_wrapup ─▶ respond   (lượt sau đi thẳng vào agent)
+```
+
+Ghi theo loại đề xuất: `booking` → `create_booking`/`verify_booking`; `report` → `save`/`verify_save` (của report_flow);
+`reschedule`, `cancel` → `change_appointment`/`verify_change` (đọc lại cả lịch cũ đã hủy lẫn lịch mới).
+
+- **Tool** ([nodes/assistant_agent.py](src/patient_assistant/application/agent/nodes/assistant_agent.py)):
+  - đọc: `find_my_appointments` (sắp tới / đã qua, chỉ các trường được phép), `search_slots`, `get_patient_plan`;
+    `full` thêm `get_patient_summary` (bỏ ngày sinh, số điện thoại), `get_report_history`, `search_approved_knowledge`;
+  - đề xuất (`terminal`: trả "ok" thì vòng lặp dừng ngay): `propose_booking`, `propose_reschedule`, `propose_cancel`;
+    `full` thêm `propose_report` (input chính là `ReportExtraction`, qua `validate_report` với lời người dùng làm nguồn
+    trích dẫn — thiếu trường thì báo agent hỏi lại, sai trích dẫn thì báo agent sửa).
+- **Nhiều việc trong một câu** (`full`): ghi + xác minh xong việc thứ nhất thì `agent_after_write` báo cho agent; thẻ
+  của việc thứ hai hiện kèm kết quả việc thứ nhất; câu trả lời cuối liệt kê đủ các kết quả đã xác minh (`agent_done`).
+- **Bộ nhớ**: `agent_history` và `agent_slots` nối qua các lượt; dữ liệu cũ trong DB thì agent tự tra bằng tool.
+- **An toàn**: `guard_input` chạy trước agent; câu trả lời ở thẻ xác nhận cũng qua `check_input_safety`; câu trả lời
+  của agent qua `output_is_safe`. Nguồn tài liệu chỉ ghi nhận `doc_id` do chính tool trả về.
+- **Prompt**: [assistant_agent.md](src/patient_assistant/infrastructure/llm/prompts/assistant_agent.md) (`full`),
+  [booking_agent.md](src/patient_assistant/infrastructure/llm/prompts/booking_agent.md) (`booking`). Effort riêng:
+  `PA_LLM_EFFORT_AGENT` (mặc định `low` — đo thật cho kết quả như `medium` mà nhanh gấp khoảng 3 lần).
+
+Ví dụ "Tuần này tôi đau mức 5, tập 4 ngày. Đặt thêm lịch giống lịch hiện tại nhưng cách 7 ngày": `propose_report` →
+thẻ báo cáo → xác nhận → lưu + đọc lại → agent được báo "đã xong" → `find_my_appointments` → `search_slots` →
+`propose_booking` → thẻ đặt lịch (kèm "Đã lưu báo cáo…") → xác nhận → đặt + đọc lại → trả lời cả hai kết quả.
+
+Đánh đổi: hành vi phụ thuộc LLM nên kém tất định hơn. Test dùng LLM giả gọi tool thật để kiểm tra các hàng rào
+([test_full_agent.py](tests/integration/test_full_agent.py), [test_booking_agent.py](tests/integration/test_booking_agent.py));
+chất lượng với Claude thật đo bằng suite eval `agent` ([agent.jsonl](src/patient_assistant/evaluation/datasets/agent.jsonl)).
+
 ---
 
 ## 8. STT
@@ -698,7 +746,7 @@ Chi tiết ở [docs/EVALUATION.md](docs/EVALUATION.md). Tóm tắt:
 | 6 | `FieldExplanation` + `respond` + `rag_answer` có citation | — |
 | 7 | Booking bằng text: dữ liệu seed khoa/bác sĩ/slot, `vi_dates`, `booking_rules`, subgraph `booking_flow`, `match_selection`, test đồng thời | holidays |
 | 8 | Dataset + runner + metric (báo cáo và booking) | pandas, jiwer |
-| 9 | STT endpoint + cờ độ tin cậy + UI ghi âm gửi thẳng; bộ audio test cho cả báo cáo và booking (số, ngày, giờ, tên khoa) | faster-whisper, streamlit |
+| 9 | STT endpoint + cờ độ tin cậy + UI ghi âm gửi thẳng; bộ audio test cho cả báo cáo và booking (số, ngày, giờ, tên khoa) | faster-whisper; UI React + TypeScript (Vite) |
 | 10 (P1) | Đổi/hủy lịch, giữ chỗ slot có TTL, TTS đọc lại xác nhận | — |
 
 Booking được làm bằng text trước (bước 7) rồi mới thêm giọng nói (bước 9): vì giọng nói chỉ là STT đi vào cùng workflow, mọi lỗi logic đặt lịch được bắt bằng test text — rẻ và tái lập được — trước khi thêm biến số nhận dạng giọng nói.

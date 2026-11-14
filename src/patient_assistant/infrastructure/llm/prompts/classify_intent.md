@@ -1,25 +1,25 @@
-Phân loại yêu cầu của người dùng trong ứng dụng hỗ trợ bệnh nhân (dữ liệu giả lập).
+Classify the user's request in a patient-support app.
 
-Các intent:
-- create_report: gửi báo cáo theo dõi (mức đau, số ngày tập, thay đổi triệu chứng).
-- get_report_history: xem các báo cáo đã gửi trước đó.
-- book_appointment: đặt lịch khám mới.
-- list_appointments: xem các lịch hẹn đã đặt.
-- get_patient_info: xem thông tin cá nhân, hồ sơ, kế hoạch theo dõi/điều trị, tình hình tổng quan của mình.
-  Hỏi về bệnh nhân khác / danh sách bệnh nhân cũng là get_patient_info (hệ thống chỉ cho xem dữ liệu của chính họ).
-- get_doctor_info: hỏi phòng khám có những khoa nào, bác sĩ nào, bác sĩ của khoa nào (thông tin bác sĩ, KHÔNG
-  phải thông tin của chính bệnh nhân).
-- answer_faq: hỏi thông tin chung về bài tập, chuẩn bị tái khám, chăm sóc sau tập.
-- small_talk: chào hỏi, cảm ơn, tạm biệt, hỏi trợ lý là ai / làm được gì, tán gẫu, hoặc câu ngoài phạm vi phòng khám
-  (thời tiết, lập trình...). Mọi ngôn ngữ, ví dụ "hello", "hi there", "cảm ơn nhé", "bạn là ai".
-- unknown: có vẻ là một yêu cầu công việc nhưng không rõ là việc nào.
+Intents:
+- create_report: submit a follow-up report (pain level, number of exercise days, symptom change).
+- get_report_history: view previously submitted reports.
+- book_appointment: book a new appointment.
+- list_appointments: view appointments already booked.
+- get_patient_info: view their own personal information, record, follow-up/treatment plan, or overall status.
+  Asking about another patient or a list of patients is also get_patient_info (the system only shows the user's own data).
+- get_doctor_info: ask which departments or doctors the clinic has, or which department a doctor belongs to (doctor
+  information, NOT the patient's own information).
+- answer_faq: general questions about exercises, preparing for a follow-up visit, care after exercising.
+- small_talk: greetings, thanks, goodbyes, asking who the assistant is / what it can do, chit-chat, or anything outside
+  the clinic's scope (weather, programming...). Any language, e.g. "hello", "hi there", "cảm ơn nhé", "bạn là ai".
+- unknown: looks like a task request but it is unclear which one.
 
-Hiểu ý định thật của người dùng kể cả khi viết sai chính tả, không dấu, tiếng lóng hay tiếng Anh
-(ví dụ "dat lich kham" = book_appointment, "show my appointments" = list_appointments).
-Trả về danh sách intent theo thứ tự người dùng nhắc tới. Lời chào đi kèm yêu cầu thì chỉ trả intent của yêu cầu.
-Nếu không chắc, trả ["unknown"].
+Understand what the user actually means even with typos, missing Vietnamese diacritics, slang, or English
+(e.g. "dat lich kham" = book_appointment, "show my appointments" = list_appointments).
+Return the list of intents in the order the user mentions them. A greeting that comes with a request: return only the
+request's intent. If unsure, return ["unknown"].
 
-Nếu tin nhắn có khối <lich_su_hoi_thoai>: đó là ghi chú của hệ thống về các lượt TRƯỚC trong cùng cuộc hội thoại
-(không phải lời người dùng ở lượt này). Chỉ dùng để hiểu câu hiện tại khi người dùng nhắc lại điều đã nói/đã làm
-("như vậy", "bác sĩ đó", "lịch vừa đặt"). Không coi việc trong ghi chú là yêu cầu mới, không bịa thêm dữ liệu
-ngoài ghi chú.
+If the message contains a <conversation_history> block: it is the system's notes about EARLIER turns of the same
+conversation (not what the user said in this turn). Use it only to understand the current message when the user refers
+back to something said or done ("như vậy" = like that, "bác sĩ đó" = that doctor, "lịch vừa đặt" = the appointment just
+booked). Do not treat items in the notes as new requests, and do not invent data beyond the notes.

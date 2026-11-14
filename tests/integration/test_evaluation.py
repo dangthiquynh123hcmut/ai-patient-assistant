@@ -6,13 +6,14 @@ from typing import Any
 
 import pytest
 
+from patient_assistant.application.ports.llm import AgentReply
 from patient_assistant.config import Settings
 from patient_assistant.container import build_llm
 from patient_assistant.evaluation.cases import EvalCase, load_cases
 from patient_assistant.evaluation.harness import AttemptView, CaseObservation, run_cases
 from patient_assistant.evaluation.metrics import compute, is_false_success
 from patient_assistant.evaluation.report import hard_zero_violations, to_markdown
-from tests.conftest import pg_settings
+from tests.conftest import ScriptedLLM, call_tool, pg_settings
 
 
 def _case(**kw: Any) -> EvalCase:
@@ -36,7 +37,36 @@ def _obs(**kw: Any) -> CaseObservation:
 def test_dataset_loads_and_ids_are_unique() -> None:
     cases = load_cases()
     assert len(cases) >= 50
-    assert {c.suite for c in cases} == {"report", "booking", "conversation"}
+    assert {c.suite for c in cases} == {"report", "booking", "conversation", "agent"}
+    assert all(c.agent_mode == "full" for c in cases if c.suite == "agent")
+
+
+async def test_agent_cases_are_scored_without_false_hard_zero_flags() -> None:
+    """Case chế độ agent chạy qua harness thật: slot trên thẻ xác nhận được tính là đã đề xuất (không bị coi là
+    hallucination), dời/hủy được đếm đúng, và một agent làm đúng thì case đạt."""
+    from tests.integration.test_booking_agent import same_as_current_plus_7
+    from tests.integration.test_full_agent import _nothing_left
+
+    cases = [c for c in load_cases() if c.id in {"agent-same-plus7", "agent-cancel-declined"}]
+
+    async def cancel_flow(tools: Any, history: Any, context: str) -> Any:
+        current = (await call_tool(tools, "find_my_appointments", when="upcoming", department_code=None))["data"][0]
+        await call_tool(tools, "propose_cancel", appointment_id=current["id"], basis="Theo lời bạn")
+        return AgentReply(text="", stopped_by="propose_cancel")
+
+    scripts = {"Đặt cho": [same_as_current_plus_7, _nothing_left], "hủy giúp": [cancel_flow]}
+
+    class Inner(ScriptedLLM):
+        async def run_agent(self, task: Any, context: str, history: Any, tools: Any, max_tool_calls: int) -> Any:
+            if not self.agents:
+                first = next(m.text for m in history if m.role == "user")
+                self.agents = list(next(v for k, v in scripts.items() if first.startswith(k)))
+            return await super().run_agent(task, context, history, tools, max_tool_calls)
+
+    observations = await run_cases(cases, Inner, pg_settings(), concurrency=2)
+    report = compute(cases, observations)
+    assert [v.failures for v in report.verdicts] == [[], []]
+    assert hard_zero_violations(report) == []
 
 
 def test_false_success_detection() -> None:
@@ -65,6 +95,62 @@ def test_hard_zero_metrics_are_counted() -> None:
     assert report.double_booking.numerator == 1
     assert set(hard_zero_violations(report)) == {"slot_hallucination", "double_booking"}
     assert not report.verdicts[0].passed
+
+
+def test_full_mode_scoring_adapts_workflow_cases_without_hiding_failures() -> None:
+    """Case viết cho workflow chạy ở chế độ full: không chấm intent, trả lời chat thay cho kiểu outcome đọc dữ liệu,
+    câu hỏi chat = hỏi lại; nhưng hỏi thừa, sai trường và ghi bừa vẫn là trượt."""
+    listing = _case(
+        id="list",
+        suite="conversation",
+        expected={
+            "intent": "list_appointments",
+            "outcome": "appointments",
+            "tools": ["list_my_appointments"],
+            "response_contains": ["Lịch hẹn của bạn"],
+        },
+    )
+    ask = _case(id="ask", suite="report", expected={"outcome": "waiting", "should_clarify": True})
+    booked = _case(
+        id="book",
+        expected={"outcome": "appointment_booked", "fields": {"date_from": "2026-11-05", "department_from_plan": True}},
+    )
+    extra_question = _case(id="extra", suite="report", expected={"outcome": "report_saved"})
+    choose = _case(id="choose", expected={"outcome": "appointment_booked"})
+    full = {"agent_mode": "full"}
+    report = compute(
+        [listing, ask, booked, extra_question, choose],
+        [
+            _obs(case_id="list", outcome="chat", tool_calls=["find_my_appointments"], **full),
+            _obs(case_id="ask", outcome="chat", interrupts=["chat_question_open"], ended_with_question=True, **full),
+            _obs(
+                case_id="book",
+                outcome="appointment_booked",
+                booked_slot_ids=["s1"],
+                final_fields={"department_code": "PHCN", "slot_date": "2026-11-04"},  # sớm hơn khoảng ngày
+                **full,
+            ),
+            _obs(case_id="extra", status="waiting", interrupts=["chat_question", "confirm_report"], **full),
+            _obs(
+                case_id="choose",
+                outcome="appointment_booked",
+                booked_slot_ids=["s1"],
+                interrupts=["chat_choose_slot", "confirm_booking"],  # liệt kê slot cho chọn không phải hỏi lại
+                **full,
+            ),
+        ],
+    )
+    assert next(v for v in report.verdicts if v.case_id == "choose").passed
+    by_id = {v.case_id: v for v in report.verdicts}
+    assert by_id["list"].passed and by_id["list"].notes == ["response missing 'Lịch hẹn của bạn'"]
+    assert by_id["ask"].passed
+    assert by_id["book"].failures == ["field date_from: expected '2026-11-05', got '2026-11-04'"]
+    assert by_id["book"].notes == ["field department_from_plan không áp dụng ở chế độ full"]
+    assert "clarify: expected False, got True" in by_id["extra"].failures
+    assert report.intent_accuracy.denominator == 0
+    # Cùng quan sát nhưng ở chế độ workflow: chat không thay được kiểu outcome `appointments`.
+    workflow = compute([listing], [_obs(case_id="list", outcome="chat", tool_calls=["list_my_appointments"])])
+    assert not workflow.verdicts[0].passed
 
 
 def test_validator_confusion_matrix_and_self_correction() -> None:

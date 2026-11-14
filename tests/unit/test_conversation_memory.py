@@ -44,7 +44,7 @@ def _booked(appt_id: str, dept: str, doctor: Doctor, hour: int = 9) -> TurnNote:
 def test_booked_turn_is_summarised_from_backend_data() -> None:
     note = _booked("LH-1", "PHCN", DOCTORS[0])
     assert note.appointment is not None
-    assert note.result == "đã đặt lịch: Phục hồi chức năng, BS. Trần Văn An, 09:00 Thứ Ba 03/11/2026 (mã LH-1)"
+    assert note.result == "appointment booked: Phục hồi chức năng, BS. Trần Văn An, 09:00 Tuesday 2026-11-03 (id LH-1)"
 
 
 def test_doctors_and_departments_mentioned_are_recognised() -> None:
@@ -95,7 +95,7 @@ def test_memory_is_bounded_and_rendered_oldest_first() -> None:
         memory = append_note(memory, TurnNote(said=f"câu {i}", result="trò chuyện"))
     assert len(memory) == MAX_TURNS and memory[-1].said == f"câu {MAX_TURNS + 2}"
     text = render_memory(memory) or ""
-    assert text.splitlines()[-1].startswith("- lượt vừa rồi: người dùng nói «câu")
+    assert text.splitlines()[-1].startswith("- previous turn: the user said «câu")
     assert render_memory([]) is None
 
 

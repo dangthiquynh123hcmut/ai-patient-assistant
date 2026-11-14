@@ -17,6 +17,8 @@ x-backend-env: &backend-env
   PA_COOKIE_SECURE: ${PA_COOKIE_SECURE:-false}
   PA_LLM_MODEL_ID: ${PA_LLM_MODEL_ID:-global.anthropic.claude-opus-4-6-v1}
   PA_AWS_REGION: ${PA_AWS_REGION:-ap-southeast-1}
+  PA_BOOKING_MODE: ${PA_BOOKING_MODE:-workflow}
+  PA_AGENT_MODE: ${PA_AGENT_MODE:-}
   AWS_PROFILE: ${AWS_PROFILE:-default}
   PA_STT_ENABLED: ${PA_STT_ENABLED:-false}
   PA_STT_MODEL: ${PA_STT_MODEL:-small}

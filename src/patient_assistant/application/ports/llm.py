@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel
 
@@ -54,6 +54,10 @@ class ToolSpec:
     description: str
     input_model: type[BaseModel]
     handler: Callable[[BaseModel], Awaitable[dict[str, Any]]]
+    # Tool kết thúc vòng lặp: handler trả status "ok" thì agent dừng ngay, không gọi LLM thêm lần nào
+    # (ví dụ `propose_booking` — sau đó code hiện thẻ xác nhận). Trả lỗi thì LLM được đọc lỗi để sửa, trừ khi kết quả
+    # có `"stop": True` (code đã quyết định dừng, vd. sửa quá số lần) — khi đó vòng lặp cũng dừng ngay.
+    terminal: bool = False
 
 
 @dataclass
@@ -61,6 +65,20 @@ class GroundedAnswer:
     text: str
     source_ids: list[str] = field(default_factory=list)
     tool_calls: int = 0
+
+
+class AgentMessage(BaseModel):
+    """Một tin nhắn trong hội thoại với agent (chỉ phần chữ, không gồm tool call nội bộ của từng lượt)."""
+
+    role: Literal["user", "assistant"]
+    text: str
+
+
+@dataclass
+class AgentReply:
+    text: str
+    tool_calls: int = 0
+    stopped_by: str | None = None  # tên tool `terminal` đã kết thúc vòng lặp (nếu có)
 
 
 class LLMPort(Protocol):
@@ -90,5 +108,20 @@ class LLMPort(Protocol):
 
         `context`: mô tả việc đang làm dở (do code soạn) khi người dùng hỏi chen giữa chừng.
         `memory`: ghi chú các lượt trước trong cùng hội thoại (do code soạn).
+        """
+        ...
+
+    async def run_agent(
+        self,
+        task: Literal["booking", "assistant"],
+        context: str,
+        history: list[AgentMessage],
+        tools: list[ToolSpec],
+        max_tool_calls: int,
+    ) -> AgentReply:
+        """Vòng tool-use: LLM tự quyết hỏi gì, gọi tool nào. `context` do code soạn (hôm nay, danh mục...).
+
+        `history` kết thúc bằng tin nhắn của người dùng ở lượt này. Hết `max_tool_calls` thì LLM phải trả lời
+        bằng chữ. Gặp tool `terminal` trả "ok" thì dừng ngay và trả `stopped_by`.
         """
         ...

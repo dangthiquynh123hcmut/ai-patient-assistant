@@ -259,6 +259,8 @@ PA_LLM_MODEL_ID=global.anthropic.claude-opus-4-6-v1
 
 5. Chạy server như bình thường; badge "LLM" trên UI sẽ hiện `global.anthropic.claude-opus-4-6-v1`.
 
+**Chế độ agent:** đặt `PA_AGENT_MODE` trong `.env` rồi `docker compose up -d`. Mặc định là `workflow` (luồng cứng). `booking` để agent đảm nhận đặt / dời / hủy lịch; `full` để một agent đảm nhận mọi việc: đặt / dời / hủy lịch, báo cáo theo dõi, tra cứu, hỏi tài liệu, kể cả nhiều việc trong một câu. Claude tự tra dữ liệu bằng tool nên hiểu được câu như "đặt giống lịch hiện tại nhưng cách 7 ngày" mà không hỏi lại. Dữ liệu chỉ được ghi sau khi người dùng bấm xác nhận. Chi tiết ở [ARCHITECTURE.md §7.10](ARCHITECTURE.md).
+
 Test mặc định dùng LLM giả có kịch bản định sẵn (`ScriptedLLM` trong `tests/conftest.py`), không gọi Bedrock và không tốn phí. Test với Claude thật: `.venv/bin/pytest -m llm`. Eval luôn gọi Claude thật.
 
 ## Luồng gọi API

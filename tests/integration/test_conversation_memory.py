@@ -82,7 +82,7 @@ async def test_earlier_turns_are_passed_to_the_llm_as_notes_only_in_same_convers
     done(await app.chat().send_message("m4", PATIENT, "cảm ơn bạn nhé"), "chat")
     memory = llm.memories[-1]
     assert memory is not None
-    assert "đã đặt lịch: Phục hồi chức năng" in memory and "thứ ba tuần sau" in memory
+    assert "appointment booked: Phục hồi chức năng" in memory and "thứ ba tuần sau" in memory
 
     # Hội thoại khác: không mang lịch sử sang.
     done(await app.chat().send_message("m5", PATIENT, "cảm ơn bạn nhé"), "chat")
@@ -108,5 +108,5 @@ async def test_unfinished_turn_is_noted_as_not_done(make_app: Any) -> None:
     waiting(await app.chat().send_message("m7", PATIENT, FIRST), "choose_slot")
     done(await app.chat().send_message("m7", PATIENT, "xin chào"), "chat")
     memory = llm.memories[-1] or ""
-    assert "chưa xong" in memory
+    assert "not finished" in memory
     assert NOW  # giữ import dùng chung với các test khác

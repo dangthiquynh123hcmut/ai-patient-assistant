@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from patient_assistant.domain.common import SttFlag
 
-WRITE_TOOLS = ("save_patient_report", "create_appointment")
+WRITE_TOOLS = ("save_patient_report", "create_appointment", "cancel_appointment", "reschedule_appointment")
 DEFAULT_NOW = "2026-10-28T10:00:00+07:00"  # Thứ Tư — khớp các case trong dataset
 
 
@@ -125,7 +125,9 @@ class EvalCase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str
-    suite: Literal["report", "booking", "conversation"]
+    suite: Literal["report", "booking", "conversation", "agent"]
+    # Chạy case ở chế độ này (PA_AGENT_MODE); None = theo cấu hình của lần chạy eval.
+    agent_mode: Literal["workflow", "booking", "full"] | None = None
     category: str
     description: str = ""
     now: datetime = Field(default_factory=lambda: datetime.fromisoformat(DEFAULT_NOW))

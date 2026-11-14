@@ -75,6 +75,8 @@ export type InterruptKind = "clarify" | "confirm_report" | "choose_slot" | "conf
 export type OutcomeKind =
   | "report_saved"
   | "appointment_booked"
+  | "appointment_cancelled"
+  | "appointment_rescheduled"
   | "history"
   | "appointments"
   | "patient_info"

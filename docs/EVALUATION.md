@@ -6,7 +6,7 @@ Code nằm ở `src/patient_assistant/evaluation/`:
 
 | File | Vai trò |
 |---|---|
-| `datasets/*.jsonl` | Dataset: `report.jsonl` (23 case), `booking.jsonl` (37), `conversation.jsonl` (27) |
+| `datasets/*.jsonl` | Dataset: `report.jsonl` (23 case), `booking.jsonl` (37), `conversation.jsonl` (27), `agent.jsonl` (12, chế độ agent `full`) |
 | `cases.py` | Schema case (Pydantic) và hàm `load_cases` (báo lỗi theo `file:dòng`, chặn id trùng) |
 | `harness.py` | Chạy case qua `ChatUseCase`, trả lời các interrupt theo kịch bản, tiêm lỗi, ghi `CaseObservation` |
 | `metrics.py` | Hàm thuần: (case, observation) → metric và verdict từng case |
@@ -32,6 +32,18 @@ Hoặc chạy trực tiếp khi máy có Postgres và driver dùng được:
 .venv/bin/python -m patient_assistant.evaluation.runner --suite booking --fail-on-hard-zero
 ```
 
+Chế độ agent: suite `agent` (`--suite agent`) gồm các case tự khai báo `agent_mode: "full"`. `--agent-mode workflow|booking|full` đặt chế độ cho các case không tự khai báo (mặc định `workflow`, không đọc `PA_AGENT_MODE` trong `.env`), để so cùng một dataset giữa các chế độ.
+
+Chạy case viết cho workflow ở chế độ agent (`booking`, `full`), harness và metric tự điều chỉnh:
+
+- Agent hỏi lại bằng tin nhắn chat (không phải interrupt): câu trả lời kế tiếp trong `replies` được gửi như một tin nhắn mới (`choose` → "chọn số N", `confirm` → "xác nhận"…). Câu hỏi đó được tính là hỏi lại (`chat_question`), trừ khi kịch bản trả lời bằng `choose` (agent liệt kê slot cho chọn, tương đương thẻ `choose_slot`). Lượt kết thúc bằng câu hỏi chat mà hết `replies` khớp với kỳ vọng `waiting`.
+- Lỗi LLM tiêm sẵn (`llm_script.reports`) thay vào tham số agent gửi cho `propose_report`.
+- `full`: không chấm intent (không có bước phân loại); outcome `chat` được tính đúng cho case đọc dữ liệu (`appointments`, `history`, `patient_info`, `answer`); `list_my_appointments` được thỏa bởi `find_my_appointments`; `response_contains` của case workflow chỉ ghi vào mục **Ghi chú** của báo cáo, không tính là trượt.
+- `date_from`/`date_to` được so với ngày của slot đã xác nhận (slot phải nằm trong khoảng); `department_from_plan` và `offers.hint` không áp dụng (ghi chú).
+- Case có hành vi khác nhau theo chế độ thì ghim chế độ trong case: `conv-info-02` (`agent_mode: "workflow"`) hiện hồ sơ của chính người dùng khi bị hỏi hồ sơ người khác; ở chế độ full agent từ chối hẳn, không tra cứu (`agent-other-patient`).
+
+Nếu nhiều case trả về `error (llm_unavailable)`, nghĩa là Bedrock đang giới hạn tốc độ: giảm `--concurrency` và chạy lại các case đó bằng `--case`.
+
 Tùy chọn khác: `--case <id>` (lặp được), `--dataset file.jsonl ...`, `--out eval_reports`, `--concurrency 4`. Báo cáo được ghi vào `eval_reports/<thời điểm>/`. Nếu đã cài lại package (`pip install -e .`), có thể gọi tắt bằng `pa-eval`.
 
 Eval luôn gọi Claude thật trên Bedrock và **tốn phí**: mỗi case có từ 1 đến khoảng 5 lần gọi LLM. Nên chạy thử một suite nhỏ trước. Không gọi được LLM thì eval dừng ngay.
@@ -44,6 +56,7 @@ Mỗi dòng JSONL là một case. Các trường:
 |---|---|
 | `id`, `suite`, `category`, `description` | Định danh và phân nhóm |
 | `now` | Mốc thời gian cố định, mặc định `2026-10-28T10:00:00+07:00` (Thứ Tư) |
+| `agent_mode` | Chạy case ở chế độ này (`workflow`, `booking`, `full`); bỏ trống thì theo `--agent-mode` / `PA_AGENT_MODE`. Ở chế độ agent, slot hiện trên thẻ xác nhận được tính là slot đã đề xuất (để đo hallucination), và lịch bị hủy/dời được đếm cho `must_not_write` |
 | `patient_id` | Mặc định `patient-demo-001` (có kế hoạch theo dõi ở khoa PHCN); `patient-no-plan` là bệnh nhân chưa có kế hoạch |
 | `message` | Tin nhắn đầu tiên: `text`, `input_source` (`text`/`voice`), `stt_flags` (giả lập STT nhận dạng kém) |
 | `replies` | Câu trả lời cho các interrupt, dùng lần lượt. Hết danh sách thì dừng, kết quả là `waiting` |

@@ -61,21 +61,23 @@
 
 <section id="overview">
   <h2>1. Tổng thể hệ thống</h2>
-  <p class="desc">STT chạy ngoài graph; ghi âm xong, transcript được gửi thẳng kèm cờ độ tin cậy. Text và transcript đi vào cùng một LangGraph. LLM chỉ được gọi qua <code>LLMProvider</code>; tool ghi chỉ do code gọi.</p>
+  <p class="desc">STT chạy ngoài graph; ghi âm xong, transcript được gửi thẳng kèm cờ độ tin cậy. Text và transcript đi vào cùng một LangGraph. LLM chỉ được gọi qua <code>LLMPort</code>; ghi dữ liệu chỉ do code thực hiện sau khi người dùng xác nhận (kể cả ở chế độ agent, nơi LLM chỉ được <em>đề xuất</em> việc ghi).</p>
   <div class="diagram"><pre class="mermaid">
 flowchart TB
   U(["👤 Người dùng"]):::user
-  subgraph UI["UI (Streamlit)"]
+  subgraph UI["UI — React 19 + TypeScript (Vite), nginx phục vụ + proxy /v1/"]
     direction TB
     ui1["Chat · ghi âm (gửi thẳng)"]
-    ui3["Chọn slot · Xác nhận bản nháp"]
+    ui3["Chọn slot · Thẻ xác nhận / sửa bản nháp"]
+    ui4["Diễn giải quyết định · Trang nhân viên"]
   end
-  subgraph API["FastAPI"]
+  subgraph API["FastAPI — prefix /v1, đăng nhập JWT"]
     direction TB
-    a1["POST /stt/transcribe"]
-    a2["POST /chat/{conversation_id}/messages"]
-    a3["POST /chat/{conversation_id}/resume"]
-    a4["GET /reports · GET /appointments"]
+    a0["/v1/auth/* (login · refresh · register)"]
+    a1["POST /v1/stt/transcribe"]
+    a2["POST /v1/chat/{conversation_id}/messages"]
+    a3["POST /v1/chat/{conversation_id}/resume"]
+    a4["GET /v1/me/* · /v1/chat/{id}/state · /v1/staff/*"]
   end
   STT["stt/<br/>faster-whisper (CPU, int8)<br/>+ cờ độ tin cậy"]:::code
   subgraph AG["agent/ — LangGraph"]
@@ -83,14 +85,16 @@ flowchart TB
     G["Graph chính"]:::code
     RF[["report_flow"]]:::code
     BF[["booking_flow"]]:::code
+    AF[["agent_flow<br/>(PA_AGENT_MODE=booking|full)"]]:::llm
     G --> RF
     G --> BF
+    G --> AF
   end
-  LLM["llm/<br/>LLMProvider → Claude Opus 5.5<br/>AWS Bedrock (IAM)"]:::llm
-  VAL["validators/<br/>6 lớp · vi_numbers · vi_dates"]:::code
+  LLM["llm/<br/>LLMPort → Claude trên AWS Bedrock (IAM)<br/>model theo PA_LLM_MODEL_ID"]:::llm
+  VAL["validators (domain)<br/>6 lớp · vi_numbers · vi_dates"]:::code
   TOOLS["tools/<br/>ToolResult chuẩn hóa"]:::tool
   SVC["services/ + repositories/<br/>quyền · nghiệp vụ · idempotency"]:::tool
-  DB[("PostgreSQL<br/>reports · appointments · slots<br/>agent_attempts · tool_calls<br/>LangGraph checkpoints")]:::db
+  DB[("PostgreSQL<br/>reports · appointments · slots · patients<br/>users · sessions · conversations · chat_messages<br/>LangGraph checkpoints")]:::db
 
   U <--> UI
   UI <--> API

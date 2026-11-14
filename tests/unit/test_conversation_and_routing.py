@@ -13,6 +13,7 @@ from patient_assistant.domain.conversation import (
     check_input_safety,
     classify_by_rules,
     interpret_confirmation,
+    is_filler,
     stt_flags_from_words,
 )
 from tests.conftest import NOW
@@ -63,6 +64,14 @@ def test_safety_rules() -> None:
 )
 def test_spoken_confirmation_requires_clear_phrase(text: str, expected: ConfirmIntent) -> None:
     assert interpret_confirmation(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [("ờ", True), ("Ừm...", True), ("uh hmm", True), ("", True), ("ờ 9:30", False), ("đau mức 4 chứ", False)],
+)
+def test_filler_reply_has_no_content(text: str, expected: bool) -> None:
+    assert is_filler(text) is expected
 
 
 def test_stt_flags_only_low_confidence_key_tokens() -> None:

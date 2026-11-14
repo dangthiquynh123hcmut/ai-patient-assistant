@@ -424,6 +424,11 @@ def final_text(outcome: Outcome, safety: SafetyKind, pending: list[Intent]) -> s
     elif kind == OutcomeKind.APPOINTMENT_BOOKED:
         slot = Slot.model_validate(data["slot"])
         text = f"Đã đặt lịch: {slot.label()}. Mã lịch hẹn: {data['id']}."
+    elif kind == OutcomeKind.APPOINTMENT_CANCELLED:
+        text = f"Đã hủy lịch: {Slot.model_validate(data['slot']).label()} (mã {data['id']})."
+    elif kind == OutcomeKind.APPOINTMENT_RESCHEDULED:
+        old, new = Slot.model_validate(data["old"]["slot"]), Slot.model_validate(data["new"]["slot"])
+        text = f"Đã dời lịch: {old.label()} → {new.label()}. Mã lịch hẹn mới: {data['new']['id']}."
     elif kind == OutcomeKind.HISTORY:
         text = (
             "Các báo cáo gần đây:\n"

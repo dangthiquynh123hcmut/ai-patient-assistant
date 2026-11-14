@@ -86,7 +86,10 @@ class SideTalk:
             summary = await self._tools.get_patient_summary(state.patient_id, state.now)
             name = (summary.data or {}).get("profile", {}).get("display_name") if summary.ok else None
             return assistant_context_text(name, state.patient_id, task)
-        context = f"Người dùng đang làm dở việc: {task or 'không rõ'}. Câu hỏi đang chờ họ trả lời: “{question}”"
+        context = (
+            f"The user is in the middle of this task: {task or 'unknown'}. "
+            f"The question waiting for their answer: “{question}”"
+        )
         try:
             reply = (await self._llm.converse(text, context, render_memory(state.memory))).strip()
         except LLMError:

@@ -12,6 +12,8 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from patient_assistant.application.ports.llm import (
+    AgentMessage,
+    AgentReply,
     BookingPrompt,
     GroundedAnswer,
     LLMError,
@@ -86,6 +88,7 @@ class ScriptedLLM:
         slots: list[Any] | None = None,
         searches: list[Any] | None = None,
         replies: list[Any] | None = None,
+        agents: list[Any] | None = None,
     ) -> None:
         self.reports = list(reports or [])
         self.bookings = list(bookings or [])
@@ -93,6 +96,9 @@ class ScriptedLLM:
         self.slots = list(slots or [])
         self.searches = list(searches or [])
         self.replies = list(replies or [])
+        # Mỗi phần tử: async (tools theo tên, history, context) -> AgentReply — một lần chạy agent.
+        self.agents = list(agents or [])
+        self.agent_calls: list[tuple[str, list[AgentMessage]]] = []  # (context, history) mỗi lần chạy agent
         self.report_prompts: list[ReportPrompt] = []
         self.booking_prompts: list[BookingPrompt] = []
         self.memories: list[str | None] = []  # ghi chú lịch sử nhận được ở mỗi lần gọi classify/answer/converse
@@ -132,6 +138,21 @@ class ScriptedLLM:
         self.memories.append(memory)
         return _next(self.replies, "Chào bạn! Mình là trợ lý ảo của phòng khám.")
 
+    async def run_agent(
+        self, task: str, context: str, history: list[AgentMessage], tools: list[ToolSpec], max_tool_calls: int
+    ) -> AgentReply:
+        self.agent_calls.append((context, list(history)))
+        step = _next(self.agents, None)
+        if step is None:
+            return AgentReply(text="Bạn muốn đặt lịch khoa nào?")
+        return await step({t.name: t for t in tools}, history, context)
+
+
+async def call_tool(tools: dict[str, ToolSpec], name: str, **args: Any) -> dict[str, Any]:
+    """LLM giả gọi tool đúng như vòng tool-use thật: validate input theo schema rồi chạy handler."""
+    spec = tools[name]
+    return await spec.handler(spec.input_model.model_validate(args))
+
 
 class FailingLLM(ScriptedLLM):
     async def classify_intent(self, text: str, memory: str | None = None) -> list[Intent]:
@@ -149,6 +170,11 @@ class FailingLLM(ScriptedLLM):
         raise LLMError("unavailable", "down")
 
     async def converse(self, text: str, context: str | None = None, memory: str | None = None) -> str:
+        raise LLMError("unavailable", "down")
+
+    async def run_agent(
+        self, task: str, context: str, history: list[AgentMessage], tools: list[ToolSpec], max_tool_calls: int
+    ) -> AgentReply:
         raise LLMError("unavailable", "down")
 
 

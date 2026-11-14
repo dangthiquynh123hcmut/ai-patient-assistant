@@ -11,6 +11,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
+from dataclasses import replace
 from datetime import datetime
 from datetime import time as dtime
 from typing import Any, Literal
@@ -21,6 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from patient_assistant.application.agent.state import AgentState, UserDecision
 from patient_assistant.application.ports.llm import (
+    AgentMessage,
+    AgentReply,
     BookingPrompt,
     GroundedAnswer,
     LLMError,
@@ -65,6 +68,7 @@ class CaseObservation(BaseModel):
     first_offered_slot_ids: list[str] = Field(default_factory=list)
     offered_slot_ids: list[str] = Field(default_factory=list)
     booked_slot_ids: list[str] = Field(default_factory=list)
+    cancelled_count: int = 0  # số lịch bị hủy do tin nhắn chính (hủy hoặc dời lịch)
     reports_written: int = 0
     saved_report: dict[str, Any] | None = None
     final_fields: dict[str, Any] = Field(default_factory=dict)
@@ -77,6 +81,10 @@ class CaseObservation(BaseModel):
     first_offers: list[dict[str, Any]] = Field(default_factory=list)
     interrupt_messages: list[str] = Field(default_factory=list)
     double_booked_slot_ids: list[str] = Field(default_factory=list)
+    # Chế độ agent thực tế của case (workflow | booking | full) — metric chấm theo chế độ này.
+    agent_mode: str = "workflow"
+    # Chế độ agent: lượt kết thúc bằng câu hỏi dạng chat (không phải interrupt) mà không còn câu trả lời kịch bản.
+    ended_with_question: bool = False
     replies_left: int = 0
     latency_ms: int = 0
     error: str | None = None
@@ -113,12 +121,36 @@ class ScriptedLLM:
     async def converse(self, text: str, context: str | None = None, memory: str | None = None) -> str:
         return await self._inner.converse(text, context, memory)
 
+    async def run_agent(
+        self,
+        task: Literal["booking", "assistant"],
+        context: str,
+        history: list[AgentMessage],
+        tools: list[ToolSpec],
+        max_tool_calls: int,
+    ) -> AgentReply:
+        return await self._inner.run_agent(task, context, history, [self._inject(t) for t in tools], max_tool_calls)
+
+    def _inject(self, spec: ToolSpec) -> ToolSpec:
+        """Chế độ agent không gọi `extract_report`: lỗi tiêm sẵn thay vào tham số LLM gửi cho `propose_report`.
+        Tham số sai kiểu (vd. pain_level="năm") làm handler ném ValidationError -> agent nhận lỗi tool như thật."""
+        if spec.name != "propose_report":
+            return spec
+        original = spec.handler
+
+        async def handler(inp: BaseModel) -> dict[str, Any]:
+            if self._reports:
+                inp = spec.input_model.model_validate(self._reports.pop(0))
+            return await original(inp)
+
+        return replace(spec, handler=handler)
+
 
 class UnavailableLLM:
     async def _fail(self, *_: Any, **__: Any) -> Any:
         raise LLMError("unavailable", "injected fault", retryable=True)
 
-    classify_intent = extract_report = extract_booking = choose_slot = answer_question = converse = _fail
+    classify_intent = extract_report = extract_booking = choose_slot = answer_question = converse = run_agent = _fail
 
 
 async def _raise_unavailable(*_: Any, **__: Any) -> Any:
@@ -180,6 +212,13 @@ class _Db:
         async with self._sessions() as session:
             return list(await session.scalars(query))
 
+    async def cancelled_count(self, patient_id: str) -> int:
+        query = select(func.count()).where(
+            AppointmentRow.status == AppointmentStatus.CANCELLED.value, AppointmentRow.patient_id == patient_id
+        )
+        async with self._sessions() as session:
+            return int(await session.scalar(query) or 0)
+
     async def double_booked_slot_ids(self) -> list[str]:
         query = (
             select(AppointmentRow.slot_id)
@@ -210,8 +249,32 @@ def _fields(state: AgentState) -> dict[str, Any]:
         }
         if state.resolved_window is not None:
             out |= state.resolved_window.model_dump(mode="json", exclude={"rules"})
+        # Chế độ agent không có khoa/khoảng ngày trích xuất: lấy từ slot đã xác nhận (metric so slot_date với
+        # date_from/date_to của case).
+        chosen = next((o.slot for o in state.offered_slots if o.slot.slot_id == state.selected_slot_id), None)
+        if chosen is not None and state.resolved_window is None:
+            out["department_code"] = out["department_code"] or chosen.department_code
+            out["slot_date"] = chosen.start_at.astimezone(state.now.tzinfo).date().isoformat()
         return out
     return {}
+
+
+def _reply_text(reply: Reply) -> str:
+    """Câu trả lời kịch bản viết cho interrupt, đổi thành tin nhắn khi agent hỏi bằng chat thay vì interrupt."""
+    if reply.text:
+        return reply.text
+    if reply.action == "choose" and reply.option_no is not None:
+        return f"chọn số {reply.option_no}"
+    if reply.action == "edit" and reply.fields:
+        return "sửa " + ", ".join(f"{k} = {v}" for k, v in reply.fields.items())
+    return {"confirm": "xác nhận", "cancel": "hủy", "other_time": "giờ khác"}.get(reply.action, "xác nhận")
+
+
+def _chat_reply(result: TurnResult) -> str | None:
+    """Câu trả lời dạng chat của agent (lượt đã xong, không chờ interrupt), hoặc None."""
+    if result.status != "done" or result.response is None or result.response.kind.value != "chat":
+        return None
+    return result.response.text
 
 
 class CaseRunner:
@@ -223,9 +286,12 @@ class CaseRunner:
     async def _container(self, case: EvalCase) -> AsyncIterator[tuple[Container, dict[str, Any], _Db]]:
         clock = FixedClock(case.now)
         schema = f"eval_{uuid.uuid4().hex[:12]}"
+        settings = (
+            self._settings.model_copy(update={"agent_mode": case.agent_mode}) if case.agent_mode else self._settings
+        )
         async with AsyncExitStack() as stack:
-            storage = await open_storage(stack, self._settings, clock, schema=schema, with_history=False)
-            await seed_demo_users(storage.sessions, self._settings.seed_password, case.now)
+            storage = await open_storage(stack, settings, clock, schema=schema, with_history=False)
+            await seed_demo_users(storage.sessions, settings.seed_password, case.now)
             repos = storage.repos
             if case.faults.save_unavailable:
                 repos["reports"].add = _raise_unavailable
@@ -234,7 +300,7 @@ class CaseRunner:
             llm: LLMPort = (
                 UnavailableLLM() if case.faults.llm_unavailable else ScriptedLLM(self._llm_factory(), case.llm_script)
             )
-            container = assemble(self._settings, repos, llm, UnavailableSTT(), clock, storage.checkpointer)
+            container = assemble(settings, repos, llm, UnavailableSTT(), clock, storage.checkpointer)
             yield container, repos, _Db(storage.sessions)
 
     async def run(self, case: EvalCase) -> list[CaseObservation]:
@@ -264,8 +330,14 @@ class CaseRunner:
     ) -> CaseObservation:
         conversation_id = f"{case.id}-{session}"
         patient = case.patient_id if barrier is None else f"{case.patient_id}-{session}"
+        mode = case.agent_mode or self._settings.effective_agent_mode
         obs = CaseObservation(
-            case_id=case.id, suite=case.suite, category=case.category, session=session, status="waiting"
+            case_id=case.id,
+            suite=case.suite,
+            category=case.category,
+            session=session,
+            status="waiting",
+            agent_mode=mode,
         )
         started = time.perf_counter()
         offered: list[str] = []
@@ -276,10 +348,35 @@ class CaseRunner:
         replies: list[Reply] = list(case.replies)
 
         async def converse(message: UserTurn, turn_replies: list[Reply], scored: bool) -> TurnResult:
-            nonlocal stolen
             result: TurnResult = await container.chat().send_message(
                 conversation_id, patient, message.text, message.input_source, message.stt_flags
             )
+            while True:
+                result = await answer_interrupts(result, turn_replies, scored)
+                # Chế độ agent hỏi lại bằng tin nhắn chat (lượt kết thúc, không có interrupt): câu trả lời kịch bản
+                # kế tiếp được gửi như một tin nhắn mới — giống người dùng thật nhắn lại.
+                question = _chat_reply(result) if mode != "workflow" else None
+                if question is None:
+                    break
+                if not turn_replies:
+                    if scored and "?" in question:
+                        obs.interrupts.append("chat_question_open")
+                        obs.interrupt_messages.append(question)
+                        obs.ended_with_question = True
+                    break
+                reply = turn_replies.pop(0)
+                if scored:
+                    # Kịch bản trả lời bằng "choose" = agent liệt kê slot cho chọn (tương đương thẻ choose_slot của
+                    # workflow), không phải hỏi lại.
+                    obs.interrupts.append("chat_choose_slot" if reply.action == "choose" else "chat_question")
+                    obs.interrupt_messages.append(question)
+                result = await container.chat().send_message(conversation_id, patient, _reply_text(reply), "text", [])
+            if not scored:
+                existing.update(await db.booked_slot_ids(patient))
+            return result
+
+        async def answer_interrupts(result: TurnResult, turn_replies: list[Reply], scored: bool) -> TurnResult:
+            nonlocal stolen
             while result.status == "waiting_user" and result.interrupt is not None:
                 payload = result.interrupt
                 if scored:
@@ -303,6 +400,28 @@ class CaseRunner:
                                 }
                                 for o in payload.options
                             ]
+                if payload.kind == "confirm_booking":
+                    # Chế độ agent không có thẻ chọn slot: slot hiện trên thẻ xác nhận là slot đã đưa cho người dùng.
+                    pending = await container.chat().inspect_state(conversation_id)
+                    proposal = pending.agent_proposal if pending else None
+                    if proposal is not None and proposal.slot is not None:
+                        slot = proposal.slot
+                        offered.append(slot.slot_id)
+                        if scored:
+                            mine = [s for s in [await repos["slots"].get(i) for i in sorted(existing)] if s]
+                            if _overlaps(slot, mine):
+                                obs.own_overlap_slot_ids.append(slot.slot_id)
+                            if not obs.first_offered_slot_ids:  # chế độ agent: đề xuất đầu tiên = slot trên thẻ
+                                obs.first_offered_slot_ids = [slot.slot_id]
+                                obs.first_offers = [
+                                    {
+                                        "slot_id": slot.slot_id,
+                                        "start_at": slot.start_at.isoformat(),
+                                        "doctor_id": slot.doctor_id,
+                                        "department_code": slot.department_code,
+                                        "hint": None,
+                                    }
+                                ]
                 if not turn_replies:
                     break
                 if scored and payload.kind == "confirm_booking" and not stolen:
@@ -310,6 +429,8 @@ class CaseRunner:
                         await barrier.wait()  # mọi phiên cùng chốt một lúc -> tranh chấp thật
                     state = await container.chat().inspect_state(conversation_id)
                     selected = state.selected_slot_id if state else None
+                    if selected is None and state and state.agent_proposal and state.agent_proposal.slot:
+                        selected = state.agent_proposal.slot.slot_id
                     if case.faults.slot_taken_after_choice and selected:
                         await container.toolbox().create_appointment(
                             "intruder-patient", selected, None, f"intruder-{conversation_id}", case.now
@@ -320,8 +441,6 @@ class CaseRunner:
                     stolen = True
                 reply = turn_replies.pop(0)
                 result = await container.chat().resume(conversation_id, patient, UserDecision(**reply.model_dump()))
-            if not scored:
-                existing.update(await db.booked_slot_ids(patient))
             return result
 
         try:
@@ -329,6 +448,7 @@ class CaseRunner:
             for turn in case.history:
                 await converse(turn.message, list(turn.replies), scored=False)
             reports_before = len(await db.reports(patient))
+            cancelled_before = await db.cancelled_count(patient)
             result = await converse(case.message, replies, scored=True)
             obs.status = "done" if result.status == "done" else "waiting"
             if result.response is not None:
@@ -355,10 +475,12 @@ class CaseRunner:
             obs.status = "crashed"
             obs.error = f"{type(exc).__name__}: {exc}"
             reports_before = 0
+            cancelled_before = 0
         obs.latency_ms = int((time.perf_counter() - started) * 1000)
 
         # Chỉ tính lịch hẹn do tin nhắn chính tạo ra.
         obs.booked_slot_ids = [s for s in await db.booked_slot_ids(patient) if s not in existing]
+        obs.cancelled_count = await db.cancelled_count(patient) - cancelled_before
         obs.offered_slot_ids = sorted(set(offered))
         known = await db.slot_ids()
         obs.hallucinated_slot_ids = sorted(

@@ -25,7 +25,13 @@ from patient_assistant.evaluation.report import hard_zero_violations, to_json, t
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="pa-eval", description="Đánh giá AI Patient Assistant trên dataset JSONL")
     p.add_argument("--dataset", type=Path, nargs="*", help="File JSONL (mặc định: dataset đóng gói kèm)")
-    p.add_argument("--suite", choices=["report", "booking", "conversation"], action="append")
+    p.add_argument("--suite", choices=["report", "booking", "conversation", "agent"], action="append")
+    p.add_argument(
+        "--agent-mode",
+        choices=["workflow", "booking", "full"],
+        help="Chạy các case không tự khai báo agent_mode ở chế độ này. Mặc định workflow — KHÔNG theo PA_AGENT_MODE "
+        "trong .env, vì các case đó viết cho luồng workflow",
+    )
     p.add_argument("--case", action="append", help="Chỉ chạy case có id này (lặp được)")
     p.add_argument("--out", type=Path, default=Path("eval_reports"))
     p.add_argument("--concurrency", type=int, default=4, help="Số case chạy song song")
@@ -42,7 +48,7 @@ async def main_async(args: argparse.Namespace) -> int:
     if not cases:
         print("Không có case nào khớp bộ lọc.", file=sys.stderr)
         return 2
-    settings = Settings()
+    settings = Settings(agent_mode=args.agent_mode or "workflow")
     await require_llm(build_llm(settings), settings)
     observations = await run_cases(cases, lambda: build_llm(settings), settings, concurrency=args.concurrency)
     report = compute(cases, observations)
@@ -51,6 +57,7 @@ async def main_async(args: argparse.Namespace) -> int:
     meta = {
         "run": stamp,
         "model": settings.llm_model_id,
+        "agent_mode": settings.effective_agent_mode,
         "cases": len(cases),
     }
     out_dir = args.out / stamp

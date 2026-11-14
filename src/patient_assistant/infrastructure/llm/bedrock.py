@@ -20,14 +20,17 @@ import asyncio
 import json
 import re
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import datetime
 from importlib import resources
-from typing import Any
+from typing import Any, Literal
 
 import anthropic
 from pydantic import BaseModel, ValidationError
 
 from patient_assistant.application.ports.llm import (
+    AgentMessage,
+    AgentReply,
     BookingPrompt,
     CorrectionFeedback,
     GroundedAnswer,
@@ -38,8 +41,10 @@ from patient_assistant.application.ports.llm import (
 from patient_assistant.domain.booking.models import BookingRequest, SlotOption
 from patient_assistant.domain.conversation import Intent
 from patient_assistant.domain.report.models import ReportExtraction
-from patient_assistant.domain.text.vi_dates import WEEKDAY_NAMES
 from patient_assistant.infrastructure.llm.schema import strict_schema
+
+# Chỉ dẫn gửi cho LLM viết bằng tiếng Anh; lời người dùng và dữ liệu giữ nguyên ngôn ngữ gốc.
+EN_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 
 
 def _prompt(name: str) -> str:
@@ -47,7 +52,7 @@ def _prompt(name: str) -> str:
 
 
 def _render_sources(sources: list[str], now: datetime) -> str:
-    lines = [f"Hôm nay: {WEEKDAY_NAMES[now.weekday()]}, {now:%d/%m/%Y}.", "", "Lời người dùng (theo thứ tự thời gian):"]
+    lines = [f"Today: {EN_WEEKDAYS[now.weekday()]}, {now:%Y-%m-%d}.", "", "User messages (in chronological order):"]
     lines += [f"[{i}] {text}" for i, text in enumerate(sources, start=1)]
     return "\n".join(lines)
 
@@ -56,12 +61,12 @@ def _render_feedback(feedback: CorrectionFeedback | None) -> str:
     if feedback is None:
         return ""
     issues = "\n".join(
-        f"- {i.field}: {i.message}" + (f" Gợi ý: {i.suggestion}" if i.suggestion else "") for i in feedback.issues
+        f"- {i.field}: {i.message}" + (f" Hint: {i.suggestion}" if i.suggestion else "") for i in feedback.issues
     )
     return (
-        "\n\nĐầu ra trước của bạn bị hệ thống kiểm tra từ chối:\n"
-        f"{json.dumps(feedback.previous, ensure_ascii=False)}\n\nLỗi cần sửa:\n{issues}\n\n"
-        "Hãy sửa đúng các lỗi trên. Không bịa thêm dữ liệu; nếu không có bằng chứng thì để null."
+        "\n\nYour previous output was rejected by the system's validation:\n"
+        f"{json.dumps(feedback.previous, ensure_ascii=False)}\n\nErrors to fix:\n{issues}\n\n"
+        "Fix exactly these errors. Do not invent data; if there is no evidence, use null."
     )
 
 
@@ -76,7 +81,7 @@ def uses_bedrock_runtime(model_id: str) -> bool:
 
 def _with_memory(text: str, memory: str | None) -> str:
     """Ghi chú lượt trước (code soạn) đặt trong khối riêng, tách khỏi lời người dùng hiện tại."""
-    return f"<lich_su_hoi_thoai>\n{memory}\n</lich_su_hoi_thoai>\n\n{text}" if memory else text
+    return f"<conversation_history>\n{memory}\n</conversation_history>\n\n{text}" if memory else text
 
 
 class _IntentList(BaseModel):
@@ -94,6 +99,7 @@ class AnthropicBedrockLLM:
         model_id: str,
         effort_extract: str = "medium",
         effort_light: str = "low",
+        effort_agent: str = "low",
         max_tokens: int = 8000,
         extra_body: dict[str, Any] | None = None,
     ) -> None:
@@ -102,6 +108,7 @@ class AnthropicBedrockLLM:
         self._extra_body = extra_body
         self._effort_extract = effort_extract
         self._effort_light = effort_light
+        self._effort_agent = effort_agent
         self._max_tokens = max_tokens
 
     @classmethod
@@ -162,7 +169,7 @@ class AnthropicBedrockLLM:
     async def ping(self) -> tuple[str, int, int]:
         """Gọi thử tối thiểu để kiểm tra credential/quyền/model. Trả (text, input_tokens, output_tokens)."""
         response = await self._create(
-            messages=[{"role": "user", "content": "Trả lời đúng một từ: ok"}], output_config={"effort": "low"}
+            messages=[{"role": "user", "content": "Reply with exactly one word: ok"}], output_config={"effort": "low"}
         )
         text = "".join(b.text for b in response.content if b.type == "text").strip()
         return text, response.usage.input_tokens, response.usage.output_tokens
@@ -170,7 +177,7 @@ class AnthropicBedrockLLM:
     # ------------------------------------------------------------------ LLMPort
 
     async def converse(self, text: str, context: str | None = None, memory: str | None = None) -> str:
-        content = f"<boi_canh>\n{context}\n</boi_canh>\n\n{text}" if context else text
+        content = f"<context>\n{context}\n</context>\n\n{text}" if context else text
         content = _with_memory(content, memory)
         response = await self._create(
             system=[{"type": "text", "text": _prompt("converse"), "cache_control": {"type": "ephemeral"}}],
@@ -196,11 +203,11 @@ class AnthropicBedrockLLM:
 
     async def extract_booking(self, prompt: BookingPrompt) -> dict[str, Any]:
         catalog = "\n".join(
-            f"- {d.code}: {d.name} (còn gọi: {', '.join(d.aliases) or '—'})" for d in prompt.departments
+            f"- {d.code}: {d.name} (also called: {', '.join(d.aliases) or '—'})" for d in prompt.departments
         )
         user = (
             _render_sources(prompt.sources, prompt.now)
-            + f"\n\nDanh mục khoa:\n{catalog}"
+            + f"\n\nDepartment catalog:\n{catalog}"
             + _render_feedback(prompt.feedback)
         )
         codes = [d.code for d in prompt.departments]
@@ -214,7 +221,7 @@ class AnthropicBedrockLLM:
         listing = "\n".join(f"{o.option_no}. {o.slot.label()}" for o in options)
         raw = await self._structured(
             _prompt("choose_slot"),
-            f"Danh sách:\n{listing}\n\nNgười dùng trả lời: {reply}",
+            f"Options:\n{listing}\n\nUser's reply: {reply}",
             strict_schema(_SlotChoice),
             self._effort_light,
         )
@@ -223,15 +230,39 @@ class AnthropicBedrockLLM:
     async def answer_question(
         self, question: str, tools: list[ToolSpec], max_tool_calls: int, memory: str | None = None
     ) -> GroundedAnswer:
+        loop = await self._tool_loop(
+            _prompt("answer_question"),
+            [{"role": "user", "content": _with_memory(question, memory)}],
+            tools,
+            max_tool_calls,
+            self._effort_light,
+        )
+        return GroundedAnswer(text=loop.text, source_ids=loop.source_ids, tool_calls=loop.calls)
+
+    async def run_agent(
+        self,
+        task: Literal["booking", "assistant"],
+        context: str,
+        history: list[AgentMessage],
+        tools: list[ToolSpec],
+        max_tool_calls: int,
+    ) -> AgentReply:
+        system = _prompt(f"{task}_agent") + f"\n\n<context>\n{context}\n</context>"
+        loop = await self._tool_loop(system, _agent_messages(history), tools, max_tool_calls, self._effort_agent)
+        return AgentReply(text=loop.text, tool_calls=loop.calls, stopped_by=loop.stopped_by)
+
+    async def _tool_loop(
+        self, system_text: str, messages: list[dict[str, Any]], tools: list[ToolSpec], max_tool_calls: int, effort: str
+    ) -> _LoopResult:
         by_name = {t.name: t for t in tools}
         tool_defs = [
             {"name": t.name, "description": t.description, "input_schema": strict_schema(t.input_model), "strict": True}
             for t in tools
         ]
-        messages: list[dict[str, Any]] = [{"role": "user", "content": _with_memory(question, memory)}]
+        messages = list(messages)
         source_ids: list[str] = []
         calls = 0
-        system = [{"type": "text", "text": _prompt("answer_question"), "cache_control": {"type": "ephemeral"}}]
+        system = [{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}]
         while True:
             choice = {"type": "auto"} if calls < max_tool_calls else {"type": "none"}
             response = await self._create(
@@ -239,16 +270,17 @@ class AnthropicBedrockLLM:
                 messages=messages,
                 tools=tool_defs,
                 tool_choice=choice,
-                output_config={"effort": self._effort_light},
+                output_config={"effort": effort},
             )
             if response.stop_reason != "tool_use":
                 text = "".join(b.text for b in response.content if b.type == "text").strip()
-                return GroundedAnswer(text=text, source_ids=source_ids, tool_calls=calls)
+                return _LoopResult(text=text, source_ids=source_ids, calls=calls)
             # Giữ nguyên toàn bộ content (kể cả thinking) khi gửi lại.
             messages.append(
                 {"role": "assistant", "content": [b.model_dump(exclude_none=True) for b in response.content]}
             )
             results = []
+            stopped_by: str | None = None
             for block in (b for b in response.content if b.type == "tool_use"):
                 calls += 1
                 spec = by_name.get(block.name)
@@ -257,6 +289,9 @@ class AnthropicBedrockLLM:
                         raise ValueError(f"unknown tool {block.name}")
                     result = await spec.handler(spec.input_model.model_validate(block.input))
                     source_ids += [s for s in result.get("source_ids", []) if s not in source_ids]
+                    # Tool kết thúc: chạy xong (ok) hoặc code yêu cầu dừng hẳn (vd. sửa quá số lần -> chuyển nhân viên).
+                    if spec.terminal and (result.get("status") == "ok" or result.get("stop")):
+                        stopped_by = spec.name
                     results.append(
                         {
                             "type": "tool_result",
@@ -270,7 +305,31 @@ class AnthropicBedrockLLM:
                             "type": "tool_result",
                             "tool_use_id": block.id,
                             "is_error": True,
-                            "content": f"Tham số không hợp lệ: {exc}",
+                            "content": f"Invalid arguments: {exc}",
                         }
                     )
+            if stopped_by:
+                text = "".join(b.text for b in response.content if b.type == "text").strip()
+                return _LoopResult(text=text, source_ids=source_ids, calls=calls, stopped_by=stopped_by)
             messages.append({"role": "user", "content": results})
+
+
+@dataclass
+class _LoopResult:
+    text: str
+    source_ids: list[str] = field(default_factory=list)
+    calls: int = 0
+    stopped_by: str | None = None
+
+
+def _agent_messages(history: list[AgentMessage]) -> list[dict[str, Any]]:
+    """Lịch sử chat -> messages của API: bắt đầu bằng user, hai vai xen kẽ (gộp tin liền nhau cùng vai)."""
+    out: list[dict[str, Any]] = []
+    for msg in history:
+        if not msg.text.strip():
+            continue
+        if out and out[-1]["role"] == msg.role:
+            out[-1]["content"] += "\n\n" + msg.text
+        elif out or msg.role == "user":
+            out.append({"role": msg.role, "content": msg.text})
+    return out

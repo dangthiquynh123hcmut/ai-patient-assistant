@@ -10,8 +10,9 @@ from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel, Field
 
 from patient_assistant.application.agent.memory import MemoryRef, TurnNote
+from patient_assistant.application.ports.llm import AgentMessage
 from patient_assistant.application.tools.result import ToolCallRecord
-from patient_assistant.domain.booking.models import BookingRequest, SlotOption
+from patient_assistant.domain.booking.models import Appointment, BookingRequest, Slot, SlotOption
 from patient_assistant.domain.common import Origin, SttFlag, ValidationIssue
 from patient_assistant.domain.conversation import Intent, SafetyKind
 from patient_assistant.domain.report.models import ReportExtraction
@@ -21,6 +22,8 @@ from patient_assistant.domain.text.vi_dates import DateWindow
 class OutcomeKind(StrEnum):
     REPORT_SAVED = "report_saved"
     APPOINTMENT_BOOKED = "appointment_booked"
+    APPOINTMENT_CANCELLED = "appointment_cancelled"
+    APPOINTMENT_RESCHEDULED = "appointment_rescheduled"
     HISTORY = "history"
     APPOINTMENTS = "appointments"
     PATIENT_INFO = "patient_info"
@@ -104,6 +107,18 @@ class Carryover(BaseModel):
     just_left: bool = True  # vừa bỏ dở ở lượt ngay trước -> nhắc người dùng một lần
 
 
+class AgentProposal(BaseModel):
+    """Việc ghi agent đề xuất. Code đã kiểm tra (slot do backend trả, lịch hẹn của chính bệnh nhân, báo cáo qua
+    validator) rồi mới hiện thẻ xác nhận; chỉ ghi khi người dùng xác nhận."""
+
+    kind: Literal["booking", "reschedule", "cancel", "report"] = "booking"
+    slot: Slot | None = None  # booking, reschedule: slot mới
+    appointment: Appointment | None = None  # reschedule, cancel: lịch hẹn hiện có
+    report: ReportExtraction | None = None  # report
+    reason: str | None = None
+    basis: str | None = None  # LLM giải thích ngắn đề xuất được suy ra từ đâu (chỉ để hiển thị)
+
+
 class AgentState(BaseModel):
     # -- định danh lượt
     conversation_id: str
@@ -157,6 +172,19 @@ class AgentState(BaseModel):
     selected_slot_id: str | None = None
     search_rounds: int = 0
     conflict_retries: int = 0
+
+    # -- booking agent (PA_BOOKING_MODE=agent): LLM tự hỏi/tra tool, code chỉ giữ cổng xác nhận trước khi ghi
+    agent_history: list[AgentMessage] = Field(default_factory=list)  # nối qua các lượt của hội thoại
+    agent_active: bool = False  # agent đang chờ người dùng trả lời -> câu tiếp theo đi thẳng vào agent
+    agent_input: str | None = None  # câu agent cần xử lý trong lần chạy này
+    agent_slots: list[Slot] = Field(default_factory=list)  # slot backend đã trả cho agent (cho phép đề xuất)
+    agent_proposal: AgentProposal | None = None
+    agent_run_tools: list[str] = Field(default_factory=list)  # tool LLM gọi trong lần chạy agent gần nhất (trace)
+    agent_note: str | None = None  # thông báo của hệ thống cho lần chạy agent kế tiếp (đã ghi xong việc X...)
+    agent_done: list[str] = Field(default_factory=list)  # kết quả đã ghi + xác minh trong lượt này (câu trả lời)
+    agent_written: list[str] = Field(default_factory=list)  # khóa việc đã ghi trong lượt (report, slot:..., appt:...)
+    agent_last_write: Outcome | None = None  # kết quả ghi gần nhất, giữ lại khi agent làm tiếp việc khác
+    agent_followup: str | None = None  # lời agent nói thêm sau khi đã ghi xong
 
     # -- ghi dữ liệu: kết quả tool ghi, chờ node verify đọc lại
     write_result: dict[str, Any] | None = None

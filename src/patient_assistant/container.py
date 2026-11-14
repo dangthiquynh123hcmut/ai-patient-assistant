@@ -64,6 +64,7 @@ def build_llm(settings: Settings) -> AnthropicBedrockLLM:
         aws_profile=settings.aws_profile,
         effort_extract=settings.llm_effort_extract,
         effort_light=settings.llm_effort_light,
+        effort_agent=settings.llm_effort_agent,
     )
 
 
@@ -154,6 +155,10 @@ def sql_repositories(sessions: async_sessionmaker[AsyncSession], tz: Any) -> dic
     }
 
 
+def _side_talk(agent_mode: str, llm: LLMPort, toolbox: Toolbox) -> SideTalk | None:
+    return None if agent_mode == "full" else SideTalk(llm, toolbox)
+
+
 class Container(containers.DeclarativeContainer):
     """Composition root: provider của mọi service/use case (theo docs JESCO-AI-BE conventions R2/R3).
 
@@ -228,10 +233,19 @@ class Container(containers.DeclarativeContainer):
         max_clarify_rounds=settings.provided.max_clarify_rounds,
         max_questions=settings.provided.max_questions,
         max_slot_search_rounds=settings.provided.max_slot_search_rounds,
+        max_agent_tool_calls=settings.provided.max_agent_tool_calls,
     )
-    agent_deps = providers.Singleton(AgentDeps, llm=llm, tools=toolbox, audit=audit, limits=limits)
+    agent_deps = providers.Singleton(
+        AgentDeps,
+        llm=llm,
+        tools=toolbox,
+        audit=audit,
+        limits=limits,
+        agent_mode=settings.provided.effective_agent_mode,
+    )
     agent_graph = providers.Singleton(build_agent_graph, agent_deps, checkpointer)
-    side_talk = providers.Singleton(SideTalk, llm, toolbox)
+    # Câu trả lời ở thẻ chờ: workflow cần SideTalk để tách câu hỏi chen ngang / đổi việc; ở chế độ full agent tự hiểu.
+    side_talk = providers.Singleton(_side_talk, settings.provided.effective_agent_mode, llm, toolbox)
 
     # ------------------------------------------------------------------ use cases (API gọi)
     chat = providers.Singleton(ChatUseCase, agent_graph, clock, limits.provided.recursion_limit, side_talk)

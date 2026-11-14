@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +21,8 @@ class Settings(BaseSettings):
     llm_model_id: str = "global.anthropic.claude-opus-4-6-v1"
     llm_effort_extract: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
     llm_effort_light: Literal["low", "medium", "high", "xhigh", "max"] = "low"
+    # Effort của agent (PA_AGENT_MODE=booking|full). Đo thật: low cho kết quả như medium mà nhanh gấp ~3 lần.
+    llm_effort_agent: Literal["low", "medium", "high", "xhigh", "max"] = "low"
 
     # Lưu trữ: chỉ PostgreSQL (dữ liệu nghiệp vụ + state hội thoại của LangGraph), bắt buộc.
     # postgresql+asyncpg://user:pass@localhost:5432/patient_assistant — checkpointer dùng cùng database này.
@@ -50,6 +53,25 @@ class Settings(BaseSettings):
     # Ép sai ngôn ngữ làm whisper giải mã lại nhiều lần: chậm gấp nhiều lần và dễ "dịch" bừa.
     stt_language: Literal["en", "vi", "auto"] = "en"
     stt_confidence_threshold: float = 0.6
+
+    # Cách đặt lịch: "workflow" = luồng cứng (hỏi khoa -> ngày -> giờ -> chọn slot); "agent" = LLM tự hiểu ý và tra
+    # dữ liệu bằng tool (hiểu "giống lịch trước, cách 7 ngày"), code chỉ giữ thẻ xác nhận trước khi ghi.
+    booking_mode: Literal["workflow", "agent"] = "workflow"
+    # Phạm vi agent: workflow | booking (chỉ đặt/đổi/hủy lịch) | full (mọi việc: đặt lịch, báo cáo, tra cứu, hỏi
+    # tài liệu, nhiều việc trong một câu). Để trống: theo `booking_mode` (agent -> booking) cho tương thích.
+    agent_mode: Literal["workflow", "booking", "full"] | None = None
+    max_agent_tool_calls: int = 10
+
+    @field_validator("agent_mode", mode="before")
+    @classmethod
+    def _blank_is_unset(cls, value: object) -> object:
+        return None if value == "" else value
+
+    @property
+    def effective_agent_mode(self) -> Literal["workflow", "booking", "full"]:
+        if self.agent_mode:
+            return self.agent_mode
+        return "booking" if self.booking_mode == "agent" else "workflow"
 
     # Giới hạn agent
     max_corrections: int = 2

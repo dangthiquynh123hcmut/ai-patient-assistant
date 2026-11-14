@@ -114,6 +114,10 @@ def to_markdown(report: EvalReport, meta: dict[str, Any]) -> str:
         lines.append("Không có.")
     for v in failed:
         lines.append(f"- **{v.case_id}** (session {v.session}, {v.category}): " + "; ".join(v.failures))
+    noted = [v for v in report.verdicts if v.notes]
+    if noted:
+        lines += ["", "## Ghi chú (kiểm tra của workflow không áp dụng — không tính là trượt)", ""]
+        lines += [f"- **{v.case_id}** (session {v.session}): " + "; ".join(v.notes) for v in noted]
     return "\n".join(lines) + "\n"
 
 

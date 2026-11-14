@@ -162,18 +162,30 @@ def _appointment(data: Any, departments: list[Department]) -> MemoryAppointment 
         return None
 
 
+# Ghi chú này chỉ gửi cho LLM (không hiển thị cho người dùng) nên viết bằng tiếng Anh như mọi chỉ dẫn khác.
 _RESULT_TEXT = {
-    "report_saved": "đã lưu báo cáo theo dõi",
-    "history": "đã xem lịch sử báo cáo",
-    "appointments": "đã xem danh sách lịch hẹn",
-    "patient_info": "đã xem thông tin và kế hoạch theo dõi",
-    "answer": "đã được trả lời",
-    "chat": "trò chuyện",
-    "cancelled": "người dùng đã hủy, chưa lưu gì",
-    "handoff": "chưa xong, đã chuyển nhân viên",
-    "safety": "đã dừng vì lý do an toàn",
-    "error": "lỗi hệ thống, chưa lưu gì",
+    "report_saved": "follow-up report saved",
+    "appointment_cancelled": "an appointment was cancelled",
+    "appointment_rescheduled": "an appointment was rescheduled",
+    "history": "viewed report history",
+    "appointments": "viewed the appointment list",
+    "patient_info": "viewed their information and follow-up plan",
+    "answer": "question answered",
+    "chat": "small talk",
+    "cancelled": "the user cancelled; nothing saved",
+    "handoff": "not finished; handed off to staff",
+    "safety": "stopped for safety reasons",
+    "error": "system error; nothing saved",
 }
+_EN_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+
+def _booked_note(appt: MemoryAppointment) -> str:
+    start = appt.start_at
+    return (
+        f"appointment booked: {appt.department_name}, {appt.doctor_name}, {start:%H:%M} "
+        f"{_EN_WEEKDAYS[start.weekday()]} {start:%Y-%m-%d} (id {appt.id})"
+    )
 
 
 def note_for_turn(
@@ -187,11 +199,11 @@ def note_for_turn(
 ) -> TurnNote:
     appointment = _appointment(outcome_data, departments) if outcome_kind == "appointment_booked" else None
     if appointment:
-        result = f"đã đặt lịch: {appointment.describe()}"
+        result = _booked_note(appointment)
     elif outcome_kind == "report_saved" and source_ids:
-        result = f"{_RESULT_TEXT['report_saved']} (mã {source_ids[0]})"
+        result = f"{_RESULT_TEXT['report_saved']} (id {source_ids[0]})"
     elif outcome_kind is None:
-        result = "chưa xong, người dùng chuyển sang việc khác"
+        result = "not finished; the user switched to another task"
     else:
         result = _RESULT_TEXT.get(outcome_kind, outcome_kind)
     dept = department_in_text(said, departments)
@@ -216,8 +228,8 @@ def render_memory(memory: list[TurnNote]) -> str | None:
     lines = []
     for k, note in enumerate(memory):
         back = len(memory) - k
-        label = "lượt vừa rồi" if back == 1 else f"{back} lượt trước"
-        lines.append(f"- {label}: người dùng nói «{note.said}» → {note.result}")
+        label = "previous turn" if back == 1 else f"{back} turns ago"
+        lines.append(f"- {label}: the user said «{note.said}» → {note.result}")
     return "\n".join(lines)
 
 

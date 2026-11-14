@@ -42,14 +42,20 @@ class BookingRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    department_code: str | None = Field(None, description="Mã khoa trong danh mục; null nếu người dùng không nêu")
+    department_code: str | None = Field(
+        None, description="Department code from the catalog; null if the user did not name one"
+    )
     department_mentioned: str | None = Field(
-        None, description="Tên khoa người dùng nói, NGUYÊN VĂN, kể cả khi khoa đó không có trong danh mục"
+        None, description="Department name exactly as the user said it (VERBATIM), even if it is not in the catalog"
     )
     doctor_name: str | None = None
-    date_expression: str | None = Field(None, description="Cụm ngày NGUYÊN VĂN, ví dụ 'thứ Ba tuần sau'")
-    time_expression: str | None = Field(None, description="Cụm giờ NGUYÊN VĂN, ví dụ 'buổi sáng'")
-    reason: str | None = Field(None, description="Lý do khám ngắn, nguyên văn; không suy diễn")
+    date_expression: str | None = Field(
+        None, description="Date phrase VERBATIM in the user's language, e.g. 'thứ Ba tuần sau'"
+    )
+    time_expression: str | None = Field(
+        None, description="Time phrase VERBATIM in the user's language, e.g. 'buổi sáng'"
+    )
+    reason: str | None = Field(None, description="Short reason for the visit, verbatim; no inference")
     missing_fields: list[str] = Field(default_factory=list)
     evidence: list[Evidence] = Field(default_factory=list)
 

@@ -42,6 +42,27 @@ from patient_assistant.domain.conversation import (
     rank_intents,
 )
 
+# Việc khác hẳn đặt lịch: khi agent đang hỏi dở mà người dùng nói tới các việc này thì rời agent.
+_LEAVES_BOOKING_AGENT = frozenset(
+    {Intent.CREATE_REPORT, Intent.GET_REPORT_HISTORY, Intent.GET_PATIENT_INFO, Intent.ANSWER_FAQ}
+)
+
+# Việc agent đặt lịch tự làm được bằng tool của nó (xem lịch hẹn, hỏi bác sĩ/khoa).
+_BOOKING_AGENT_COVERS = frozenset({Intent.LIST_APPOINTMENTS, Intent.GET_DOCTOR_INFO})
+
+
+def _prefer_booking_agent(result: dict[str, Any]) -> dict[str, Any]:
+    """ "Đặt lịch giống lịch hiện tại…" nhắc tới lịch hẹn nên LLM có thể xếp `list_appointments` trước, đặt lịch sau.
+    Ở chế độ agent, việc xem lịch là một phần của đặt lịch: vào thẳng agent thay vì trả danh sách rồi bảo nhắn tiếp."""
+    pending = result.get("pending_intents") or []
+    if result.get("intent") in _BOOKING_AGENT_COVERS and Intent.BOOK_APPOINTMENT in pending:
+        return result | {
+            "intent": Intent.BOOK_APPOINTMENT,
+            "pending_intents": [i for i in pending if i not in (Intent.BOOK_APPOINTMENT, *_BOOKING_AGENT_COVERS)],
+        }
+    return result
+
+
 NO_SOURCE_ANSWER = (
     "Mình không tìm thấy thông tin này trong tài liệu hướng dẫn đã được duyệt, nên không trả lời "
     "để tránh đưa thông tin chưa kiểm chứng. Bạn có thể hỏi trực tiếp nhân viên y tế."
@@ -110,6 +131,18 @@ class CommonNodes:
                 "outcome": Outcome(kind=OutcomeKind.SAFETY, code=verdict.kind.value),
             }
         guess = classify_by_rules(text)
+        if state.agent_active and self.deps.agent_mode == "booking":
+            # Agent đặt lịch đang hỏi dở: câu tiếp theo là câu trả lời cho agent ("9 giờ", "bác sĩ khác", "cảm ơn",
+            # "lịch hiện tại của tôi ngày nào?"), trừ khi người dùng rõ ràng chuyển sang việc khác.
+            if guess.primary not in _LEAVES_BOOKING_AGENT:
+                return {"intent": Intent.BOOK_APPOINTMENT, "intent_source": "context", "agent_input": text}
+            return {**(await self._classify(state, text, guess)), "agent_active": False}
+        result = await self._classify(state, text, guess)
+        if self.deps.agent_mode == "booking":
+            result = _prefer_booking_agent(result)
+        return result
+
+    async def _classify(self, state: AgentState, text: str, guess: Any) -> dict[str, Any]:
         carry = state.carryover
         # Có việc dang dở: nói "làm tiếp"/"lấy thông tin cũ", hoặc yêu cầu lại đúng việc đó ("tôi muốn đặt lịch
         # khám") -> nối lại và dùng lại những gì người dùng đã nói, không hỏi lại từ đầu.
@@ -248,6 +281,12 @@ class CommonNodes:
             state.safety,
             state.pending_intents if outcome.kind not in (OutcomeKind.SAFETY, OutcomeKind.ERROR) else [],
         )
+        if state.agent_done:  # agent đã ghi nhiều việc trong lượt này: liệt kê đủ, theo thứ tự
+            # Việc cuối bị hủy/lỗi: chỉ việc đó chưa ghi — không nói "chưa có dữ liệu nào được lưu" sau khi đã lưu.
+            text = text.replace("Chưa có dữ liệu nào được lưu", "Việc này chưa được ghi; các việc ở trên vẫn đã lưu")
+            text = "\n\n".join([*(d for d in state.agent_done if d != text), text])
+        if state.agent_followup:
+            text += f"\n\n{state.agent_followup}"
         if state.carryover and state.carryover.just_left and outcome.kind != OutcomeKind.SAFETY:
             text += (
                 f"\n\nViệc {INTENT_LABELS[state.carryover.intent]} lúc nãy chưa xong và chưa được lưu — "

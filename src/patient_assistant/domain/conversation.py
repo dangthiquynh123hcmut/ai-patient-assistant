@@ -485,6 +485,17 @@ def interpret_confirmation(text: str) -> ConfirmIntent:
     return ConfirmIntent.CONFIRM if confirm else ConfirmIntent.CANCEL
 
 
+# Tiếng đệm, không mang ý gì: trả lời thẻ xác nhận bằng các từ này thì hỏi lại đúng thẻ đó.
+_FILLERS = frozenset(
+    {"ờ", "ừ", "ừm", "ưm", "ừa", "à", "ồ", "ô", "ơ", "hả", "hử", "ậm", "um", "uh", "uhm", "hm", "hmm", "erm"}
+)
+
+
+def is_filler(text: str) -> bool:
+    """Câu trả lời rỗng hoặc chỉ toàn tiếng đệm ("ờ", "ừm...", "uh")."""
+    return all(word in _FILLERS for word in re.findall(r"\w+", text.lower()))
+
+
 # ---------------------------------------------------------------- cờ STT
 
 _DIGIT_TOKEN = re.compile(r"\d")

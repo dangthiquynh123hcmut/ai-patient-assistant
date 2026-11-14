@@ -50,6 +50,13 @@ NODES: dict[str, tuple[str, StepKind]] = {
     "present_booking_draft": ("Người dùng xác nhận lịch hẹn", "hitl"),
     "create_booking": ("Gọi tool đặt lịch", "tool"),
     "verify_booking": ("Đọc lại lịch hẹn để xác minh", "code"),
+    # agent_flow
+    "agent": ("Agent (LLM tự tra dữ liệu bằng tool)", "llm"),
+    "agent_confirm": ("Người dùng xác nhận việc agent đề xuất", "hitl"),
+    "agent_wrapup": ("Ghi kết quả vào lịch sử agent", "code"),
+    "agent_after_write": ("Đã ghi xong → xem còn việc nào chưa làm", "code"),
+    "change_appointment": ("Gọi tool đổi/hủy lịch", "tool"),
+    "verify_change": ("Đọc lại lịch hẹn để xác minh", "code"),
 }
 
 _RESOLUTION = {"llm_fixable": "LLM sửa", "ask_user": "hỏi người dùng", "block": "chặn"}
@@ -69,7 +76,7 @@ _REPORT_LABELS = {
 
 class StepTrace(BaseModel):
     index: int
-    flow: str  # main | report_flow | booking_flow
+    flow: str  # main | report_flow | booking_flow | agent_flow
     node: str
     title: str
     kind: StepKind
@@ -197,6 +204,49 @@ def _summary(node: str, u: dict[str, Any]) -> str:  # noqa: C901 - một nhánh 
         if outcome and u["outcome"].get("source_ids"):
             return f"Trả lời dựa trên tài liệu: {', '.join(u['outcome']['source_ids'])}."
         return outcome or ""
+    if node == "agent":
+        if u.get("outcome") and u["outcome"].get("kind") == "error":
+            return f"LLM lỗi, không đoán kết quả. {outcome}"
+        calls = u.get("agent_run_tools", [])
+        used = f"LLM gọi tool: {', '.join(calls)}. " if calls else "LLM không cần gọi tool. "
+        proposal = u.get("agent_proposal")
+        if proposal:
+            what = {"booking": "đặt lịch", "reschedule": "dời lịch", "cancel": "hủy lịch", "report": "lưu báo cáo"}
+            return (
+                used + f"Đề xuất {what.get(proposal['kind'], proposal['kind'])} → code đã kiểm tra, hiện thẻ xác nhận."
+            )
+        if u.get("agent_followup") is not None or (u.get("outcome") or {}).get("kind") not in (None, "chat"):
+            return (
+                used + "Không còn việc nào chưa làm."
+                if not u.get("agent_followup")
+                else used + "Nói thêm với người dùng."
+            )
+        return used + "Trả lời/hỏi lại người dùng bằng lời tự nhiên."
+    if node == "agent_confirm":
+        if outcome:
+            return outcome
+        action = (u.get("decision") or {}).get("action")
+        if action == "confirm":
+            return "Người dùng xác nhận → ghi."
+        if action == "edit" and u.get("agent_proposal"):
+            return "Người dùng sửa trên thẻ → code áp giá trị, chạy lại validator, hiện lại thẻ."
+        return "Người dùng muốn đổi → quay lại agent."
+    if node == "agent_after_write":
+        if u.get("agent_note"):
+            return "Kết quả đã xác minh → cho agent làm tiếp việc còn lại người dùng đã yêu cầu (nếu có)."
+        return "Kết quả đã xác minh → kết thúc lượt."
+    if node == "change_appointment":
+        w = u.get("write_result") or {}
+        return outcome or f"Tool trả status={w.get('status')} → đi xác minh, chưa báo gì."
+    if node == "verify_change":
+        if u.get("notice"):
+            return "Slot mới vừa bị đặt mất → agent tìm slot khác, lịch cũ giữ nguyên."
+        if not outcome or "error" in outcome:
+            return outcome or ""
+        cancelled = (u.get("outcome") or {}).get("kind") == "appointment_cancelled"
+        return outcome + (" — đã đọc lại, lịch đã hủy." if cancelled else " — đã đọc lại cả lịch cũ lẫn lịch mới.")
+    if node == "agent_wrapup":
+        return "Ghi kết quả vào lịch sử hội thoại của agent cho các lượt sau."
     if node == "converse":
         return "Câu chào hỏi/trò chuyện → LLM trả lời tự nhiên, không gọi tool, không đọc dữ liệu bệnh nhân."
     if node == "respond":
@@ -212,7 +262,11 @@ def describe_step(index: int, namespace: tuple[str, ...], node: str, update: Any
     title, kind = NODES.get(node, (node, "code"))
     flow = namespace[0].split(":")[0] if namespace else "main"
     # Không lặp lại các trường lớn/không cần cho việc giải thích.
-    details = {k: v for k, v in data.items() if k not in ("attempts", "tool_calls", "last_output")}
+    details = {
+        k: v
+        for k, v in data.items()
+        if k not in ("attempts", "tool_calls", "last_output", "agent_history", "agent_slots")
+    }
     return StepTrace(
         index=index, flow=flow, node=node, title=title, kind=kind, summary=_summary(node, data), details=details
     )

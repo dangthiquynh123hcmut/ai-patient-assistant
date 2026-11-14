@@ -245,6 +245,40 @@ class SqlAppointmentRepository:
             rows = await session.scalars(select(AppointmentRow).where(AppointmentRow.patient_id == patient_id))
             return [await self._to_domain(session, r) for r in rows]
 
+    async def cancel(self, appointment_id: str) -> Appointment | None:
+        async with self._sessions.begin() as session:
+            row = await session.get(AppointmentRow, appointment_id)
+            if row is None:
+                return None
+            row.status = AppointmentStatus.CANCELLED.value
+        return await self.get(appointment_id)
+
+    async def reschedule(
+        self, appointment_id: str, patient_id: str, slot: Slot, reason: str | None, idempotency_key: str
+    ) -> Appointment:
+        new = AppointmentRow(
+            id=str(uuid.uuid4()),
+            patient_id=patient_id,
+            slot_id=slot.slot_id,
+            status=AppointmentStatus.BOOKED.value,
+            reason=reason,
+            idempotency_key=idempotency_key,
+        )
+        try:
+            async with self._sessions.begin() as session:
+                old = await session.get(AppointmentRow, appointment_id)
+                assert old is not None
+                old.status = AppointmentStatus.CANCELLED.value
+                await session.flush()  # hủy trước để slot cũ (nếu trùng) không vướng index lịch hiệu lực
+                session.add(new)
+        except IntegrityError as exc:
+            existing = await self.get_by_idempotency_key(idempotency_key)
+            if existing:
+                return existing
+            raise SlotTakenError(slot.slot_id) from exc
+        async with self._sessions() as session:
+            return await self._to_domain(session, new)
+
 
 class SqlKnowledgeRepository:
     """MVP: chấm điểm token trong Python (tập tài liệu nhỏ). Có thể thay bằng Postgres FTS / pgvector."""

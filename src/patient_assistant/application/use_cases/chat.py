@@ -31,7 +31,7 @@ class TurnResult(BaseModel):
     steps: list[StepTrace] = Field(default_factory=list)  # các node đã chạy trong lượt này, kèm diễn giải
 
 
-SUBGRAPH_NODES = ("report_flow", "booking_flow")
+SUBGRAPH_NODES = ("report_flow", "booking_flow", "agent_flow")
 
 
 class NoPendingQuestion(Exception):
@@ -69,6 +69,7 @@ class ChatUseCase:
             stt_flags=stt_flags or [],
             carryover=_carryover(previous, patient_id),
             memory=_memory(previous, patient_id),
+            **_agent_carry(previous, patient_id),
         )
         steps = await self._run(fresh.model_dump(), conversation_id)
         return await self._result(conversation_id, steps)
@@ -198,6 +199,17 @@ def _memory(previous: AgentState | None, patient_id: str) -> list[TurnNote]:
         " ".join([previous.raw_input, *previous.user_replies]), previous.intent, None, None, [], [], []
     )
     return append_note(previous.memory, note)
+
+
+def _agent_carry(previous: AgentState | None, patient_id: str) -> dict[str, Any]:
+    """Hội thoại với agent đặt lịch nối qua các lượt: lịch sử chat, slot đã tra, agent có đang hỏi dở không."""
+    if previous is None or previous.patient_id != patient_id:
+        return {}
+    return {
+        "agent_history": previous.agent_history,
+        "agent_slots": previous.agent_slots,
+        "agent_active": previous.agent_active,
+    }
 
 
 def _pending(snapshot: Any) -> list[Any]:

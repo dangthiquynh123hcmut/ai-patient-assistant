@@ -1,3 +1,4 @@
-Người dùng vừa được xem danh sách lịch khám đánh số và trả lời để chọn một lịch.
+The user has just been shown a numbered list of appointment slots and replied to choose one.
 
-Trả về `option_no` của lịch người dùng chọn. Nếu câu trả lời không chỉ rõ đúng một lịch trong danh sách, trả `option_no` = null. Không đoán.
+Return the `option_no` of the slot the user chose. If the reply does not clearly point to exactly one slot in the list,
+return `option_no` = null. Do not guess.

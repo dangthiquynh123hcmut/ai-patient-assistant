@@ -29,7 +29,7 @@ from patient_assistant.domain.booking.policy import BookingPolicy
 from patient_assistant.domain.report.models import ReportExtraction
 from patient_assistant.domain.text.vi_dates import DateWindow
 
-WRITE_TOOLS = frozenset({"save_patient_report", "create_appointment"})
+WRITE_TOOLS = frozenset({"save_patient_report", "create_appointment", "cancel_appointment", "reschedule_appointment"})
 
 
 async def _guarded(tool: str, call: Callable[[], Awaitable[ToolResult]]) -> ToolResult:
@@ -47,7 +47,7 @@ async def _guarded(tool: str, call: Callable[[], Awaitable[ToolResult]]) -> Tool
 
 class SearchKnowledgeInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    query: str = Field(description="Câu truy vấn tìm trong tài liệu hướng dẫn đã duyệt")
+    query: str = Field(description="Search query for the approved guidance documents (in the user's language)")
 
 
 class EmptyInput(BaseModel):
@@ -57,7 +57,7 @@ class EmptyInput(BaseModel):
 class SlotsInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     department_code: str
-    date_from: date = Field(description="Ngày cụ thể YYYY-MM-DD đã được hệ thống quy đổi")
+    date_from: date = Field(description="Concrete date YYYY-MM-DD, already resolved by the system")
     date_to: date
 
 
@@ -161,6 +161,39 @@ class Toolbox:
             lambda: self._booking.alternatives(patient_id, department_code, window, self._slot_limit, now),
         )
 
+    async def find_my_appointments(
+        self,
+        patient_id: str,
+        now: datetime,
+        when: str = "upcoming",
+        department_code: str | None = None,
+        limit: int = 5,
+    ) -> ToolResult:
+        """Lịch hẹn của bệnh nhân đang đăng nhập, chỉ gồm các trường được phép đưa cho LLM."""
+
+        async def call() -> ToolResult:
+            result = await self._booking.find(patient_id, now, when, department_code, limit)
+            if not result.ok:
+                return result
+            names = {d.code: d.name for d in await self._catalog.list_departments()}
+            result.data = [
+                {
+                    "id": a["id"],
+                    "slot_id": a["slot"]["slot_id"],
+                    "department_code": a["slot"]["department_code"],
+                    "department_name": names.get(a["slot"]["department_code"]),
+                    "doctor_id": a["slot"]["doctor_id"],
+                    "doctor_name": a["slot"]["doctor_name"],
+                    "start_at": a["slot"]["start_at"],
+                    "end_at": a["slot"]["end_at"],
+                    "reason": a.get("reason"),
+                }
+                for a in result.data
+            ]
+            return result
+
+        return await _guarded("find_my_appointments", call)
+
     async def list_my_appointments(self, patient_id: str, now: datetime) -> ToolResult:
         return await _guarded("list_my_appointments", lambda: self._booking.upcoming(patient_id, now))
 
@@ -187,6 +220,23 @@ class Toolbox:
     ) -> ToolResult:
         return await _guarded(
             "create_appointment", lambda: self._booking.book(patient_id, slot_id, reason, idempotency_key, now)
+        )
+
+    async def cancel_appointment(self, patient_id: str, appointment_id: str, now: datetime) -> ToolResult:
+        return await _guarded("cancel_appointment", lambda: self._booking.cancel(patient_id, appointment_id, now))
+
+    async def reschedule_appointment(
+        self,
+        patient_id: str,
+        appointment_id: str,
+        slot_id: str,
+        reason: str | None,
+        idempotency_key: str,
+        now: datetime,
+    ) -> ToolResult:
+        return await _guarded(
+            "reschedule_appointment",
+            lambda: self._booking.reschedule(patient_id, appointment_id, slot_id, reason, idempotency_key, now),
         )
 
     # ------------------------------------------------------------------ tool cho LLM
@@ -219,28 +269,26 @@ class Toolbox:
         return [
             ToolSpec(
                 "search_approved_knowledge",
-                "Tìm đoạn trong tài liệu hướng dẫn đã được duyệt. Trả về doc_id để dẫn nguồn.",
+                "Search passages in the approved guidance documents. Returns doc_id for citing the source.",
                 SearchKnowledgeInput,
                 search,
             ),
-            ToolSpec(
-                "get_patient_plan", "Lấy kế hoạch theo dõi hiện tại của bệnh nhân đang đăng nhập.", EmptyInput, plan
-            ),
+            ToolSpec("get_patient_plan", "Get the logged-in patient's current follow-up plan.", EmptyInput, plan),
             ToolSpec(
                 "get_available_slots",
-                "Xem slot khám còn trống theo khoa và khoảng ngày cụ thể (chỉ để tham khảo, không đặt lịch).",
+                "View free appointment slots by department and concrete date range (reference only; does not book).",
                 SlotsInput,
                 slots,
             ),
             ToolSpec(
                 "get_patient_summary",
-                "Tổng hợp hồ sơ, kế hoạch theo dõi, báo cáo gần đây và lịch hẹn của bệnh nhân đang đăng nhập.",
+                "Summary of the logged-in patient's record, follow-up plan, recent reports and appointments.",
                 EmptyInput,
                 summary,
             ),
             ToolSpec(
                 "list_my_appointments",
-                "Xem các lịch hẹn sắp tới của bệnh nhân đang đăng nhập.",
+                "View the logged-in patient's upcoming appointments.",
                 EmptyInput,
                 appointments,
             ),
