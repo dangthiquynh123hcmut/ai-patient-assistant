@@ -20,12 +20,12 @@ from fastapi import FastAPI
 
 from patient_assistant.config import Settings
 from patient_assistant.container import Container, build_container
-from patient_assistant.interface.api import deps
+from patient_assistant.interface.api import dependencies
 from patient_assistant.interface.api.routers import auth_router, chat_router, me_router, staff_router
 
 ROUTERS = (auth_router, chat_router, me_router, staff_router)
 # Module có `Provide[...]` cần wire
-WIRED_MODULES = (deps, *ROUTERS)
+WIRED_MODULES = (dependencies, *ROUTERS)
 
 
 def wire(app: FastAPI, container: Container) -> None:

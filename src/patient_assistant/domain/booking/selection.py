@@ -32,7 +32,7 @@ class SelectionResult:
 def match_selection(reply: str, options: list[SlotOption]) -> SelectionResult:
     if not options:
         return SelectionResult(None)
-    numbers = {o.option_no for o in options}
+    numbers = {option.option_no for option in options}
     # Tiếng Anh ("the 9 am one", "Thursday", "doctor Binh") đưa về cùng dạng với tiếng Việt trước khi ghép.
     raw = expand_weekday_abbrev(english_to_vi(normalize(reply)))
     text = digitize(raw)
@@ -44,9 +44,9 @@ def match_selection(reply: str, options: list[SlotOption]) -> SelectionResult:
     for word, no in _EN_ORDINAL.items():
         if contains_phrase(raw, (f"the {word}", f"{word} one", f"{word} option")) and no in numbers:
             return SelectionResult(no, rule="ordinal")
-    m = _ORDINAL.search(text) or _BARE_NUMBER.match(text)
-    if m and int(m.group(1)) in numbers:
-        return SelectionResult(int(m.group(1)), rule="ordinal")
+    match = _ORDINAL.search(text) or _BARE_NUMBER.match(text)
+    if match and int(match.group(1)) in numbers:
+        return SelectionResult(int(match.group(1)), rule="ordinal")
 
     candidates = list(options)
     rule_parts: list[str] = []
@@ -57,19 +57,29 @@ def match_selection(reply: str, options: list[SlotOption]) -> SelectionResult:
         if contains_phrase(raw, ("chiều",)) and hour < 12:
             hour += 12
         candidates = [
-            o
-            for o in candidates
-            if (o.slot.start_at.hour, o.slot.start_at.minute) == (hour, minute)
-            or (o.slot.start_at.hour == hour + 12 and 1 <= hour <= 5 and o.slot.start_at.minute == minute)
+            candidate_option
+            for candidate_option in candidates
+            if (candidate_option.slot.start_at.hour, candidate_option.slot.start_at.minute) == (hour, minute)
+            or (
+                candidate_option.slot.start_at.hour == hour + 12
+                and 1 <= hour <= 5
+                and candidate_option.slot.start_at.minute == minute
+            )
         ]
         rule_parts.append("time")
     wm = _WEEKDAY.search(text)
     if wm:
         weekday = int(wm.group(1)) - 2 if wm.group(1) else 6
-        candidates = [o for o in candidates if o.slot.start_at.weekday() == weekday]
+        candidates = [
+            candidate_option for candidate_option in candidates if candidate_option.slot.start_at.weekday() == weekday
+        ]
         rule_parts.append("weekday")
     plain = f" {unaccent(raw)} "
-    by_doctor = [o for o in candidates if f" {unaccent(o.slot.doctor_name).split(' ')[-1]} " in plain]
+    by_doctor = [
+        candidate_option
+        for candidate_option in candidates
+        if f" {unaccent(candidate_option.slot.doctor_name).split(' ')[-1]} " in plain
+    ]
     if by_doctor:
         candidates = by_doctor
         rule_parts.append("doctor")
@@ -78,4 +88,6 @@ def match_selection(reply: str, options: list[SlotOption]) -> SelectionResult:
         return SelectionResult(None)
     if len(candidates) == 1:
         return SelectionResult(candidates[0].option_no, rule="+".join(rule_parts))
-    return SelectionResult(None, candidates=[o.option_no for o in candidates], rule="+".join(rule_parts))
+    return SelectionResult(
+        None, candidates=[candidate_option.option_no for candidate_option in candidates], rule="+".join(rule_parts)
+    )

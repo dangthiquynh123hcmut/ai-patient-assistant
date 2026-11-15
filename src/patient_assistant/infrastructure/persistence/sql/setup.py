@@ -24,7 +24,7 @@ from patient_assistant.infrastructure.persistence.sql.models import (
     AppointmentRow,
     DepartmentRow,
     DoctorRow,
-    KnowledgeDocRow,
+    KnowledgeDocumentRow,
     PatientPlanRow,
     PatientRow,
     ReportRow,
@@ -90,31 +90,31 @@ async def migrate(url: str, schema: str | None = None) -> None:
     await asyncio.to_thread(upgrade)
 
 
-async def ensure_slots(sessions: async_sessionmaker[AsyncSession], today: date, tz: ZoneInfo) -> int:
+async def ensure_slots(sessions: async_sessionmaker[AsyncSession], today: date, timezone: ZoneInfo) -> int:
     """Bổ sung slot từ hôm nay tới `days_ahead` ngày (theo `schedule.json`) còn thiếu. Trả số slot đã thêm.
 
     Chạy lại mỗi lần deploy/hằng ngày để lịch không cạn dần; slot đã có (kể cả đã đặt) giữ nguyên.
     """
-    slots = seed.generate_slots(today, tz)
+    slots = seed.generate_slots(today, timezone)
     async with sessions.begin() as session:
         existing = set(await session.scalars(select(SlotRow.slot_id).where(SlotRow.start_at >= slots[0].start_at)))
-        missing = [s for s in slots if s.slot_id not in existing]
+        missing = [slot for slot in slots if slot.slot_id not in existing]
         session.add_all(
             SlotRow(
-                slot_id=s.slot_id,
-                department_code=s.department_code,
-                doctor_id=s.doctor_id,
-                start_at=s.start_at,
-                end_at=s.end_at,
+                slot_id=slot.slot_id,
+                department_code=slot.department_code,
+                doctor_id=slot.doctor_id,
+                start_at=slot.start_at,
+                end_at=slot.end_at,
             )
-            for s in missing
+            for slot in missing
         )
     return len(missing)
 
 
 async def _fill_patient_details(sessions: async_sessionmaker[AsyncSession]) -> None:
     """Hồ sơ demo đã có từ trước khi có ngày sinh/số điện thoại: điền các ô còn trống, không ghi đè ô đã có."""
-    demo = {p.id: p for p in seed.profiles()}
+    demo = {profile.id: profile for profile in seed.profiles()}
     async with sessions.begin() as session:
         for row in await session.scalars(select(PatientRow).where(PatientRow.id.in_(demo))):
             row.date_of_birth = row.date_of_birth or demo[row.id].date_of_birth
@@ -122,7 +122,7 @@ async def _fill_patient_details(sessions: async_sessionmaker[AsyncSession]) -> N
 
 
 async def seed_demo_data(
-    sessions: async_sessionmaker[AsyncSession], today: date, tz: ZoneInfo, with_history: bool = False
+    sessions: async_sessionmaker[AsyncSession], today: date, timezone: ZoneInfo, with_history: bool = False
 ) -> int:
     """Nạp `demo_data/*.json` vào DB, trả số slot khám đã thêm. Slot sinh tương đối theo hôm nay.
 
@@ -135,62 +135,73 @@ async def seed_demo_data(
         catalog: list[tuple[Any, dict[str, Any]]] = [
             (
                 DepartmentRow.code,
-                {d.code: DepartmentRow(code=d.code, name=d.name, aliases=list(d.aliases)) for d in seed.DEPARTMENTS},
+                {
+                    department.code: DepartmentRow(
+                        code=department.code, name=department.name, aliases=list(department.aliases)
+                    )
+                    for department in seed.DEPARTMENTS
+                },
             ),
             (
                 DoctorRow.id,
-                {d.id: DoctorRow(id=d.id, name=d.name, department_code=d.department_code) for d in seed.DOCTORS},
+                {
+                    doctor.id: DoctorRow(id=doctor.id, name=doctor.name, department_code=doctor.department_code)
+                    for doctor in seed.DOCTORS
+                },
             ),
-            (PatientRow.id, {p.id: PatientRow(**p.model_dump()) for p in seed.profiles()}),
-            (PatientPlanRow.plan_id, {p.plan_id: PatientPlanRow(**p.model_dump()) for p in seed.PLANS}),
-            (KnowledgeDocRow.doc_id, {k.doc_id: KnowledgeDocRow(**k.model_dump()) for k in seed.KNOWLEDGE}),
+            (PatientRow.id, {patient.id: PatientRow(**patient.model_dump()) for patient in seed.profiles()}),
+            (PatientPlanRow.plan_id, {plan.plan_id: PatientPlanRow(**plan.model_dump()) for plan in seed.PLANS}),
+            (
+                KnowledgeDocumentRow.doc_id,
+                {document.doc_id: KnowledgeDocumentRow(**document.model_dump()) for document in seed.KNOWLEDGE},
+            ),
         ]
         for key, rows in catalog:  # theo thứ tự khóa ngoại: khoa -> bác sĩ, bệnh nhân -> kế hoạch
             existing = set(await session.scalars(select(key)))
             session.add_all(row for k, row in rows.items() if k not in existing)
             await session.flush()
         # Tên gọi khác mới thêm vào JSON (ví dụ tên khoa tiếng Anh) cũng bổ sung cho khoa đã có; không xóa tên cũ.
-        wanted = {d.code: list(d.aliases) for d in seed.DEPARTMENTS}
+        wanted = {department.code: list(department.aliases) for department in seed.DEPARTMENTS}
         for row in await session.scalars(select(DepartmentRow)):
             merged = list(dict.fromkeys([*row.aliases, *wanted.get(row.code, [])]))
             if merged != list(row.aliases):
                 row.aliases = merged
     if not fresh:
         await _fill_patient_details(sessions)
-        return await ensure_slots(sessions, today, tz)  # slot cho bác sĩ mới (và các ngày tới còn thiếu)
+        return await ensure_slots(sessions, today, timezone)  # slot cho bác sĩ mới (và các ngày tới còn thiếu)
     async with sessions.begin() as session:
-        slots = seed.generate_slots(today, tz)
+        slots = seed.generate_slots(today, timezone)
         session.add_all(
             SlotRow(
-                slot_id=s.slot_id,
-                department_code=s.department_code,
-                doctor_id=s.doctor_id,
-                start_at=s.start_at,
-                end_at=s.end_at,
+                slot_id=slot.slot_id,
+                department_code=slot.department_code,
+                doctor_id=slot.doctor_id,
+                start_at=slot.start_at,
+                end_at=slot.end_at,
             )
-            for s in slots
+            for slot in slots
         )
         if not with_history:
             return len(slots)
         await session.flush()
         session.add_all(
             ReportRow(
-                **r.model_dump(mode="json", exclude={"evidence", "created_at"}),
-                evidence=[e.model_dump() for e in r.evidence],
-                created_at=r.created_at,
+                **report.model_dump(mode="json", exclude={"evidence", "created_at"}),
+                evidence=[evidence_item.model_dump() for evidence_item in report.evidence],
+                created_at=report.created_at,
             )
-            for r in seed.history_reports(today, tz)
+            for report in seed.history_reports(today, timezone)
         )
         session.add_all(
             AppointmentRow(
-                id=a.id,
-                patient_id=a.patient_id,
-                slot_id=a.slot.slot_id,
-                status=a.status.value,
-                reason=a.reason,
-                idempotency_key=a.idempotency_key,
-                created_at=a.created_at,
+                id=appointment.id,
+                patient_id=appointment.patient_id,
+                slot_id=appointment.slot.slot_id,
+                status=appointment.status.value,
+                reason=appointment.reason,
+                idempotency_key=appointment.idempotency_key,
+                created_at=appointment.created_at,
             )
-            for a in seed.history_appointments(today, slots)
+            for appointment in seed.history_appointments(today, slots)
         )
     return len(slots)

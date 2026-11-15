@@ -108,7 +108,7 @@ def digitize(text: str) -> str:
             flush()
             out.append(tok)
     flush()
-    return " ".join(t for t in out if t)
+    return " ".join(token for token in out if token)
 
 
 def number_supported(value: int, quote: str) -> bool:

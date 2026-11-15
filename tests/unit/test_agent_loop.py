@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-from patient_assistant.application.ports.llm import AgentMessage, ToolSpec
+from patient_assistant.application.ports.llm import AgentMessage, ToolSpecification
 from patient_assistant.infrastructure.llm.bedrock import AnthropicBedrockLLM, _agent_messages
 
 
@@ -26,8 +26,8 @@ class _Response:
         self.content = list(blocks)
 
 
-def _tool_use(id_: str, name: str, **args: Any) -> _Block:
-    return _Block(type="tool_use", id=id_, name=name, input=args)
+def _tool_use(id_: str, name: str, **arguments: Any) -> _Block:
+    return _Block(type="tool_use", id=id_, name=name, input=arguments)
 
 
 def _text(text: str) -> _Block:
@@ -39,8 +39,8 @@ class _Messages:
         self.responses = responses
         self.requests: list[dict[str, Any]] = []
 
-    def create(self, **params: Any) -> _Response:
-        self.requests.append(copy.deepcopy(params))  # vòng lặp còn append vào list messages sau lời gọi này
+    def create(self, **parameters: Any) -> _Response:
+        self.requests.append(copy.deepcopy(parameters))  # vòng lặp còn append vào list messages sau lời gọi này
         return self.responses.pop(0)
 
 
@@ -62,11 +62,11 @@ def _llm(responses: list[_Response]) -> tuple[AnthropicBedrockLLM, _Messages]:
 async def test_terminal_tool_stops_the_loop_and_errors_go_back_to_the_model() -> None:
     proposed: list[str] = []
 
-    async def propose(inp: BaseModel) -> dict[str, Any]:
-        assert isinstance(inp, _Pick)
-        if inp.slot_id != "S1":
+    async def propose(input_data: BaseModel) -> dict[str, Any]:
+        assert isinstance(input_data, _Pick)
+        if input_data.slot_id != "S1":
             return {"tool": "propose_booking", "status": "error", "error": {"message": "slot lạ"}}
-        proposed.append(inp.slot_id)
+        proposed.append(input_data.slot_id)
         return {"tool": "propose_booking", "status": "ok"}
 
     llm, messages = _llm(
@@ -79,7 +79,7 @@ async def test_terminal_tool_stops_the_loop_and_errors_go_back_to_the_model() ->
         "booking",
         "Today: Wednesday",
         [AgentMessage(role="user", text="đặt lịch")],
-        [ToolSpec("propose_booking", "đề xuất", _Pick, propose, terminal=True)],
+        [ToolSpecification("propose_booking", "đề xuất", _Pick, propose, terminal=True)],
         max_tool_calls=5,
     )
     assert reply.stopped_by == "propose_booking"
@@ -100,7 +100,7 @@ async def test_terminal_tool_error_with_stop_ends_the_loop() -> None:
         "assistant",
         "",
         [AgentMessage(role="user", text="báo cáo")],
-        [ToolSpec("propose_report", "đề xuất", _Pick, refuse, terminal=True)],
+        [ToolSpecification("propose_report", "đề xuất", _Pick, refuse, terminal=True)],
         max_tool_calls=5,
     )
     assert reply.stopped_by == "propose_report"

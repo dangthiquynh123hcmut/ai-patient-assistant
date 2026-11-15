@@ -11,25 +11,25 @@ from patient_assistant.application.use_cases.chat import NoPendingQuestion, Turn
 from patient_assistant.application.use_cases.conversation import ConversationService, NotAllowed
 from patient_assistant.application.use_cases.transcribe import TranscribeUseCase, TranscriptReview
 from patient_assistant.container import Container
-from patient_assistant.interface.api.deps import P
+from patient_assistant.interface.api.dependencies import PatientUser
 from patient_assistant.interface.api.schemas import MessageIn, ResumeIn
 
 MAX_AUDIO_BYTES = 10 * 1024 * 1024
 
 router = APIRouter(prefix="/v1", tags=["chat"])
 
-ConversationsDep = Annotated[ConversationService, Depends(Provide[Container.conversations])]
-TranscribeDep = Annotated[TranscribeUseCase, Depends(Provide[Container.transcribe])]
+ConversationsDependency = Annotated[ConversationService, Depends(Provide[Container.conversations])]
+TranscribeDependency = Annotated[TranscribeUseCase, Depends(Provide[Container.transcribe])]
 
 
 @router.get("/chat/{conversation_id}/state")
 @inject
-async def chat_state(conversation_id: str, conversations: ConversationsDep, user: P) -> Any:
+async def chat_state(conversation_id: str, conversations: ConversationsDependency, user: PatientUser) -> Any:
     """State hiện tại của hội thoại (dữ liệu giả lập) — để xem chi tiết cách agent ra quyết định."""
     try:
         state = await conversations.state(user, conversation_id)
-    except NotAllowed as exc:
-        raise HTTPException(404, "Không có hội thoại này") from exc
+    except NotAllowed as exception:
+        raise HTTPException(404, "Không có hội thoại này") from exception
     if state is None:
         raise HTTPException(404, "Không có hội thoại này")
     return state.model_dump(mode="json", exclude={"now"})
@@ -37,19 +37,21 @@ async def chat_state(conversation_id: str, conversations: ConversationsDep, user
 
 @router.get("/chat/{conversation_id}/pending")
 @inject
-async def chat_pending(conversation_id: str, conversations: ConversationsDep, user: P) -> InterruptPayload | None:
+async def chat_pending(
+    conversation_id: str, conversations: ConversationsDependency, user: PatientUser
+) -> InterruptPayload | None:
     """Câu hỏi đang chờ trả lời của hội thoại (null nếu không có) — mở lại hội thoại cũ để trả lời tiếp."""
     try:
         return await conversations.pending(user, conversation_id)
-    except NotAllowed as exc:
-        raise HTTPException(404, "Không có hội thoại này") from exc
+    except NotAllowed as exception:
+        raise HTTPException(404, "Không có hội thoại này") from exception
 
 
 @router.post("/stt/transcribe", response_model=TranscriptReview)
 @inject
 async def transcribe(
-    transcriber: TranscribeDep,
-    _: P,
+    transcriber: TranscribeDependency,
+    _: PatientUser,
     audio: Annotated[UploadFile, File()],
     language: Annotated[Literal["en", "vi", "auto"] | None, Form()] = None,
 ) -> TranscriptReview:
@@ -58,25 +60,29 @@ async def transcribe(
         raise HTTPException(413, "Audio quá lớn")
     try:
         return await transcriber.transcribe(data, language)
-    except STTError as exc:
-        raise HTTPException(503, str(exc)) from exc
+    except STTError as exception:
+        raise HTTPException(503, str(exception)) from exception
 
 
 @router.post("/chat/{conversation_id}/messages", response_model=TurnResult)
 @inject
-async def send_message(conversation_id: str, body: MessageIn, conversations: ConversationsDep, user: P) -> TurnResult:
+async def send_message(
+    conversation_id: str, body: MessageIn, conversations: ConversationsDependency, user: PatientUser
+) -> TurnResult:
     try:
         return await conversations.send(user, conversation_id, body.text, body.input_source, body.stt_flags)
-    except NotAllowed as exc:
-        raise HTTPException(404, "Không có hội thoại này") from exc
+    except NotAllowed as exception:
+        raise HTTPException(404, "Không có hội thoại này") from exception
 
 
 @router.post("/chat/{conversation_id}/resume", response_model=TurnResult)
 @inject
-async def resume(conversation_id: str, body: ResumeIn, conversations: ConversationsDep, user: P) -> TurnResult:
+async def resume(
+    conversation_id: str, body: ResumeIn, conversations: ConversationsDependency, user: PatientUser
+) -> TurnResult:
     try:
         return await conversations.resume(user, conversation_id, UserDecision(**body.model_dump()))
-    except NotAllowed as exc:
-        raise HTTPException(404, "Không có hội thoại này") from exc
-    except NoPendingQuestion as exc:
-        raise HTTPException(409, "Không có câu hỏi nào đang chờ trả lời trong cuộc hội thoại này") from exc
+    except NotAllowed as exception:
+        raise HTTPException(404, "Không có hội thoại này") from exception
+    except NoPendingQuestion as exception:
+        raise HTTPException(409, "Không có câu hỏi nào đang chờ trả lời trong cuộc hội thoại này") from exception

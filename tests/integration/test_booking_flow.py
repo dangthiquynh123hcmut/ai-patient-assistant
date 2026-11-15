@@ -28,13 +28,13 @@ async def test_voice_style_booking_happy_path(make_app: Any) -> None:
     options = waiting(await app.chat().send_message("b1", PATIENT, REQUEST, "voice"), "choose_slot")
     slots = options.interrupt.options
     assert len(slots) == 3
-    assert all(o.slot.start_at.date() == date(2026, 11, 3) and o.slot.start_at.hour < 12 for o in slots)
+    assert all(option.slot.start_at.date() == date(2026, 11, 3) and option.slot.start_at.hour < 12 for option in slots)
     assert "1. Thứ Ba, 03/11/2026" in options.interrupt.message
 
     confirm = waiting(
         await app.chat().resume("b1", PATIENT, UserDecision(action="reply", text="cái thứ hai")), "confirm_booking"
     )
-    explain = {e.field: e for e in confirm.interrupt.explanations}
+    explain = {explanation.field: explanation for explanation in confirm.interrupt.explanations}
     assert explain["slot"].origin.value == "backend"
     assert "tuần kế tiếp" in explain["date_expression"].explanation
     assert await _appointments(app) == []
@@ -62,7 +62,7 @@ async def test_weekday_date_conflict_is_asked(make_app: Any) -> None:
     options = waiting(
         await app.chat().resume("b2", PATIENT, UserDecision(action="reply", text="thứ năm ngày 5/11")), "choose_slot"
     )
-    assert all(o.slot.start_at.date() == date(2026, 11, 5) for o in options.interrupt.options)
+    assert all(option.slot.start_at.date() == date(2026, 11, 5) for option in options.interrupt.options)
 
 
 async def test_department_defaults_to_plan_from_backend(make_app: Any) -> None:
@@ -70,13 +70,13 @@ async def test_department_defaults_to_plan_from_backend(make_app: Any) -> None:
     options = waiting(
         await app.chat().send_message("b3", PATIENT, "đặt lịch tái khám ngày mai buổi chiều"), "choose_slot"
     )
-    assert {o.slot.department_code for o in options.interrupt.options} == {"PHCN"}
-    assert all(o.slot.start_at.hour >= 13 for o in options.interrupt.options)
+    assert {option.slot.department_code for option in options.interrupt.options} == {"PHCN"}
+    assert all(option.slot.start_at.hour >= 13 for option in options.interrupt.options)
     confirm = waiting(
         await app.chat().resume("b3", PATIENT, UserDecision(action="choose", option_no=1)), "confirm_booking"
     )
-    dept = {e.field: e for e in confirm.interrupt.explanations}["department_code"]
-    assert dept.origin.value == "backend"
+    department = {explanation.field: explanation for explanation in confirm.interrupt.explanations}["department_code"]
+    assert department.origin.value == "backend"
 
 
 async def test_department_guessed_from_symptoms_is_rejected(make_app: Any) -> None:
@@ -106,7 +106,7 @@ async def test_slot_taken_at_confirmation_offers_new_slots(make_app: Any) -> Non
     assert taken.ok
     again = waiting(await app.chat().resume("b5", PATIENT, UserDecision(action="confirm")), "choose_slot")
     assert "vừa được người khác đặt" in again.interrupt.message
-    assert options[0].slot.slot_id not in {o.slot.slot_id for o in again.interrupt.options}
+    assert options[0].slot.slot_id not in {option.slot.slot_id for option in again.interrupt.options}
     assert await _appointments(app) == []
 
 
@@ -120,7 +120,7 @@ async def test_ambiguous_choice_and_other_time(make_app: Any) -> None:
     later = waiting(
         await app.chat().resume("b6", PATIENT, UserDecision(action="reply", text="giờ khác, buổi chiều")), "choose_slot"
     )
-    assert all(o.slot.start_at.hour >= 13 for o in later.interrupt.options)
+    assert all(option.slot.start_at.hour >= 13 for option in later.interrupt.options)
 
 
 async def test_sunday_and_cancel(make_app: Any) -> None:
@@ -158,12 +158,12 @@ async def test_progress_never_hands_off_and_time_of_day_reply_searches_again(mak
     waiting(await app.chat().send_message("b10", "patient-no-plan", "đặt lịch khám mới"), "clarify")
     waiting(await app.chat().resume("b10", "patient-no-plan", _reply("phục hồi chức năng")), "clarify")
     first = waiting(await app.chat().resume("b10", "patient-no-plan", _reply("thứ ba tuần sau")), "choose_slot")
-    assert any(o.slot.start_at.hour < 12 for o in first.interrupt.options)
+    assert any(option.slot.start_at.hour < 12 for option in first.interrupt.options)
 
     # "buổi chiều" không khớp lịch nào đang hiện -> hiểu là muốn tìm lại buổi chiều, không chuyển nhân viên.
     later = waiting(await app.chat().resume("b10", "patient-no-plan", _reply("buổi chiều")), "choose_slot")
-    assert later.interrupt.options and all(o.slot.start_at.hour >= 13 for o in later.interrupt.options)
-    assert all(o.slot.start_at.date() == date(2026, 11, 3) for o in later.interrupt.options)
+    assert later.interrupt.options and all(option.slot.start_at.hour >= 13 for option in later.interrupt.options)
+    assert all(option.slot.start_at.date() == date(2026, 11, 3) for option in later.interrupt.options)
     waiting(await app.chat().resume("b10", "patient-no-plan", _reply("cái đầu tiên")), "confirm_booking")
 
 
@@ -188,15 +188,15 @@ async def test_own_appointment_clash_at_confirmation_keeps_request_and_offers_ot
 
     again = waiting(await app.chat().resume("b-own", PATIENT, UserDecision(action="confirm")), "choose_slot")
     assert "Trùng giờ" in again.interrupt.message
-    new = [o.slot for o in again.interrupt.options]
-    assert new and all(s.department_code == "PHCN" and s.start_at.date() == date(2026, 11, 3) for s in new)
-    assert all(s.start_at.hour < 12 for s in new)  # vẫn giữ "buổi sáng" người dùng đã nói
-    assert all(abs((s.start_at - chosen.start_at).total_seconds()) >= 3600 for s in new)  # 30' slot + 30' đệm
-    assert all(o.hint and "Tim mạch" in o.hint for o in again.interrupt.options)
+    new = [option.slot for option in again.interrupt.options]
+    assert new and all(slot.department_code == "PHCN" and slot.start_at.date() == date(2026, 11, 3) for slot in new)
+    assert all(slot.start_at.hour < 12 for slot in new)  # vẫn giữ "buổi sáng" người dùng đã nói
+    assert all(abs((slot.start_at - chosen.start_at).total_seconds()) >= 3600 for slot in new)  # 30' slot + 30' đệm
+    assert all(option.hint and "Tim mạch" in option.hint for option in again.interrupt.options)
 
     waiting(await app.chat().resume("b-own", PATIENT, UserDecision(action="choose", option_no=1)), "confirm_booking")
     done(await app.chat().resume("b-own", PATIENT, UserDecision(action="confirm")), "appointment_booked")
-    booked = {a["slot"]["slot_id"] for a in await _appointments(app)}
+    booked = {appointment["slot"]["slot_id"] for appointment in await _appointments(app)}
     assert booked == {tm_slot, new[0].slot_id}
 
 
@@ -209,17 +209,17 @@ async def test_same_day_slots_are_recommended_next_to_existing_appointment(make_
     options = waiting(
         await app.chat().send_message("b-rec", PATIENT, "đặt lịch phục hồi chức năng tuần sau"), "choose_slot"
     )
-    slots = [o.slot for o in options.interrupt.options]
-    assert all(s.start_at.date() == date(2026, 11, 5) for s in slots)
+    slots = [option.slot for option in options.interrupt.options]
+    assert all(slot.start_at.date() == date(2026, 11, 5) for slot in slots)
     assert slots[0].start_at.hour == 15 and slots[0].start_at.minute == 0  # sát nhất mà vẫn đủ 30' đi lại
-    assert all(not (14 <= s.start_at.hour < 15) for s in slots)  # 14:00 trùng, 14:30 không kịp di chuyển
-    assert all(o.hint and "14:00" in o.hint for o in options.interrupt.options)
+    assert all(not (14 <= slot.start_at.hour < 15) for slot in slots)  # 14:00 trùng, 14:30 không kịp di chuyển
+    assert all(option.hint and "14:00" in option.hint for option in options.interrupt.options)
     assert "gợi ý: cùng ngày với lịch khám Tim mạch lúc 14:00" in options.interrupt.message
 
 
 async def test_no_existing_appointments_means_plain_time_order_and_no_hint(make_app: Any) -> None:
     app = await _request_app(make_app)
     options = waiting(await app.chat().send_message("b-plain", PATIENT, REQUEST), "choose_slot").interrupt.options
-    starts = [o.slot.start_at for o in options]
+    starts = [option.slot.start_at for option in options]
     assert starts == sorted(starts)
-    assert all(o.hint is None for o in options)
+    assert all(option.hint is None for option in options)

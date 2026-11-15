@@ -42,7 +42,7 @@ def _imports(path: Path) -> list[str]:
     names: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            names += [a.name for a in node.names]
+            names += [alias.name for alias in node.names]
         elif isinstance(node, ast.ImportFrom) and node.module:
             names.append(node.module)
     return names

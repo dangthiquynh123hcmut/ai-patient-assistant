@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from patient_assistant.application.agent import routing
-from patient_assistant.application.agent.deps import AgentLimits
+from patient_assistant.application.agent.dependencies import AgentLimits
 from patient_assistant.application.agent.state import AgentState, UserDecision
 from patient_assistant.domain.common import Layer, Resolution, ValidationIssue
 from patient_assistant.domain.conversation import (
@@ -76,11 +76,11 @@ def test_filler_reply_has_no_content(text: str, expected: bool) -> None:
 
 def test_stt_flags_only_low_confidence_key_tokens() -> None:
     flags = stt_flags_from_words([("tôi", 0.2), ("đau", 0.9), ("bốn", 0.4), ("ngày", 0.95), ("9h", 0.5)])
-    assert [f.text for f in flags] == ["bốn", "9h"]
+    assert [flag.text for flag in flags] == ["bốn", "9h"]
 
 
-def _state(**kw: object) -> AgentState:
-    return AgentState(conversation_id="t", patient_id="p", now=NOW, raw_input="x", **kw)  # type: ignore[arg-type]
+def _state(**overrides: object) -> AgentState:
+    return AgentState(conversation_id="t", patient_id="p", now=NOW, raw_input="x", **overrides)  # type: ignore[arg-type]
 
 
 def _issue(resolution: Resolution) -> ValidationIssue:
@@ -147,20 +147,20 @@ def test_continuation_and_context_phrases() -> None:
 def test_next_ask_counts_only_repeats_of_the_same_question() -> None:
     from types import SimpleNamespace
 
-    from patient_assistant.application.agent.deps import AgentLimits
+    from patient_assistant.application.agent.dependencies import AgentLimits
     from patient_assistant.application.agent.nodes.shared import next_ask
 
-    deps = SimpleNamespace(limits=AgentLimits(max_clarify_rounds=2, max_questions=5))
+    dependencies = SimpleNamespace(limits=AgentLimits(max_clarify_rounds=2, max_questions=5))
     state = _state()
     asked = []
     for question in ["a", "a", "b", "b", "b"]:  # đổi câu hỏi = người dùng đã trả lời được -> đếm lại
-        counters = next_ask(state, question, deps)  # type: ignore[arg-type]
+        counters = next_ask(state, question, dependencies)  # type: ignore[arg-type]
         assert counters is not None
         asked.append(counters["clarify_rounds"])
         state = state.model_copy(update=counters)
     assert asked == [0, 1, 0, 1, 2]
-    assert next_ask(state, "b", deps) is None  # hỏi lại "b" lần thứ 3 > max_clarify_rounds  # type: ignore[arg-type]
-    assert next_ask(state, "c", deps) is None  # đã hỏi đủ max_questions câu  # type: ignore[arg-type]
+    assert next_ask(state, "b", dependencies) is None  # hỏi lại "b" lần thứ 3 > max_clarify_rounds  # type: ignore[arg-type]
+    assert next_ask(state, "c", dependencies) is None  # đã hỏi đủ max_questions câu  # type: ignore[arg-type]
 
 
 async def test_reference_to_earlier_answers_is_an_answer_not_another_task() -> None:

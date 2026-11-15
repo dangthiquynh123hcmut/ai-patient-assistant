@@ -15,7 +15,7 @@ from patient_assistant.application.services.auth_service import AuthError, AuthS
 from patient_assistant.config import Settings
 from patient_assistant.container import Container
 from patient_assistant.domain.account import Registration, User
-from patient_assistant.interface.api.deps import U, bearer_token
+from patient_assistant.interface.api.dependencies import AuthenticatedUser, bearer_token
 from patient_assistant.interface.api.schemas import LoginIn, TokenOut
 
 REFRESH_COOKIE = "pa_refresh"
@@ -23,9 +23,9 @@ REFRESH_COOKIE_PATH = "/v1/auth"  # chỉ gửi kèm request tới endpoint xác
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
 
-AuthDep = Annotated[AuthService, Depends(Provide[Container.auth])]
-SettingsDep = Annotated[Settings, Depends(Provide[Container.settings])]
-ClockDep = Annotated[Clock, Depends(Provide[Container.clock])]
+AuthDependency = Annotated[AuthService, Depends(Provide[Container.auth])]
+SettingsDependency = Annotated[Settings, Depends(Provide[Container.settings])]
+ClockDependency = Annotated[Clock, Depends(Provide[Container.clock])]
 
 
 def _issue(response: Response, tokens: IssuedTokens, clock: Clock, settings: Settings) -> TokenOut:
@@ -55,25 +55,27 @@ def _clear_refresh(response: Response, settings: Settings) -> None:
 
 @router.get("/options")
 @inject
-async def auth_options(settings: SettingsDep) -> dict[str, bool]:
+async def auth_options(settings: SettingsDependency) -> dict[str, bool]:
     """Công khai (chưa đăng nhập): trang đăng nhập dùng để biết có hiện nút đăng ký không."""
     return {"allow_registration": settings.allow_registration}
 
 
 @router.post("/login")
 @inject
-async def login(body: LoginIn, response: Response, auth: AuthDep, clock: ClockDep, settings: SettingsDep) -> TokenOut:
+async def login(
+    body: LoginIn, response: Response, auth: AuthDependency, clock: ClockDependency, settings: SettingsDependency
+) -> TokenOut:
     try:
         tokens = await auth.login(body.username, body.password)
-    except AuthError as exc:
-        raise HTTPException(401, str(exc)) from exc
+    except AuthError as exception:
+        raise HTTPException(401, str(exception)) from exception
     return _issue(response, tokens, clock, settings)
 
 
 @router.post("/refresh")
 @inject
 async def refresh(
-    request: Request, response: Response, auth: AuthDep, clock: ClockDep, settings: SettingsDep
+    request: Request, response: Response, auth: AuthDependency, clock: ClockDependency, settings: SettingsDependency
 ) -> TokenOut:
     """Đổi refresh token (cookie) lấy access token mới; cookie được thay bằng refresh token mới."""
     token = request.cookies.get(REFRESH_COOKIE)
@@ -81,17 +83,17 @@ async def refresh(
         raise HTTPException(401, "Chưa đăng nhập hoặc phiên đã hết hạn")
     try:
         tokens = await auth.refresh(token)
-    except RefreshRaceError as exc:
-        raise HTTPException(409, str(exc)) from exc  # cookie đã có token mới: client gửi lại là được
-    except AuthError as exc:
-        raise HTTPException(401, str(exc)) from exc
+    except RefreshRaceError as exception:
+        raise HTTPException(409, str(exception)) from exception  # cookie đã có token mới: client gửi lại là được
+    except AuthError as exception:
+        raise HTTPException(401, str(exception)) from exception
     return _issue(response, tokens, clock, settings)
 
 
 @router.post("/register", status_code=201)
 @inject
 async def register(
-    body: Registration, response: Response, auth: AuthDep, clock: ClockDep, settings: SettingsDep
+    body: Registration, response: Response, auth: AuthDependency, clock: ClockDependency, settings: SettingsDependency
 ) -> TokenOut:
     """Tự tạo tài khoản bệnh nhân (kèm hồ sơ bệnh nhân mới) rồi đăng nhập luôn."""
     if not settings.allow_registration:
@@ -99,16 +101,16 @@ async def register(
     try:
         await auth.register(body)
         tokens = await auth.login(body.username, body.password)
-    except UsernameTakenError as exc:
-        raise HTTPException(409, "Tên đăng nhập đã có người dùng") from exc
-    except AuthError as exc:
-        raise HTTPException(400, str(exc)) from exc
+    except UsernameTakenError as exception:
+        raise HTTPException(409, "Tên đăng nhập đã có người dùng") from exception
+    except AuthError as exception:
+        raise HTTPException(400, str(exception)) from exception
     return _issue(response, tokens, clock, settings)
 
 
 @router.post("/logout", status_code=204)
 @inject
-async def logout(request: Request, response: Response, auth: AuthDep, settings: SettingsDep) -> None:
+async def logout(request: Request, response: Response, auth: AuthDependency, settings: SettingsDependency) -> None:
     """Thu hồi phiên hiện tại (theo refresh cookie hoặc access token); không cần access token còn hạn."""
     for token in {request.cookies.get(REFRESH_COOKIE), bearer_token(request)} - {None}:
         await auth.logout(token)  # type: ignore[arg-type]
@@ -117,12 +119,14 @@ async def logout(request: Request, response: Response, auth: AuthDep, settings: 
 
 @router.post("/logout-all", status_code=204)
 @inject
-async def logout_all(user: U, response: Response, auth: AuthDep, settings: SettingsDep) -> None:
+async def logout_all(
+    user: AuthenticatedUser, response: Response, auth: AuthDependency, settings: SettingsDependency
+) -> None:
     """Đăng xuất mọi thiết bị: thu hồi mọi phiên của tài khoản, kể cả phiên đang gọi."""
     await auth.logout_everywhere(user.id)
     _clear_refresh(response, settings)
 
 
 @router.get("/me")
-async def me(user: U) -> User:
+async def me(user: AuthenticatedUser) -> User:
     return user

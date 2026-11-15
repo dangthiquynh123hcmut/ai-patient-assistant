@@ -220,8 +220,8 @@ def checkpoint_types() -> set[tuple[str, str]]:
                 return
             found.add(key)
             if issubclass(tp, BaseModel):
-                for f in tp.model_fields.values():
-                    visit(f.annotation)
+                for model_field in tp.model_fields.values():
+                    visit(model_field.annotation)
 
     visit(AgentState)
     return found

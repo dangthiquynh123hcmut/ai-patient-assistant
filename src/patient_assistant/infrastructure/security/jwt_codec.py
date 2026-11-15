@@ -37,5 +37,5 @@ class JwtCodec:
                     "verify_iat": False,
                 },
             )
-        except jwt.PyJWTError as exc:
-            raise InvalidTokenError(str(exc)) from exc
+        except jwt.PyJWTError as exception:
+            raise InvalidTokenError(str(exception)) from exception

@@ -153,21 +153,21 @@ def load_cases(paths: list[Path] | None = None) -> list[EvalCase]:
     if paths is None:
         root = resources.files("patient_assistant.evaluation").joinpath("datasets")
         texts = [
-            (f.name, f.read_text("utf-8"))
-            for f in sorted(root.iterdir(), key=lambda f: f.name)
-            if f.name.endswith(".jsonl")
+            (file.name, file.read_text("utf-8"))
+            for file in sorted(root.iterdir(), key=lambda file: file.name)
+            if file.name.endswith(".jsonl")
         ]
     else:
-        texts = [(p.name, p.read_text("utf-8")) for p in paths]
+        texts = [(path.name, path.read_text("utf-8")) for path in paths]
     cases: list[EvalCase] = []
     for name, text in texts:
         for lineno, line in enumerate(text.splitlines(), start=1):
             if line.strip() and not line.lstrip().startswith("//"):
                 try:
                     cases.append(EvalCase.model_validate_json(line))
-                except ValueError as exc:
-                    raise ValueError(f"{name}:{lineno}: case không hợp lệ: {exc}") from exc
-    ids = [c.id for c in cases]
+                except ValueError as exception:
+                    raise ValueError(f"{name}:{lineno}: case không hợp lệ: {exception}") from exception
+    ids = [case.id for case in cases]
     duplicates = {i for i in ids if ids.count(i) > 1}
     if duplicates:
         raise ValueError(f"Trùng id case: {sorted(duplicates)}")

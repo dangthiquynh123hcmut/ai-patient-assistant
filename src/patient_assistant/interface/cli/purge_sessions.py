@@ -64,11 +64,11 @@ def main(argv: list[str] | None = None) -> None:
         metavar="PHÚT",
         help="Chạy lặp lại mỗi PHÚT phút (bỏ trống: chạy một lần rồi thoát).",
     )
-    args = parser.parse_args(argv)
-    if args.every is not None and args.every <= 0:
+    arguments = parser.parse_args(argv)
+    if arguments.every is not None and arguments.every <= 0:
         parser.error("--every phải lớn hơn 0")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    asyncio.run(run(Settings(), args.every))
+    asyncio.run(run(Settings(), arguments.every))
 
 
 if __name__ == "__main__":

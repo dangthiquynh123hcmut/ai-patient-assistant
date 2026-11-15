@@ -49,8 +49,8 @@ class FasterWhisperSTT:
         for segment in segments:
             texts.append(segment.text.strip())
             words += [
-                SttWord(word=w.word.strip(), start=w.start, end=w.end, probability=w.probability)
-                for w in segment.words or []
+                SttWord(word=word.word.strip(), start=word.start, end=word.end, probability=word.probability)
+                for word in segment.words or []
             ]
         return SttResult(text=" ".join(texts).strip(), words=words, language=info.language)
 
@@ -58,8 +58,8 @@ class FasterWhisperSTT:
         try:
             model = await self._load()
             return await asyncio.to_thread(self._run, model, audio, language)
-        except Exception as exc:  # noqa: BLE001 - chuẩn hóa mọi lỗi hạ tầng STT
-            raise STTError(f"STT failed: {type(exc).__name__}") from exc
+        except Exception as exception:  # noqa: BLE001 - chuẩn hóa mọi lỗi hạ tầng STT
+            raise STTError(f"STT failed: {type(exception).__name__}") from exception
 
 
 class UnavailableSTT:

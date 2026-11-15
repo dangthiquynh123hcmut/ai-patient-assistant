@@ -10,7 +10,7 @@ from patient_assistant.evaluation.metrics import EvalReport, Rate
 HARD_ZERO = ("false_success", "slot_hallucination", "double_booking", "own_schedule_overlap")
 
 
-def _fmt(value: Any) -> str:
+def _format(value: Any) -> str:
     if isinstance(value, Rate):
         if value.value is None:
             return "— (0/0)"
@@ -34,10 +34,10 @@ def to_markdown(report: EvalReport, meta: dict[str, Any]) -> str:
         "",
         "| Metric | Giá trị |",
         "|---|---|",
-        f"| Case đạt | {_fmt(report.case_pass_rate)} |",
+        f"| Case đạt | {_format(report.case_pass_rate)} |",
         f"| Crash của harness | {report.crashed} |",
-        f"| Intent đúng | {_fmt(report.intent_accuracy)} |",
-        f"| Outcome đúng | {_fmt(report.outcome_accuracy)} |",
+        f"| Intent đúng | {_format(report.intent_accuracy)} |",
+        f"| Outcome đúng | {_format(report.outcome_accuracy)} |",
         f"| Latency p50 / p95 / max | {report.latency_ms['p50']} / {report.latency_ms['p95']} / "
         f"{report.latency_ms['max']} ms |",
         "",
@@ -48,25 +48,25 @@ def to_markdown(report: EvalReport, meta: dict[str, Any]) -> str:
     ]
     for name in HARD_ZERO:
         rate: Rate = getattr(report, name)
-        lines.append(f"| {name} | {_fmt(rate)} | {'✅' if rate.numerator == 0 else '❌'} |")
+        lines.append(f"| {name} | {_format(rate)} | {'✅' if rate.numerator == 0 else '❌'} |")
     lines += [
         "",
         "## Trích xuất (field-level)",
         "",
         "| Trường | Accuracy |",
         "|---|---|",
-        *[f"| {k} | {_fmt(v)} |" for k, v in report.field_accuracy.items()],
-        f"| **Tổng (giá trị cuối)** | {_fmt(report.field_accuracy_overall)} |",
-        f"| Lần trích xuất đầu tiên | {_fmt(report.first_attempt_field_accuracy)} |",
+        *[f"| {k} | {_format(v)} |" for k, v in report.field_accuracy.items()],
+        f"| **Tổng (giá trị cuối)** | {_format(report.field_accuracy_overall)} |",
+        f"| Lần trích xuất đầu tiên | {_format(report.first_attempt_field_accuracy)} |",
         "",
         "## Function calling",
         "",
         "| Metric | Giá trị |",
         "|---|---|",
-        f"| Chọn đúng tool (đủ tool bắt buộc, không gọi tool ghi bị cấm) | {_fmt(report.tool_selection_accuracy)} |",
-        f"| Recall tool bắt buộc | {_fmt(report.tool_recall)} |",
-        f"| Tỷ lệ tool call không cần thiết | {_fmt(report.unnecessary_tool_call_rate)} |",
-        f"| Tham số ghi đúng (bản lưu / slot đặt) | {_fmt(report.write_argument_accuracy)} |",
+        f"| Chọn đúng tool (đủ tool bắt buộc, không gọi tool ghi bị cấm) | {_format(report.tool_selection_accuracy)} |",
+        f"| Recall tool bắt buộc | {_format(report.tool_recall)} |",
+        f"| Tỷ lệ tool call không cần thiết | {_format(report.unnecessary_tool_call_rate)} |",
+        f"| Tham số ghi đúng (bản lưu / slot đặt) | {_format(report.write_argument_accuracy)} |",
         "",
         "## Validator (lần trích xuất đầu tiên)",
         "",
@@ -74,7 +74,7 @@ def to_markdown(report: EvalReport, meta: dict[str, Any]) -> str:
         "|---|---|---|---|---|---|---|---|---|",
         "| "
         + " | ".join(
-            _fmt(report.validator[k])
+            _format(report.validator[k])
             for k in (
                 "tp",
                 "fp",
@@ -92,20 +92,20 @@ def to_markdown(report: EvalReport, meta: dict[str, Any]) -> str:
         "## Self-correction (case có lỗi LLM tiêm vào)",
         "",
         f"- Số case: {report.self_correction['cases']}",
-        f"- Sửa thành công: {_fmt(report.self_correction['success_rate'])}",
-        f"- Sửa lỗi này nhưng sinh lỗi khác: {_fmt(report.self_correction['regression_rate'])}",
+        f"- Sửa thành công: {_format(report.self_correction['success_rate'])}",
+        f"- Sửa lỗi này nhưng sinh lỗi khác: {_format(report.self_correction['regression_rate'])}",
         f"- Số lần thử trung bình (kể cả lần đầu): {report.self_correction['avg_attempts'] or '—'}",
         "",
         "## Hỏi lại",
         "",
         f"- Case cần hỏi lại: {report.clarification['should_clarify']}",
-        f"- Hỏi lại khi cần: {_fmt(report.clarification['clarified_when_needed'])}",
-        f"- Tự đoán khi thiếu/mơ hồ: {_fmt(report.clarification['guess_rate'])}",
-        f"- Hỏi lại thừa: {_fmt(report.clarification['unnecessary_clarification_rate'])}",
+        f"- Hỏi lại khi cần: {_format(report.clarification['clarified_when_needed'])}",
+        f"- Tự đoán khi thiếu/mơ hồ: {_format(report.clarification['guess_rate'])}",
+        f"- Hỏi lại thừa: {_format(report.clarification['unnecessary_clarification_rate'])}",
         "",
         "## Theo suite",
         "",
-        *[f"- {k}: {_fmt(v)}" for k, v in report.by_suite.items()],
+        *[f"- {k}: {_format(v)}" for k, v in report.by_suite.items()],
         "",
     ]
     failed = [v for v in report.verdicts if not v.passed]
@@ -125,5 +125,5 @@ def to_json(report: EvalReport, observations: list[CaseObservation], meta: dict[
     return {
         "meta": meta,
         "report": report.model_dump(mode="json"),
-        "observations": [o.model_dump(mode="json") for o in observations],
+        "observations": [observation.model_dump(mode="json") for observation in observations],
     }

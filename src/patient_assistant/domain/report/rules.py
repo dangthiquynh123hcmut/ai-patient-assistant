@@ -36,8 +36,8 @@ def range_issue(
 def period_issue(period: str | None, now: datetime) -> ValidationIssue | None:
     if period is None:
         return None
-    m = _ISO_WEEK.match(period)
-    if not m:
+    match = _ISO_WEEK.match(period)
+    if not match:
         return ValidationIssue(
             field="reporting_period",
             layer=Layer.SCHEMA,
@@ -47,7 +47,7 @@ def period_issue(period: str | None, now: datetime) -> ValidationIssue | None:
             resolution=Resolution.LLM_FIXABLE,
         )
     try:
-        start = date.fromisocalendar(int(m.group(1)), int(m.group(2)), 1)
+        start = date.fromisocalendar(int(match.group(1)), int(match.group(2)), 1)
     except ValueError:
         return ValidationIssue(
             field="reporting_period",

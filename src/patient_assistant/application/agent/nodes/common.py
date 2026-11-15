@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from patient_assistant.application.agent.deps import AgentDeps
+from patient_assistant.application.agent.dependencies import AgentDependencies
 from patient_assistant.application.agent.memory import note_for_turn, render_memory
 from patient_assistant.application.agent.nodes.shared import ask_user, is_cancel, next_ask, tool_record
 from patient_assistant.application.agent.presenters import (
@@ -27,7 +27,7 @@ from patient_assistant.application.agent.state import (
     Outcome,
     OutcomeKind,
 )
-from patient_assistant.application.ports.llm import LLMError, ToolSpec
+from patient_assistant.application.ports.llm import LLMError, ToolSpecification
 from patient_assistant.application.tools.result import ToolCallRecord
 from patient_assistant.domain.booking.validators import department_in_text
 from patient_assistant.domain.conversation import (
@@ -69,15 +69,15 @@ NO_SOURCE_ANSWER = (
 )
 
 
-def _recorded(spec: ToolSpec, sink: list[ToolCallRecord]) -> ToolSpec:
+def _recorded(specification: ToolSpecification, sink: list[ToolCallRecord]) -> ToolSpecification:
     """Bọc handler để ghi lại mọi lần LLM gọi tool (FR-08.3)."""
 
-    async def handler(inp: BaseModel) -> dict[str, Any]:
-        result = await spec.handler(inp)
+    async def handler(input_data: BaseModel) -> dict[str, Any]:
+        result = await specification.handler(input_data)
         error = result.get("error") or {}
         sink.append(
             ToolCallRecord(
-                tool=spec.name,
+                tool=specification.name,
                 called_by="llm",
                 status=result.get("status", "error"),
                 error_code=error.get("code"),
@@ -87,7 +87,7 @@ def _recorded(spec: ToolSpec, sink: list[ToolCallRecord]) -> ToolSpec:
         )
         return result
 
-    return ToolSpec(spec.name, spec.description, spec.input_model, handler)
+    return ToolSpecification(specification.name, specification.description, specification.input_model, handler)
 
 
 def _resume_carryover(carry: Carryover, pending: Sequence[Intent]) -> dict[str, Any]:
@@ -103,11 +103,11 @@ def _resume_carryover(carry: Carryover, pending: Sequence[Intent]) -> dict[str, 
 
 
 class CommonNodes:
-    def __init__(self, deps: AgentDeps) -> None:
-        self.deps = deps
+    def __init__(self, dependencies: AgentDependencies) -> None:
+        self.dependencies = dependencies
 
     async def ingest(self, state: AgentState) -> dict[str, Any]:
-        await self.deps.audit.record(
+        await self.dependencies.audit.record(
             "turn_started",
             state.conversation_id,
             {"source": state.input_source, "chars": len(state.raw_input), "stt_flags": len(state.stt_flags)},
@@ -118,7 +118,7 @@ class CommonNodes:
         return {"safety": check_input_safety(state.raw_input).kind}
 
     async def safety_response(self, state: AgentState) -> dict[str, Any]:
-        await self.deps.audit.record("safety_block", state.conversation_id, {"kind": state.safety.value})
+        await self.dependencies.audit.record("safety_block", state.conversation_id, {"kind": state.safety.value})
         return {"outcome": Outcome(kind=OutcomeKind.SAFETY, code=state.safety.value)}
 
     async def classify(self, state: AgentState) -> dict[str, Any]:
@@ -131,14 +131,14 @@ class CommonNodes:
                 "outcome": Outcome(kind=OutcomeKind.SAFETY, code=verdict.kind.value),
             }
         guess = classify_by_rules(text)
-        if state.agent_active and self.deps.agent_mode == "booking":
+        if state.agent_active and self.dependencies.agent_mode == "booking":
             # Agent đặt lịch đang hỏi dở: câu tiếp theo là câu trả lời cho agent ("9 giờ", "bác sĩ khác", "cảm ơn",
             # "lịch hiện tại của tôi ngày nào?"), trừ khi người dùng rõ ràng chuyển sang việc khác.
             if guess.primary not in _LEAVES_BOOKING_AGENT:
                 return {"intent": Intent.BOOK_APPOINTMENT, "intent_source": "context", "agent_input": text}
             return {**(await self._classify(state, text, guess)), "agent_active": False}
         result = await self._classify(state, text, guess)
-        if self.deps.agent_mode == "booking":
+        if self.dependencies.agent_mode == "booking":
             result = _prefer_booking_agent(result)
         return result
 
@@ -154,7 +154,7 @@ class CommonNodes:
             return {"intent": guess.primary, "pending_intents": guess.secondary, "intent_source": "rule"}
         try:
             memory = render_memory(state.memory)
-            intents = [i for i in await self.deps.llm.classify_intent(text, memory) if i != Intent.UNKNOWN]
+            intents = [i for i in await self.dependencies.llm.classify_intent(text, memory) if i != Intent.UNKNOWN]
         except LLMError:
             intents = []
         if len(intents) > 1:
@@ -171,7 +171,7 @@ class CommonNodes:
         return {"intent": intents[0], "pending_intents": intents[1:], "intent_source": "llm"}
 
     async def clarify_intent(self, state: AgentState) -> dict[str, Any]:
-        counters = next_ask(state, "intent", self.deps)
+        counters = next_ask(state, "intent", self.dependencies)
         if counters is None:
             return {"outcome": Outcome(kind=OutcomeKind.HANDOFF, code="too_many_rounds")}
         # Đoán intent gần nhất bằng từ khóa để hỏi lại có trọng tâm, kèm nút chọn nhanh — thay vì menu chung.
@@ -190,7 +190,7 @@ class CommonNodes:
         return {**counters, "decision": decision, "user_replies": [*state.user_replies, decision.text or ""]}
 
     async def fetch_history(self, state: AgentState) -> dict[str, Any]:
-        result = await self.deps.tools.get_report_history(state.patient_id)
+        result = await self.dependencies.tools.get_report_history(state.patient_id)
         outcome = (
             Outcome(kind=OutcomeKind.HISTORY, data=result.data, source_ids=result.source_ids)
             if result.ok
@@ -200,7 +200,7 @@ class CommonNodes:
 
     async def fetch_patient_info(self, state: AgentState) -> dict[str, Any]:
         """Chỉ trả thông tin của bệnh nhân đang đăng nhập — kể cả khi người dùng hỏi về người khác."""
-        result = await self.deps.tools.get_patient_summary(state.patient_id, state.now)
+        result = await self.dependencies.tools.get_patient_summary(state.patient_id, state.now)
         if not result.ok:
             return {
                 "tool_calls": tool_record(state, result),
@@ -219,13 +219,13 @@ class CommonNodes:
 
     async def fetch_doctors(self, state: AgentState) -> dict[str, Any]:
         """Danh mục khoa/bác sĩ (dữ liệu chung của phòng khám, không phải hồ sơ bệnh nhân)."""
-        departments, doctors = await self.deps.tools.catalog()
+        departments, doctors = await self.dependencies.tools.catalog()
         said = " ".join(state.sources())
         only = department_in_text(said, departments)
         return {"outcome": Outcome(kind=OutcomeKind.ANSWER, data=doctors_text(departments, doctors, only))}
 
     async def fetch_appointments(self, state: AgentState) -> dict[str, Any]:
-        result = await self.deps.tools.list_my_appointments(state.patient_id, state.now)
+        result = await self.dependencies.tools.list_my_appointments(state.patient_id, state.now)
         outcome = (
             Outcome(kind=OutcomeKind.APPOINTMENTS, data=result.data, source_ids=result.source_ids)
             if result.ok
@@ -235,16 +235,19 @@ class CommonNodes:
 
     async def rag_answer(self, state: AgentState) -> dict[str, Any]:
         calls: list[ToolCallRecord] = []
-        specs = [_recorded(spec, calls) for spec in self.deps.tools.read_only_specs(state.patient_id, state.now)]
+        specifications = [
+            _recorded(specification, calls)
+            for specification in self.dependencies.tools.read_only_specifications(state.patient_id, state.now)
+        ]
         question = " ".join(state.sources())
         try:
-            answer = await self.deps.llm.answer_question(
-                question, specs, self.deps.limits.max_tool_calls, render_memory(state.memory)
+            answer = await self.dependencies.llm.answer_question(
+                question, specifications, self.dependencies.limits.max_tool_calls, render_memory(state.memory)
             )
-        except LLMError as exc:
+        except LLMError as exception:
             return {
                 "tool_calls": [*state.tool_calls, *calls],
-                "outcome": Outcome(kind=OutcomeKind.ERROR, code=f"llm_{exc.code}"),
+                "outcome": Outcome(kind=OutcomeKind.ERROR, code=f"llm_{exception.code}"),
             }
         tool_calls = [*state.tool_calls, *calls]
         if not output_is_safe(answer.text):
@@ -254,8 +257,8 @@ class CommonNodes:
                 "outcome": Outcome(kind=OutcomeKind.SAFETY),
             }
         # Chỉ trả lời khi có nguồn đã duyệt mà chính tool trả về — không tin doc_id do LLM tự viết.
-        returned = {s for c in calls for s in c.source_ids}
-        sources = [s for s in answer.source_ids if s in returned]
+        returned = {source_id for call in calls for source_id in call.source_ids}
+        sources = [source_id for source_id in answer.source_ids if source_id in returned]
         if not sources:
             return {"tool_calls": tool_calls, "outcome": Outcome(kind=OutcomeKind.ANSWER, data=NO_SOURCE_ANSWER)}
         return {
@@ -266,7 +269,7 @@ class CommonNodes:
     async def converse(self, state: AgentState) -> dict[str, Any]:
         text = state.user_replies[-1] if state.user_replies else state.raw_input
         try:
-            reply = (await self.deps.llm.converse(text, None, render_memory(state.memory))).strip()
+            reply = (await self.dependencies.llm.converse(text, None, render_memory(state.memory))).strip()
         except LLMError:
             reply = ""
         # Câu trò chuyện vẫn qua cùng bộ lọc đầu ra; lỗi hay rỗng thì dùng câu chào cố định.
@@ -284,7 +287,7 @@ class CommonNodes:
         if state.agent_done:  # agent đã ghi nhiều việc trong lượt này: liệt kê đủ, theo thứ tự
             # Việc cuối bị hủy/lỗi: chỉ việc đó chưa ghi — không nói "chưa có dữ liệu nào được lưu" sau khi đã lưu.
             text = text.replace("Chưa có dữ liệu nào được lưu", "Việc này chưa được ghi; các việc ở trên vẫn đã lưu")
-            text = "\n\n".join([*(d for d in state.agent_done if d != text), text])
+            text = "\n\n".join([*(done_text for done_text in state.agent_done if done_text != text), text])
         if state.agent_followup:
             text += f"\n\n{state.agent_followup}"
         if state.carryover and state.carryover.just_left and outcome.kind != OutcomeKind.SAFETY:
@@ -294,7 +297,7 @@ class CommonNodes:
             )
         # Ghi chú cho các lượt sau. Danh mục chỉ để nhận ra tên khoa/bác sĩ; lỗi đọc danh mục không làm hỏng lượt.
         try:
-            departments, doctors = await self.deps.tools.catalog()
+            departments, doctors = await self.dependencies.tools.catalog()
         except Exception:  # noqa: BLE001
             departments, doctors = [], []
         turn_note = note_for_turn(
@@ -312,7 +315,7 @@ class CommonNodes:
             source_ids=outcome.source_ids,
             data=outcome.data,
         )
-        await self.deps.audit.record(
+        await self.dependencies.audit.record(
             "turn_finished",
             state.conversation_id,
             {
@@ -321,7 +324,7 @@ class CommonNodes:
                 "intent": state.intent.value if state.intent else None,
                 "corrections": state.correction_count,
                 "clarify_rounds": state.clarify_rounds,
-                "tool_calls": [t.model_dump() for t in state.tool_calls],
+                "tool_calls": [tool_call.model_dump() for tool_call in state.tool_calls],
             },
         )
         return {"response": response, "turn_note": turn_note}

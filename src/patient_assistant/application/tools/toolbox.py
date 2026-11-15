@@ -14,7 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from patient_assistant.application.ports.llm import ToolSpec
+from patient_assistant.application.ports.llm import ToolSpecification
 from patient_assistant.application.ports.repositories import (
     CatalogRepository,
     KnowledgeRepository,
@@ -37,9 +37,9 @@ async def _guarded(tool: str, call: Callable[[], Awaitable[ToolResult]]) -> Tool
     started = time.perf_counter()
     try:
         result = await call()
-    except Exception as exc:  # noqa: BLE001 - ranh giới hạ tầng
+    except Exception as exception:  # noqa: BLE001 - ranh giới hạ tầng
         result = ToolResult.failure(
-            tool, ToolErrorCode.UNAVAILABLE, f"Lỗi hệ thống: {type(exc).__name__}", retryable=True
+            tool, ToolErrorCode.UNAVAILABLE, f"Lỗi hệ thống: {type(exception).__name__}", retryable=True
         )
     result.latency_ms = int((time.perf_counter() - started) * 1000)
     return result
@@ -109,7 +109,7 @@ class Toolbox:
             if profile is None:
                 return ToolResult.failure("get_patient_summary", ToolErrorCode.NOT_FOUND, "Không có hồ sơ bệnh nhân.")
             plan = await self._plans.get_active_plan(patient_id)
-            departments = {d.code: d.name for d in await self._catalog.list_departments()}
+            departments = {department.code: department.name for department in await self._catalog.list_departments()}
             reports = (await self._reports.history(patient_id, 4)).data or []
             upcoming = (await self._booking.upcoming(patient_id, now)).data or []
             data = {
@@ -123,8 +123,8 @@ class Toolbox:
             ids = [
                 profile.id,
                 *([plan.plan_id] if plan else []),
-                *[r["id"] for r in reports],
-                *[a["id"] for a in upcoming],
+                *[report["id"] for report in reports],
+                *[upcoming_appointment["id"] for upcoming_appointment in upcoming],
             ]
             return ToolResult.success("get_patient_summary", data, ids)
 
@@ -138,9 +138,11 @@ class Toolbox:
 
     async def search_approved_knowledge(self, query: str, limit: int = 3) -> ToolResult:
         async def call() -> ToolResult:
-            docs = await self._knowledge.search(query, limit)
+            documents = await self._knowledge.search(query, limit)
             return ToolResult.success(
-                "search_approved_knowledge", [d.model_dump() for d in docs], [d.doc_id for d in docs]
+                "search_approved_knowledge",
+                [document.model_dump() for document in documents],
+                [document.doc_id for document in documents],
             )
 
         return await _guarded("search_approved_knowledge", call)
@@ -175,20 +177,20 @@ class Toolbox:
             result = await self._booking.find(patient_id, now, when, department_code, limit)
             if not result.ok:
                 return result
-            names = {d.code: d.name for d in await self._catalog.list_departments()}
+            names = {department.code: department.name for department in await self._catalog.list_departments()}
             result.data = [
                 {
-                    "id": a["id"],
-                    "slot_id": a["slot"]["slot_id"],
-                    "department_code": a["slot"]["department_code"],
-                    "department_name": names.get(a["slot"]["department_code"]),
-                    "doctor_id": a["slot"]["doctor_id"],
-                    "doctor_name": a["slot"]["doctor_name"],
-                    "start_at": a["slot"]["start_at"],
-                    "end_at": a["slot"]["end_at"],
-                    "reason": a.get("reason"),
+                    "id": appointment["id"],
+                    "slot_id": appointment["slot"]["slot_id"],
+                    "department_code": appointment["slot"]["department_code"],
+                    "department_name": names.get(appointment["slot"]["department_code"]),
+                    "doctor_id": appointment["slot"]["doctor_id"],
+                    "doctor_name": appointment["slot"]["doctor_name"],
+                    "start_at": appointment["slot"]["start_at"],
+                    "end_at": appointment["slot"]["end_at"],
+                    "reason": appointment.get("reason"),
                 }
-                for a in result.data
+                for appointment in result.data
             ]
             return result
 
@@ -199,10 +201,10 @@ class Toolbox:
 
     async def read_back_appointment(self, patient_id: str, appointment_id: str) -> ToolResult:
         async def call() -> ToolResult:
-            appt = await self._booking.get_appointment(patient_id, appointment_id)
-            if appt is None:
+            appointment = await self._booking.get_appointment(patient_id, appointment_id)
+            if appointment is None:
                 return ToolResult.failure("get_appointment", ToolErrorCode.NOT_FOUND, "Không đọc lại được lịch hẹn.")
-            return ToolResult.success("get_appointment", appt.model_dump(mode="json"), [appt.id])
+            return ToolResult.success("get_appointment", appointment.model_dump(mode="json"), [appointment.id])
 
         return await _guarded("get_appointment", call)
 
@@ -241,20 +243,20 @@ class Toolbox:
 
     # ------------------------------------------------------------------ tool cho LLM
 
-    def read_only_specs(self, patient_id: str, now: datetime) -> list[ToolSpec]:
-        async def search(inp: BaseModel) -> dict[str, Any]:
-            assert isinstance(inp, SearchKnowledgeInput)
-            return (await self.search_approved_knowledge(inp.query)).model_dump(mode="json")
+    def read_only_specifications(self, patient_id: str, now: datetime) -> list[ToolSpecification]:
+        async def search(input_data: BaseModel) -> dict[str, Any]:
+            assert isinstance(input_data, SearchKnowledgeInput)
+            return (await self.search_approved_knowledge(input_data.query)).model_dump(mode="json")
 
         async def plan(_: BaseModel) -> dict[str, Any]:
             return (await self.get_patient_plan(patient_id)).model_dump(mode="json")
 
-        async def slots(inp: BaseModel) -> dict[str, Any]:
-            assert isinstance(inp, SlotsInput)
-            window = DateWindow(date_from=inp.date_from, date_to=inp.date_to)
-            return (await self.get_available_slots(patient_id, inp.department_code, window, None, now)).model_dump(
-                mode="json"
-            )
+        async def slots(input_data: BaseModel) -> dict[str, Any]:
+            assert isinstance(input_data, SlotsInput)
+            window = DateWindow(date_from=input_data.date_from, date_to=input_data.date_to)
+            return (
+                await self.get_available_slots(patient_id, input_data.department_code, window, None, now)
+            ).model_dump(mode="json")
 
         async def appointments(_: BaseModel) -> dict[str, Any]:
             return (await self.list_my_appointments(patient_id, now)).model_dump(mode="json")
@@ -267,26 +269,28 @@ class Toolbox:
             return result
 
         return [
-            ToolSpec(
+            ToolSpecification(
                 "search_approved_knowledge",
                 "Search passages in the approved guidance documents. Returns doc_id for citing the source.",
                 SearchKnowledgeInput,
                 search,
             ),
-            ToolSpec("get_patient_plan", "Get the logged-in patient's current follow-up plan.", EmptyInput, plan),
-            ToolSpec(
+            ToolSpecification(
+                "get_patient_plan", "Get the logged-in patient's current follow-up plan.", EmptyInput, plan
+            ),
+            ToolSpecification(
                 "get_available_slots",
                 "View free appointment slots by department and concrete date range (reference only; does not book).",
                 SlotsInput,
                 slots,
             ),
-            ToolSpec(
+            ToolSpecification(
                 "get_patient_summary",
                 "Summary of the logged-in patient's record, follow-up plan, recent reports and appointments.",
                 EmptyInput,
                 summary,
             ),
-            ToolSpec(
+            ToolSpecification(
                 "list_my_appointments",
                 "View the logged-in patient's upcoming appointments.",
                 EmptyInput,

@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 class ToolErrorCode(StrEnum):
     NOT_FOUND = "not_found"
     FORBIDDEN = "forbidden"
-    INVALID_ARGS = "invalid_args"
+    INVALID_ARGUMENTS = "invalid_args"
     CONFLICT = "conflict"
     UNAVAILABLE = "unavailable"
     INTERNAL = "internal"

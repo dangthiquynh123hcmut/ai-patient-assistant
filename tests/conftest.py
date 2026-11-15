@@ -18,7 +18,7 @@ from patient_assistant.application.ports.llm import (
     GroundedAnswer,
     LLMError,
     ReportPrompt,
-    ToolSpec,
+    ToolSpecification,
 )
 from patient_assistant.application.use_cases.chat import TurnResult
 from patient_assistant.config import Settings
@@ -29,8 +29,8 @@ from patient_assistant.infrastructure.clock import FixedClock
 from patient_assistant.infrastructure.persistence.seed import DEMO_PATIENT_ID
 from patient_assistant.infrastructure.stt.faster_whisper import UnavailableSTT
 
-TZ = ZoneInfo("Asia/Ho_Chi_Minh")
-NOW = datetime(2026, 10, 28, 10, 0, tzinfo=TZ)  # Thứ Tư
+TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
+NOW = datetime(2026, 10, 28, 10, 0, tzinfo=TIMEZONE)  # Thứ Tư
 PATIENT = DEMO_PATIENT_ID
 
 # Test chạy với Postgres thật: `docker compose run --rm --build test` (compose đặt sẵn biến này).
@@ -60,7 +60,7 @@ async def _ensure_database(url: str) -> None:
 TEST_JWT_SECRET = "khoa-jwt-chi-dung-cho-test-" + "x" * 32
 
 
-def pg_settings(**overrides: Any) -> Settings:
+def postgres_settings(**overrides: Any) -> Settings:
     overrides.setdefault("jwt_secret", TEST_JWT_SECRET)
     return Settings(_env_file=None, database_url=TEST_DATABASE_URL, **overrides)  # type: ignore[call-arg]
 
@@ -119,19 +119,19 @@ class ScriptedLLM:
         return _next(self.slots, None)
 
     async def answer_question(
-        self, question: str, tools: list[ToolSpec], max_tool_calls: int, memory: str | None = None
+        self, question: str, tools: list[ToolSpecification], max_tool_calls: int, memory: str | None = None
     ) -> GroundedAnswer:
         """Kịch bản là câu truy vấn: gọi tool tìm tài liệu thật rồi trả lời bằng tài liệu đầu tiên."""
         self.memories.append(memory)
         query = _next(self.searches, None)
-        search = next((t for t in tools if t.name == "search_approved_knowledge"), None)
+        search = next((tool for tool in tools if tool.name == "search_approved_knowledge"), None)
         if query is None or search is None:
             return GroundedAnswer(text="")
         result = await search.handler(search.input_model.model_validate({"query": query}))
-        docs = result.get("data") or []
-        if not docs:
+        documents = result.get("data") or []
+        if not documents:
             return GroundedAnswer(text="", tool_calls=1)
-        top = docs[0]
+        top = documents[0]
         return GroundedAnswer(text=f"{top['content']} ({top['doc_id']})", source_ids=[top["doc_id"]], tool_calls=1)
 
     async def converse(self, text: str, context: str | None = None, memory: str | None = None) -> str:
@@ -139,19 +139,19 @@ class ScriptedLLM:
         return _next(self.replies, "Chào bạn! Mình là trợ lý ảo của phòng khám.")
 
     async def run_agent(
-        self, task: str, context: str, history: list[AgentMessage], tools: list[ToolSpec], max_tool_calls: int
+        self, task: str, context: str, history: list[AgentMessage], tools: list[ToolSpecification], max_tool_calls: int
     ) -> AgentReply:
         self.agent_calls.append((context, list(history)))
         step = _next(self.agents, None)
         if step is None:
             return AgentReply(text="Bạn muốn đặt lịch khoa nào?")
-        return await step({t.name: t for t in tools}, history, context)
+        return await step({tool.name: tool for tool in tools}, history, context)
 
 
-async def call_tool(tools: dict[str, ToolSpec], name: str, **args: Any) -> dict[str, Any]:
+async def call_tool(tools: dict[str, ToolSpecification], name: str, **arguments: Any) -> dict[str, Any]:
     """LLM giả gọi tool đúng như vòng tool-use thật: validate input theo schema rồi chạy handler."""
-    spec = tools[name]
-    return await spec.handler(spec.input_model.model_validate(args))
+    specification = tools[name]
+    return await specification.handler(specification.input_model.model_validate(arguments))
 
 
 class FailingLLM(ScriptedLLM):
@@ -165,7 +165,7 @@ class FailingLLM(ScriptedLLM):
         raise LLMError("unavailable", "down")
 
     async def answer_question(
-        self, question: str, tools: list[ToolSpec], max_tool_calls: int, memory: str | None = None
+        self, question: str, tools: list[ToolSpecification], max_tool_calls: int, memory: str | None = None
     ) -> GroundedAnswer:
         raise LLMError("unavailable", "down")
 
@@ -173,7 +173,7 @@ class FailingLLM(ScriptedLLM):
         raise LLMError("unavailable", "down")
 
     async def run_agent(
-        self, task: str, context: str, history: list[AgentMessage], tools: list[ToolSpec], max_tool_calls: int
+        self, task: str, context: str, history: list[AgentMessage], tools: list[ToolSpecification], max_tool_calls: int
     ) -> AgentReply:
         raise LLMError("unavailable", "down")
 
@@ -188,7 +188,7 @@ def report_out(
     fields = {"pain_level": pain, "exercise_days": days, "symptom_change": change}
     out: dict[str, Any] = {k: v[0] if v else None for k, v in fields.items()}
     out |= {"reporting_period": None, "triggering_activity": activity}
-    out["missing_fields"] = [f for f in ("pain_level", "exercise_days") if out[f] is None]
+    out["missing_fields"] = [field_name for field_name in ("pain_level", "exercise_days") if out[field_name] is None]
     out["evidence"] = [{"field": k, "quote": v[1]} for k, v in fields.items() if v]
     if activity:
         out["evidence"].append({"field": "triggering_activity", "quote": activity})
@@ -226,7 +226,7 @@ async def make_storage() -> AsyncIterator[Callable[..., Awaitable[Storage]]]:
     async with AsyncExitStack() as stack:
 
         async def _make(with_history: bool = False, settings: Settings | None = None) -> Storage:
-            settings = settings or pg_settings()
+            settings = settings or postgres_settings()
             schema = f"t_{uuid.uuid4().hex[:12]}"
             storage = await open_storage(stack, settings, FixedClock(NOW), schema=schema, with_history=with_history)
             await seed_demo_users(storage.sessions, settings.seed_password, NOW)
@@ -238,10 +238,12 @@ async def make_storage() -> AsyncIterator[Callable[..., Awaitable[Storage]]]:
 @pytest.fixture
 async def make_app(make_storage: Callable[..., Awaitable[Storage]]) -> Callable[..., Awaitable[Container]]:
     async def _make(llm: Any = None, with_history: bool = False, **overrides: Any) -> Container:
-        settings = pg_settings(**overrides)
+        settings = postgres_settings(**overrides)
         storage = await make_storage(with_history=with_history, settings=settings)
         clock = FixedClock(NOW)
-        return assemble(settings, storage.repos, llm or ScriptedLLM(), UnavailableSTT(), clock, storage.checkpointer)
+        return assemble(
+            settings, storage.repositories, llm or ScriptedLLM(), UnavailableSTT(), clock, storage.checkpointer
+        )
 
     return _make
 
@@ -273,8 +275,8 @@ def api_client(container: Container) -> Any:
 
 async def login(client: Any, username: str, password: str = DEMO_PASSWORD) -> dict[str, str]:
     """Đăng nhập, trả header Bearer (access token JWT) cho các request sau."""
-    r = await client.post("/v1/auth/login", json={"username": username, "password": password})
-    assert r.status_code == 200, r.text
-    token = r.json()["access_token"]
+    response = await client.post("/v1/auth/login", json={"username": username, "password": password})
+    assert response.status_code == 200, response.text
+    token = response.json()["access_token"]
     client.cookies.clear()  # bỏ refresh cookie: mỗi request tự chọn danh tính qua header
     return {"Authorization": f"Bearer {token}"}

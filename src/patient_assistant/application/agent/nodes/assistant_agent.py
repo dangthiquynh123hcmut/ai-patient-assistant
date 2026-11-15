@@ -17,7 +17,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from patient_assistant.application.agent.deps import AgentDeps
+from patient_assistant.application.agent.dependencies import AgentDependencies
 from patient_assistant.application.agent.nodes.shared import (
     ask_user,
     idempotency_key,
@@ -36,7 +36,7 @@ from patient_assistant.application.agent.state import (
     Outcome,
     OutcomeKind,
 )
-from patient_assistant.application.ports.llm import AgentMessage, LLMError, ToolSpec
+from patient_assistant.application.ports.llm import AgentMessage, LLMError, ToolSpecification
 from patient_assistant.application.tools.result import ToolCallRecord, ToolErrorCode, ToolResult
 from patient_assistant.domain.booking.models import (
     Appointment,
@@ -135,8 +135,8 @@ class EmptyInput(BaseModel):
 # ---------------------------------------------------------------- helper
 
 
-def _local(dt: datetime, ref: datetime) -> datetime:
-    return dt.astimezone(ref.tzinfo)
+def _local(date_time: datetime, ref: datetime) -> datetime:
+    return date_time.astimezone(ref.tzinfo)
 
 
 def _slot_view(slot: Slot) -> dict[str, Any]:
@@ -161,10 +161,14 @@ def _context(state: AgentState, departments: list[Department], doctors: list[Doc
         f"Current ISO week: {today:%G-W%V}.",
         "",
         "Department catalog (code: name — other names):",
-        *[f"- {d.code}: {d.name}" + (f" — {', '.join(d.aliases)}" if d.aliases else "") for d in departments],
+        *[
+            f"- {department.code}: {department.name}"
+            + (f" — {', '.join(department.aliases)}" if department.aliases else "")
+            for department in departments
+        ],
         "",
         "Doctors (id: name — department):",
-        *[f"- {d.id}: {d.name} — {d.department_code}" for d in doctors],
+        *[f"- {doctor.id}: {doctor.name} — {doctor.department_code}" for doctor in doctors],
     ]
     if state.stt_flags:
         # Cờ STT chỉ được validator kiểm khi agent gọi propose_report; báo trước để agent hỏi lại đúng chỗ nghi ngờ.
@@ -172,7 +176,7 @@ def _context(state: AgentState, departments: list[Department], doctors: list[Doc
             "",
             "The user's message is a voice transcript. These words were recognised with LOW confidence "
             "and may be wrong:",
-            *[f'- "{f.text}" (confidence {f.probability:.2f})' for f in state.stt_flags],
+            *[f'- "{stt_flag.text}" (confidence {stt_flag.probability:.2f})' for stt_flag in state.stt_flags],
             "Before using a value that comes from one of these words, ask the user to confirm that value.",
         ]
     if state.agent_slots:
@@ -192,7 +196,7 @@ def _trim(history: list[AgentMessage]) -> list[AgentMessage]:
 
 
 def _failure(
-    tool: str, message: str, details: list[str] | None = None, code: ToolErrorCode = ToolErrorCode.INVALID_ARGS
+    tool: str, message: str, details: list[str] | None = None, code: ToolErrorCode = ToolErrorCode.INVALID_ARGUMENTS
 ) -> dict[str, Any]:
     return ToolResult.failure(tool, code, message, details=details).model_dump(mode="json")
 
@@ -217,7 +221,7 @@ def _record(sink: list[ToolCallRecord], result: dict[str, Any]) -> dict[str, Any
 
 
 def _user_texts(history: list[AgentMessage]) -> list[str]:
-    return [m.text for m in history if m.role == "user" and not m.text.startswith(SYSTEM_NOTE)]
+    return [message.text for message in history if message.role == "user" and not message.text.startswith(SYSTEM_NOTE)]
 
 
 class _Run:
@@ -225,18 +229,18 @@ class _Run:
 
     def __init__(
         self,
-        deps: AgentDeps,
+        dependencies: AgentDependencies,
         state: AgentState,
         departments: list[Department],
         doctors: list[Doctor],
         history: list[AgentMessage],
     ):
-        self.deps = deps
+        self.dependencies = dependencies
         self.state = state
-        self.departments = {d.code for d in departments}
-        self.doctors = {d.id: d for d in doctors}
+        self.departments = {department.code for department in departments}
+        self.doctors = {doctor.id: doctor for doctor in doctors}
         self.user_texts = _user_texts(history)
-        self.slots: dict[str, Slot] = {s.slot_id: s for s in state.agent_slots}
+        self.slots: dict[str, Slot] = {slot.slot_id: slot for slot in state.agent_slots}
         self.new_slots: list[Slot] = []
         self.proposal: AgentProposal | None = None
         self.proposal_tool: str | None = None
@@ -248,61 +252,70 @@ class _Run:
 
     # ------------------------------------------------------------ đọc
 
-    async def find_appointments(self, inp: BaseModel) -> dict[str, Any]:
-        assert isinstance(inp, FindAppointmentsInput)
-        result = await self.deps.tools.find_my_appointments(
-            self.state.patient_id, self.state.now, inp.when, inp.department_code
+    async def find_appointments(self, input_data: BaseModel) -> dict[str, Any]:
+        assert isinstance(input_data, FindAppointmentsInput)
+        result = await self.dependencies.tools.find_my_appointments(
+            self.state.patient_id, self.state.now, input_data.when, input_data.department_code
         )
         data = result.model_dump(mode="json")
         for item in data.get("data") or []:
             item["weekday"] = WEEKDAY_NAMES[_local(datetime.fromisoformat(item["start_at"]), self.state.now).weekday()]
         return _record(self.calls, data)
 
-    async def search_slots(self, inp: BaseModel) -> dict[str, Any]:
-        assert isinstance(inp, SearchSlotsInput)
+    async def search_slots(self, input_data: BaseModel) -> dict[str, Any]:
+        assert isinstance(input_data, SearchSlotsInput)
         tool = "get_available_slots"
-        if inp.department_code not in self.departments:
-            return _record(self.calls, _failure(tool, f"Department code {inp.department_code} is not in the catalog."))
-        doctor = self.doctors.get(inp.doctor_id) if inp.doctor_id else None
-        if inp.doctor_id and (doctor is None or doctor.department_code != inp.department_code):
+        if input_data.department_code not in self.departments:
+            return _record(
+                self.calls, _failure(tool, f"Department code {input_data.department_code} is not in the catalog.")
+            )
+        doctor = self.doctors.get(input_data.doctor_id) if input_data.doctor_id else None
+        if input_data.doctor_id and (doctor is None or doctor.department_code != input_data.department_code):
             return _record(
                 self.calls,
-                _failure(tool, f"Doctor {inp.doctor_id} does not belong to department {inp.department_code}."),
+                _failure(
+                    tool, f"Doctor {input_data.doctor_id} does not belong to department {input_data.department_code}."
+                ),
             )
-        if inp.date_to < inp.date_from:
+        if input_data.date_to < input_data.date_from:
             return _record(self.calls, _failure(tool, "date_to must be on or after date_from."))
-        window = DateWindow(date_from=inp.date_from, date_to=inp.date_to, time_from=inp.time_from, time_to=inp.time_to)
-        issues = window_issues(window, self.state.now, self.deps.tools.booking_policy)
+        window = DateWindow(
+            date_from=input_data.date_from,
+            date_to=input_data.date_to,
+            time_from=input_data.time_from,
+            time_to=input_data.time_to,
+        )
+        issues = window_issues(window, self.state.now, self.dependencies.tools.booking_policy)
         if issues:
             return _record(self.calls, _failure(tool, "This date range cannot be booked.", [i.message for i in issues]))
-        result = await self.deps.tools.get_available_slots(
-            self.state.patient_id, inp.department_code, window, inp.doctor_id, self.state.now
+        result = await self.dependencies.tools.get_available_slots(
+            self.state.patient_id, input_data.department_code, window, input_data.doctor_id, self.state.now
         )
         data = result.model_dump(mode="json")
         if result.ok:
-            found = [Slot.model_validate(s) for s in result.data]
+            found = [Slot.model_validate(slot_data) for slot_data in result.data]
             for slot in found:
                 if slot.slot_id not in self.slots:
                     self.new_slots.append(slot)
                 self.slots[slot.slot_id] = slot
             data["data"] = [
                 {
-                    **_slot_view(s),
+                    **_slot_view(found_slot),
                     **(
                         {"same_day_appointment": raw["same_day_appointment"]} if raw.get("same_day_appointment") else {}
                     ),
                 }
-                for s, raw in zip(found, result.data, strict=True)
+                for found_slot, raw in zip(found, result.data, strict=True)
             ]
         return _record(self.calls, data)
 
     async def patient_plan(self, _: BaseModel) -> dict[str, Any]:
         return _record(
-            self.calls, (await self.deps.tools.get_patient_plan(self.state.patient_id)).model_dump(mode="json")
+            self.calls, (await self.dependencies.tools.get_patient_plan(self.state.patient_id)).model_dump(mode="json")
         )
 
     async def patient_summary(self, _: BaseModel) -> dict[str, Any]:
-        result = (await self.deps.tools.get_patient_summary(self.state.patient_id, self.state.now)).model_dump(
+        result = (await self.dependencies.tools.get_patient_summary(self.state.patient_id, self.state.now)).model_dump(
             mode="json"
         )
         # LLM không cần ngày sinh / số điện thoại để trả lời -> không gửi dữ liệu cá nhân này cho LLM.
@@ -312,12 +325,13 @@ class _Run:
 
     async def report_history(self, _: BaseModel) -> dict[str, Any]:
         return _record(
-            self.calls, (await self.deps.tools.get_report_history(self.state.patient_id)).model_dump(mode="json")
+            self.calls,
+            (await self.dependencies.tools.get_report_history(self.state.patient_id)).model_dump(mode="json"),
         )
 
-    async def search_knowledge(self, inp: BaseModel) -> dict[str, Any]:
-        assert isinstance(inp, SearchKnowledgeInput)
-        result = await self.deps.tools.search_approved_knowledge(inp.query)
+    async def search_knowledge(self, input_data: BaseModel) -> dict[str, Any]:
+        assert isinstance(input_data, SearchKnowledgeInput)
+        result = await self.dependencies.tools.search_approved_knowledge(input_data.query)
         self.knowledge_ids |= set(result.source_ids)
         return _record(self.calls, result.model_dump(mode="json"))
 
@@ -340,7 +354,7 @@ class _Run:
         return _record(self.calls, _ok(tool, {"shown_to_user": True}, ids))
 
     async def _upcoming_appointment(self, tool: str, appointment_id: str) -> Appointment | dict[str, Any]:
-        back = await self.deps.tools.read_back_appointment(self.state.patient_id, appointment_id)
+        back = await self.dependencies.tools.read_back_appointment(self.state.patient_id, appointment_id)
         if not back.ok:
             return _record(
                 self.calls,
@@ -350,15 +364,15 @@ class _Run:
                     code=ToolErrorCode.NOT_FOUND,
                 ),
             )
-        appt = Appointment.model_validate(back.data)
-        if appt.status != AppointmentStatus.BOOKED or appt.slot.start_at < self.state.now:
+        appointment = Appointment.model_validate(back.data)
+        if appointment.status != AppointmentStatus.BOOKED or appointment.slot.start_at < self.state.now:
             return _record(
                 self.calls,
                 _failure(
                     tool, "This appointment is already cancelled or in the past; it cannot be changed or cancelled."
                 ),
             )
-        return appt
+        return appointment
 
     def _known_slot(self, tool: str, slot_id: str) -> Slot | dict[str, Any]:
         slot = self.slots.get(slot_id)
@@ -368,47 +382,53 @@ class _Run:
             )
         return slot
 
-    async def propose_booking(self, inp: BaseModel) -> dict[str, Any]:
-        assert isinstance(inp, ProposeBookingInput)
-        slot = self._known_slot("propose_booking", inp.slot_id)
+    async def propose_booking(self, input_data: BaseModel) -> dict[str, Any]:
+        assert isinstance(input_data, ProposeBookingInput)
+        slot = self._known_slot("propose_booking", input_data.slot_id)
         if isinstance(slot, dict):
             return slot
-        proposal = AgentProposal(kind="booking", slot=slot, reason=inp.reason, basis=inp.basis)
+        proposal = AgentProposal(kind="booking", slot=slot, reason=input_data.reason, basis=input_data.basis)
         return self._proposed("propose_booking", proposal, [slot.slot_id])
 
-    async def propose_reschedule(self, inp: BaseModel) -> dict[str, Any]:
-        assert isinstance(inp, ProposeRescheduleInput)
+    async def propose_reschedule(self, input_data: BaseModel) -> dict[str, Any]:
+        assert isinstance(input_data, ProposeRescheduleInput)
         tool = "propose_reschedule"
-        appt = await self._upcoming_appointment(tool, inp.appointment_id)
-        if isinstance(appt, dict):
-            return appt
-        slot = self._known_slot(tool, inp.slot_id)
+        appointment = await self._upcoming_appointment(tool, input_data.appointment_id)
+        if isinstance(appointment, dict):
+            return appointment
+        slot = self._known_slot(tool, input_data.slot_id)
         if isinstance(slot, dict):
             return slot
-        if slot.slot_id == appt.slot.slot_id:
+        if slot.slot_id == appointment.slot.slot_id:
             return _record(self.calls, _failure(tool, "The new slot is the same as the current appointment."))
-        proposal = AgentProposal(kind="reschedule", slot=slot, appointment=appt, reason=appt.reason, basis=inp.basis)
-        return self._proposed(tool, proposal, [appt.id, slot.slot_id])
+        proposal = AgentProposal(
+            kind="reschedule", slot=slot, appointment=appointment, reason=appointment.reason, basis=input_data.basis
+        )
+        return self._proposed(tool, proposal, [appointment.id, slot.slot_id])
 
-    async def propose_cancel(self, inp: BaseModel) -> dict[str, Any]:
-        assert isinstance(inp, ProposeCancelInput)
-        appt = await self._upcoming_appointment("propose_cancel", inp.appointment_id)
-        if isinstance(appt, dict):
-            return appt
+    async def propose_cancel(self, input_data: BaseModel) -> dict[str, Any]:
+        assert isinstance(input_data, ProposeCancelInput)
+        appointment = await self._upcoming_appointment("propose_cancel", input_data.appointment_id)
+        if isinstance(appointment, dict):
+            return appointment
         return self._proposed(
-            "propose_cancel", AgentProposal(kind="cancel", appointment=appt, basis=inp.basis), [appt.id]
+            "propose_cancel",
+            AgentProposal(kind="cancel", appointment=appointment, basis=input_data.basis),
+            [appointment.id],
         )
 
-    async def propose_report(self, inp: BaseModel) -> dict[str, Any]:
-        assert isinstance(inp, ReportExtraction)
+    async def propose_report(self, input_data: BaseModel) -> dict[str, Any]:
+        assert isinstance(input_data, ReportExtraction)
         tool = "propose_report"
-        if inp.reporting_period == f"{self.state.now:%G-W%V}":
+        if input_data.reporting_period == f"{self.state.now:%G-W%V}":
             # "Tuần này" -> LLM hay tự điền tuần hiện tại mà không có trích dẫn, bị từ chối rồi phải thử lại (lần thử
             # lại dễ sinh trích dẫn hỏng ký tự). Tuần hiện tại cũng là giá trị mặc định khi lưu -> bỏ đi.
-            evidence = [e for e in inp.evidence if e.field != "reporting_period"]
-            inp = inp.model_copy(update={"reporting_period": None, "evidence": evidence})
+            evidence = [
+                evidence_item for evidence_item in input_data.evidence if evidence_item.field != "reporting_period"
+            ]
+            input_data = input_data.model_copy(update={"reporting_period": None, "evidence": evidence})
         issues = validate_report(
-            inp,
+            input_data,
             ReportValidationContext(sources=self.user_texts, now=self.state.now, stt_flags=self.state.stt_flags),
         )
         if issues:
@@ -417,19 +437,19 @@ class _Run:
                 hint = "Ask the user for what is missing/unclear; do not fill it in yourself."
                 return _record(self.calls, _failure(tool, f"The report is not valid yet. {hint}", details))
             self.rejections += 1
-            if self.rejections > self.deps.limits.max_corrections:
+            if self.rejections > self.dependencies.limits.max_corrections:
                 # Cùng trần với workflow (FR-02.5): sửa quá số lần cho phép -> dừng, chuyển nhân viên, không lưu.
                 self.handoff = True
                 failure = _failure(tool, "Too many invalid attempts; the request is handed to staff.", details)
                 return _record(self.calls, failure | {"stop": True})
             hint = "Fix it to match the user's words (verbatim quotes, values exactly as they said)."
             return _record(self.calls, _failure(tool, f"The report is not valid yet. {hint}", details))
-        return self._proposed(tool, AgentProposal(kind="report", report=inp), [])
+        return self._proposed(tool, AgentProposal(kind="report", report=input_data), [])
 
-    def specs(self) -> list[ToolSpec]:
-        full = self.deps.agent_mode == "full"
-        specs = [
-            ToolSpec(
+    def specifications(self) -> list[ToolSpecification]:
+        full = self.dependencies.agent_mode == "full"
+        specifications = [
+            ToolSpecification(
                 "find_my_appointments",
                 "The logged-in patient's booked appointments (id, department, doctor, time, reason). Use when the "
                 "user asks about appointments, refers to a previous/current appointment or visit, or wants to change "
@@ -437,20 +457,20 @@ class _Run:
                 FindAppointmentsInput,
                 self.find_appointments,
             ),
-            ToolSpec(
+            ToolSpecification(
                 "search_slots",
                 "Find free appointment slots by department, doctor (optional), date range and time window. Slots that "
                 "clash with the patient's own appointments are already excluded.",
                 SearchSlotsInput,
                 self.search_slots,
             ),
-            ToolSpec(
+            ToolSpecification(
                 "get_patient_plan",
                 "The patient's current follow-up plan (includes the department following them).",
                 EmptyInput,
                 self.patient_plan,
             ),
-            ToolSpec(
+            ToolSpecification(
                 "propose_booking",
                 "Propose booking ONE new slot. The system shows a card for the user to confirm; nothing is written "
                 "until they confirm.",
@@ -458,7 +478,7 @@ class _Run:
                 self.propose_booking,
                 terminal=True,
             ),
-            ToolSpec(
+            ToolSpecification(
                 "propose_reschedule",
                 "Propose moving ONE upcoming appointment to a new slot (the old one is cancelled at the same time). "
                 "The system shows a confirmation card.",
@@ -466,7 +486,7 @@ class _Run:
                 self.propose_reschedule,
                 terminal=True,
             ),
-            ToolSpec(
+            ToolSpecification(
                 "propose_cancel",
                 "Propose cancelling ONE upcoming appointment. The system shows a confirmation card.",
                 ProposeCancelInput,
@@ -475,27 +495,27 @@ class _Run:
             ),
         ]
         if full:
-            specs += [
-                ToolSpec(
+            specifications += [
+                ToolSpecification(
                     "get_patient_summary",
                     "The logged-in patient's record, follow-up plan, recent reports and upcoming appointments.",
                     EmptyInput,
                     self.patient_summary,
                 ),
-                ToolSpec(
+                ToolSpecification(
                     "get_report_history",
                     "The patient's recent follow-up reports (period, pain level, exercise days, symptoms).",
                     EmptyInput,
                     self.report_history,
                 ),
-                ToolSpec(
+                ToolSpecification(
                     "search_approved_knowledge",
                     "Search the approved guidance documents. Knowledge questions may be answered only from these "
                     "results, citing the doc_id.",
                     SearchKnowledgeInput,
                     self.search_knowledge,
                 ),
-                ToolSpec(
+                ToolSpecification(
                     "propose_report",
                     "Propose saving the weekly follow-up report. Every field with a value needs evidence: a VERBATIM "
                     "quote of the user's words. The system validates it, then shows a card for the user to confirm.",
@@ -504,15 +524,15 @@ class _Run:
                     terminal=True,
                 ),
             ]
-        return specs
+        return specifications
 
 
 # ---------------------------------------------------------------- node
 
 
 class AgentNodes:
-    def __init__(self, deps: AgentDeps) -> None:
-        self.deps = deps
+    def __init__(self, dependencies: AgentDependencies) -> None:
+        self.dependencies = dependencies
 
     async def agent(self, state: AgentState) -> dict[str, Any]:
         if state.agent_note:  # việc trước đã ghi xong -> agent xem còn việc nào người dùng yêu cầu mà chưa làm
@@ -531,28 +551,28 @@ class AgentNodes:
         else:
             said = "\n".join([*state.context_sources, state.raw_input, *state.user_replies])
         history = _trim([*state.agent_history, AgentMessage(role="user", text=said)])
-        departments, doctors = await self.deps.tools.catalog()
-        run = _Run(self.deps, state, departments, doctors, history)
+        departments, doctors = await self.dependencies.tools.catalog()
+        run = _Run(self.dependencies, state, departments, doctors, history)
         updates: dict[str, Any] = {"notice": None, "agent_input": None, "agent_note": None, "agent_proposal": None}
         try:
-            reply = await self.deps.llm.run_agent(
-                "assistant" if self.deps.agent_mode == "full" else "booking",
+            reply = await self.dependencies.llm.run_agent(
+                "assistant" if self.dependencies.agent_mode == "full" else "booking",
                 _context(state, departments, doctors),
                 history,
-                run.specs(),
-                self.deps.limits.max_agent_tool_calls,
+                run.specifications(),
+                self.dependencies.limits.max_agent_tool_calls,
             )
-        except LLMError as exc:
+        except LLMError as exception:
             return updates | {
                 "tool_calls": [*state.tool_calls, *run.calls],
-                "agent_run_tools": [c.tool for c in run.calls],
+                "agent_run_tools": [call.tool for call in run.calls],
                 "agent_history": history,
                 "agent_active": False,
-                "outcome": state.agent_last_write or Outcome(kind=OutcomeKind.ERROR, code=f"llm_{exc.code}"),
+                "outcome": state.agent_last_write or Outcome(kind=OutcomeKind.ERROR, code=f"llm_{exception.code}"),
             }
         updates |= {
             "tool_calls": [*state.tool_calls, *run.calls],
-            "agent_run_tools": [c.tool for c in run.calls],
+            "agent_run_tools": [call.tool for call in run.calls],
             "agent_slots": [*state.agent_slots, *run.new_slots][-MAX_KNOWN_SLOTS:],
             "correction_count": run.rejections,
         }
@@ -581,7 +601,7 @@ class AgentNodes:
                 "outcome": state.agent_last_write,
             }
         text = text or CHAT_FALLBACK
-        cited = sorted(d for d in run.knowledge_ids if d in text)
+        cited = sorted(knowledge_id for knowledge_id in run.knowledge_ids if knowledge_id in text)
         return updates | {
             "agent_history": [*history, AgentMessage(role="assistant", text=text)],
             "agent_active": True,
@@ -594,11 +614,11 @@ class AgentNodes:
         proposal = state.agent_proposal
         assert proposal is not None
         key = proposal.model_dump_json(include={"kind", "slot", "appointment", "report"})
-        counters = next_ask(state, f"agent_confirm:{key}", self.deps)
+        counters = next_ask(state, f"agent_confirm:{key}", self.dependencies)
         if counters is None:
             return {"outcome": Outcome(kind=OutcomeKind.HANDOFF, code="too_many_rounds")}
-        departments, _ = await self.deps.tools.catalog()
-        names = {d.code: d.name for d in departments}
+        departments, _ = await self.dependencies.tools.catalog()
+        names = {department.code: department.name for department in departments}
         lead = "\n".join([*state.agent_done, *([proposal.basis] if proposal.basis else [])])
         question, explanations, kind = _card(proposal, names, state)
         actions = (
@@ -668,14 +688,16 @@ class AgentNodes:
         proposal = state.agent_proposal
         if proposal is None or proposal.appointment is None or confirmation_of(state) != ConfirmIntent.CONFIRM:
             return {"outcome": Outcome(kind=OutcomeKind.ERROR, code="guard_violation")}
-        appt = proposal.appointment
+        appointment = proposal.appointment
         if proposal.kind == "cancel":
-            result = await self.deps.tools.cancel_appointment(state.patient_id, appt.id, state.now)
+            result = await self.dependencies.tools.cancel_appointment(state.patient_id, appointment.id, state.now)
         else:
             assert proposal.slot is not None
-            key = idempotency_key("reschedule", state.conversation_id, state.patient_id, appt.id, proposal.slot.slot_id)
-            result = await self.deps.tools.reschedule_appointment(
-                state.patient_id, appt.id, proposal.slot.slot_id, None, key, state.now
+            key = idempotency_key(
+                "reschedule", state.conversation_id, state.patient_id, appointment.id, proposal.slot.slot_id
+            )
+            result = await self.dependencies.tools.reschedule_appointment(
+                state.patient_id, appointment.id, proposal.slot.slot_id, None, key, state.now
             )
         return {"tool_calls": tool_record(state, result), "write_result": result.model_dump(mode="json")}
 
@@ -686,7 +708,7 @@ class AgentNodes:
         error = written.get("error") or {}
         if written.get("status") != "ok":
             if error.get("code") == ToolErrorCode.CONFLICT.value and proposal.kind == "reschedule":
-                if state.conflict_retries >= self.deps.limits.max_conflict_retries:
+                if state.conflict_retries >= self.dependencies.limits.max_conflict_retries:
                     return {"outcome": Outcome(kind=OutcomeKind.HANDOFF, code="conflict")}
                 reason = error.get("message") or "The chosen slot can no longer be booked."
                 return {
@@ -695,7 +717,7 @@ class AgentNodes:
                 }
             result = ToolResult.model_validate(written)
             return {"outcome": tool_error_outcome(result, "change_failed")}
-        old = await self.deps.tools.read_back_appointment(state.patient_id, proposal.appointment.id)
+        old = await self.dependencies.tools.read_back_appointment(state.patient_id, proposal.appointment.id)
         tool_calls = tool_record(state, old)
         if not old.ok or old.data["status"] != AppointmentStatus.CANCELLED.value:
             return {"tool_calls": tool_calls, "outcome": Outcome(kind=OutcomeKind.ERROR, code="verify_failed")}
@@ -705,7 +727,9 @@ class AgentNodes:
                 "outcome": Outcome(kind=OutcomeKind.APPOINTMENT_CANCELLED, data=old.data, source_ids=[old.data["id"]]),
             }
         assert proposal.slot is not None
-        new = await self.deps.tools.read_back_appointment(state.patient_id, (written.get("data") or {}).get("id", ""))
+        new = await self.dependencies.tools.read_back_appointment(
+            state.patient_id, (written.get("data") or {}).get("id", "")
+        )
         tool_calls = tool_record(state.model_copy(update={"tool_calls": tool_calls}), new)  # nối sau lần đọc lịch cũ
         if not new.ok or new.data["slot"]["slot_id"] != proposal.slot.slot_id or new.data["status"] != "booked":
             return {"tool_calls": tool_calls, "outcome": Outcome(kind=OutcomeKind.ERROR, code="verify_failed")}
@@ -737,11 +761,11 @@ class AgentNodes:
             "edited_fields": [],
             "conflict_retries": 0,
         }
-        if self.deps.agent_mode == "full" and len(state.agent_done) + 1 < MAX_WRITES_PER_TURN:
+        if self.dependencies.agent_mode == "full" and len(state.agent_done) + 1 < MAX_WRITES_PER_TURN:
             updates |= {
                 "outcome": None,
                 "agent_note": "Already completed in this turn (do NOT redo these):\n"
-                + "\n".join(f"{i}. {d}" for i, d in enumerate(all_done, start=1))
+                + "\n".join(f"{i}. {done_item}" for i, done_item in enumerate(all_done, start=1))
                 + "\nIf the user asked for any other task that is NOT in the list above, do it now; if nothing is "
                 "left, reply with an empty string.",
             }
@@ -766,37 +790,37 @@ class AgentNodes:
 # ---------------------------------------------------------------- thẻ xác nhận theo loại việc
 
 
-def _written_keys(p: AgentProposal) -> list[str]:
+def _written_keys(proposal: AgentProposal) -> list[str]:
     """Khóa nhận diện việc ghi, để chặn đề xuất lại đúng việc đã làm trong lượt."""
-    keys = ["report"] if p.kind == "report" else []
-    if p.slot is not None:
-        keys.append(f"slot:{p.slot.slot_id}")
-    if p.appointment is not None:
-        keys.append(f"appt:{p.appointment.id}")
+    keys = ["report"] if proposal.kind == "report" else []
+    if proposal.slot is not None:
+        keys.append(f"slot:{proposal.slot.slot_id}")
+    if proposal.appointment is not None:
+        keys.append(f"appt:{proposal.appointment.id}")
     return keys
 
 
-def _proposal_title(p: AgentProposal) -> str:
-    if p.kind == "booking" and p.slot:
-        return f"book {p.slot.label()}"
-    if p.kind == "reschedule" and p.slot and p.appointment:
-        return f"move {p.appointment.slot.label()} to {p.slot.label()}"
-    if p.kind == "cancel" and p.appointment:
-        return f"cancel {p.appointment.slot.label()}"
+def _proposal_title(proposal: AgentProposal) -> str:
+    if proposal.kind == "booking" and proposal.slot:
+        return f"book {proposal.slot.label()}"
+    if proposal.kind == "reschedule" and proposal.slot and proposal.appointment:
+        return f"move {proposal.appointment.slot.label()} to {proposal.slot.label()}"
+    if proposal.kind == "cancel" and proposal.appointment:
+        return f"cancel {proposal.appointment.slot.label()}"
     return "save the follow-up report"
 
 
 def _card(
-    p: AgentProposal, names: dict[str, str], state: AgentState
+    proposal: AgentProposal, names: dict[str, str], state: AgentState
 ) -> tuple[str, list[FieldExplanation], Literal["confirm_booking", "confirm_report"]]:
     tail = "Bấm “xác nhận” để làm, “hủy” để dừng, hoặc nhắn điều bạn muốn đổi."
-    if p.kind == "report":
-        assert p.report is not None
-        report_rows = report_explanations(p.report, [], state.edited_fields, state.now)
+    if proposal.kind == "report":
+        assert proposal.report is not None
+        report_rows = report_explanations(proposal.report, [], state.edited_fields, state.now)
         return f"Bạn xác nhận lưu báo cáo theo dõi này? {tail}", report_rows, "confirm_report"
     rows: list[FieldExplanation] = []
-    if p.appointment:
-        old = p.appointment.slot
+    if proposal.appointment:
+        old = proposal.appointment.slot
         rows.append(
             _row(
                 "appointment",
@@ -807,53 +831,54 @@ def _card(
                 "Lịch hẹn sắp tới của bạn, đọc từ hệ thống.",
             )
         )
-    if p.slot:
+    if proposal.slot:
         rows.append(
             _row(
                 "slot",
-                "Lịch mới" if p.kind == "reschedule" else "Lịch khám",
-                p.slot.label(names.get(p.slot.department_code)),
+                "Lịch mới" if proposal.kind == "reschedule" else "Lịch khám",
+                proposal.slot.label(names.get(proposal.slot.department_code)),
                 Origin.BACKEND,
                 "passed",
                 "Slot còn trống do hệ thống trả về; sẽ được kiểm tra lại ngay trước khi ghi.",
             )
         )
-    if p.basis:
+    if proposal.basis:
         rows.append(
             _row(
                 "basis",
                 "Căn cứ",
-                p.basis,
+                proposal.basis,
                 Origin.AI_SUMMARY,
                 "uncertain",
                 "Trợ lý suy ra từ lời bạn và dữ liệu lịch hẹn — bạn kiểm tra lại trước khi xác nhận.",
             )
         )
-    if p.kind == "booking" and p.reason:
-        said = normalize(p.reason) in normalize(" ".join(_user_texts(state.agent_history)))
+    if proposal.kind == "booking" and proposal.reason:
+        said = normalize(proposal.reason) in normalize(" ".join(_user_texts(state.agent_history)))
         rows.append(
             _row(
                 "reason",
                 "Lý do khám",
-                p.reason,
+                proposal.reason,
                 Origin.USER_SAID if said else Origin.BACKEND,
                 "passed" if said else "uncertain",
                 "Lý do bạn nêu."
                 if said
                 else "Bạn không nêu lý do; trợ lý lấy theo lịch hẹn trước — sửa nếu không đúng.",
-                evidence=p.reason if said else None,
+                evidence=proposal.reason if said else None,
             )
         )
-    if p.kind == "cancel" and p.appointment:
-        question = f"Bạn xác nhận HỦY lịch: {p.appointment.slot.label(names.get(p.appointment.slot.department_code))}?"
-    elif p.kind == "reschedule" and p.slot and p.appointment:
+    if proposal.kind == "cancel" and proposal.appointment:
+        slot = proposal.appointment.slot
+        question = f"Bạn xác nhận HỦY lịch: {slot.label(names.get(slot.department_code))}?"
+    elif proposal.kind == "reschedule" and proposal.slot and proposal.appointment:
         question = (
-            f"Bạn xác nhận dời lịch {p.appointment.slot.label()} sang "
-            f"{p.slot.label(names.get(p.slot.department_code))}?"
+            f"Bạn xác nhận dời lịch {proposal.appointment.slot.label()} sang "
+            f"{proposal.slot.label(names.get(proposal.slot.department_code))}?"
         )
     else:
-        assert p.slot is not None
-        question = f"Bạn xác nhận đặt lịch: {p.slot.label(names.get(p.slot.department_code))}?"
+        assert proposal.slot is not None
+        question = f"Bạn xác nhận đặt lịch: {proposal.slot.label(names.get(proposal.slot.department_code))}?"
     return f"{question} {tail}", rows, "confirm_booking"
 
 

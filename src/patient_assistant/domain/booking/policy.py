@@ -44,11 +44,11 @@ def window_issues(window: DateWindow, now: datetime, policy: BookingPolicy) -> l
     if window.date_from > today + timedelta(days=policy.max_horizon_days):
         return [_issue("too_far", f"Chỉ nhận đặt lịch trong vòng {policy.max_horizon_days} ngày tới.")]
     days = [window.date_from + timedelta(days=i) for i in range((window.date_to - window.date_from).days + 1)]
-    if not any(policy.is_working_day(d) for d in days):
+    if not any(policy.is_working_day(day) for day in days):
         if len(days) == 1:
-            d = days[0]
-            why = "ngày nghỉ lễ" if policy.is_holiday(d) else "ngày không làm việc"
-            return [_issue("non_working_day", f"{WEEKDAY_NAMES[d.weekday()]} {d:%d/%m/%Y} là {why}.")]
+            day = days[0]
+            why = "ngày nghỉ lễ" if policy.is_holiday(day) else "ngày không làm việc"
+            return [_issue("non_working_day", f"{WEEKDAY_NAMES[day.weekday()]} {day:%d/%m/%Y} là {why}.")]
         return [_issue("non_working_day", "Khoảng ngày này không có ngày làm việc.")]
     return []
 
@@ -68,7 +68,11 @@ def slot_issues(
         issues.append(_issue("too_far", "Slot nằm ngoài khoảng được phép đặt.", Resolution.BLOCK))
     if not policy.is_working_day(local_day):
         issues.append(_issue("non_working_day", "Slot rơi vào ngày không làm việc.", Resolution.BLOCK))
-    active = [a for a in patient_appointments if a.status == AppointmentStatus.BOOKED and a.slot.start_at >= now]
+    active = [
+        appointment
+        for appointment in patient_appointments
+        if appointment.status == AppointmentStatus.BOOKED and appointment.slot.start_at >= now
+    ]
     if len(active) >= policy.max_active_appointments:
         issues.append(
             _issue(
@@ -77,8 +81,8 @@ def slot_issues(
                 Resolution.BLOCK,
             )
         )
-    for appt in active:
-        if appt.slot.start_at < slot.end_at and slot.start_at < appt.slot.end_at:
+    for appointment in active:
+        if appointment.slot.start_at < slot.end_at and slot.start_at < appointment.slot.end_at:
             issues.append(_issue("overlapping_appointment", "Trùng giờ với một lịch hẹn đã có.", Resolution.BLOCK))
             break
     return issues

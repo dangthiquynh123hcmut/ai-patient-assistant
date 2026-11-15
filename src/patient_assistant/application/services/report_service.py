@@ -24,7 +24,7 @@ class ReportService:
         if issues:
             return ToolResult.failure(
                 TOOL,
-                ToolErrorCode.INVALID_ARGS,
+                ToolErrorCode.INVALID_ARGUMENTS,
                 "Báo cáo không đạt quy tắc nghiệp vụ.",
                 details=[i.message for i in issues],
             )
@@ -52,5 +52,7 @@ class ReportService:
     async def history(self, patient_id: str, limit: int) -> ToolResult:
         reports = await self._reports.list_by_patient(patient_id, limit)
         return ToolResult.success(
-            "get_report_history", [r.model_dump(mode="json") for r in reports], [r.id for r in reports]
+            "get_report_history",
+            [report.model_dump(mode="json") for report in reports],
+            [report.id for report in reports],
         )

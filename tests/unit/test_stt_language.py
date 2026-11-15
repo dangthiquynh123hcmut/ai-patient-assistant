@@ -73,4 +73,4 @@ async def test_use_case_default_choice_and_auto() -> None:
 
 def test_english_key_words_are_flagged_when_uncertain() -> None:
     flags = stt_flags_from_words([("I", 0.2), ("exercised", 0.5), ("four", 0.4), ("Tuesday", 0.3), ("the", 0.1)])
-    assert [f.text for f in flags] == ["exercised", "four", "Tuesday"]
+    assert [flag.text for flag in flags] == ["exercised", "four", "Tuesday"]

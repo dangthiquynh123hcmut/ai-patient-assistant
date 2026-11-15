@@ -59,12 +59,17 @@ def hash_password(password: str) -> str:
 
 def verify_password(password: str, stored: str) -> bool:
     try:
-        scheme, n, r, p, salt, digest = stored.split("$")
+        scheme, cost_factor, block_size, parallelism, salt, digest = stored.split("$")
         if scheme != "scrypt":
             return False
         expected = base64.b64decode(digest)
         actual = hashlib.scrypt(
-            password.encode(), salt=base64.b64decode(salt), dklen=len(expected), n=int(n), r=int(r), p=int(p)
+            password.encode(),
+            salt=base64.b64decode(salt),
+            dklen=len(expected),
+            n=int(cost_factor),
+            r=int(block_size),
+            p=int(parallelism),
         )
     except ValueError:
         return False
@@ -203,7 +208,7 @@ class AuthService:
     def _issue(
         self, user: User, session_id: str, refresh_jti: str, expires_at: datetime, now: datetime
     ) -> IssuedTokens:
-        access_exp = min(now + self._access_ttl, expires_at)  # access token không sống lâu hơn phiên
+        access_expires_at = min(now + self._access_ttl, expires_at)  # access token không sống lâu hơn phiên
         base = {"sub": user.id, "sid": session_id, "iat": int(now.timestamp())}
         access = self._tokens.encode(
             {
@@ -211,13 +216,13 @@ class AuthService:
                 "typ": ACCESS,
                 "jti": secrets.token_urlsafe(16),
                 "role": user.role.value,
-                "exp": int(access_exp.timestamp()),
+                "exp": int(access_expires_at.timestamp()),
             }
         )
         refresh = self._tokens.encode({**base, "typ": REFRESH, "jti": refresh_jti, "exp": int(expires_at.timestamp())})
         return IssuedTokens(
             access_token=access,
-            access_expires_in=max(0, int((access_exp - now).total_seconds())),
+            access_expires_in=max(0, int((access_expires_at - now).total_seconds())),
             refresh_token=refresh,
             refresh_expires_at=expires_at,
             user=user,

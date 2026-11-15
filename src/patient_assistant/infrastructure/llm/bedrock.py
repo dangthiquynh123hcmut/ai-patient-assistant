@@ -36,7 +36,7 @@ from patient_assistant.application.ports.llm import (
     GroundedAnswer,
     LLMError,
     ReportPrompt,
-    ToolSpec,
+    ToolSpecification,
 )
 from patient_assistant.domain.booking.models import BookingRequest, SlotOption
 from patient_assistant.domain.conversation import Intent
@@ -61,7 +61,8 @@ def _render_feedback(feedback: CorrectionFeedback | None) -> str:
     if feedback is None:
         return ""
     issues = "\n".join(
-        f"- {i.field}: {i.message}" + (f" Hint: {i.suggestion}" if i.suggestion else "") for i in feedback.issues
+        f"- {issue.field}: {issue.message}" + (f" Hint: {issue.suggestion}" if issue.suggestion else "")
+        for issue in feedback.issues
     )
     return (
         "\n\nYour previous output was rejected by the system's validation:\n"
@@ -129,22 +130,24 @@ class AnthropicBedrockLLM:
 
     # ------------------------------------------------------------------ hạ tầng gọi API
 
-    async def _create(self, **params: Any) -> Any:
+    async def _create(self, **parameters: Any) -> Any:
         try:
             response = await asyncio.to_thread(
                 self._client.messages.create,
                 model=self._model,
                 max_tokens=self._max_tokens,
                 extra_body=self._extra_body,
-                **params,
+                **parameters,
             )
-        except anthropic.RateLimitError as exc:
-            raise LLMError("unavailable", "rate limited", retryable=True) from exc
-        except anthropic.APIConnectionError as exc:
-            raise LLMError("unavailable", "connection error", retryable=True) from exc
-        except anthropic.APIStatusError as exc:
-            retryable = exc.status_code >= 500
-            raise LLMError("unavailable" if retryable else "bad_request", str(exc), retryable=retryable) from exc
+        except anthropic.RateLimitError as exception:
+            raise LLMError("unavailable", "rate limited", retryable=True) from exception
+        except anthropic.APIConnectionError as exception:
+            raise LLMError("unavailable", "connection error", retryable=True) from exception
+        except anthropic.APIStatusError as exception:
+            retryable = exception.status_code >= 500
+            raise LLMError(
+                "unavailable" if retryable else "bad_request", str(exception), retryable=retryable
+            ) from exception
         if response.stop_reason == "refusal":
             raise LLMError("refusal", "model declined the request")
         if response.stop_reason == "max_tokens":
@@ -157,11 +160,11 @@ class AnthropicBedrockLLM:
             messages=[{"role": "user", "content": user}],
             output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}},
         )
-        text = "".join(b.text for b in response.content if b.type == "text")
+        text = "".join(block.text for block in response.content if block.type == "text")
         try:
             value = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise LLMError("invalid_output", "structured output is not valid JSON") from exc
+        except json.JSONDecodeError as exception:
+            raise LLMError("invalid_output", "structured output is not valid JSON") from exception
         if not isinstance(value, dict):
             raise LLMError("invalid_output", "structured output is not an object")
         return value
@@ -171,7 +174,7 @@ class AnthropicBedrockLLM:
         response = await self._create(
             messages=[{"role": "user", "content": "Reply with exactly one word: ok"}], output_config={"effort": "low"}
         )
-        text = "".join(b.text for b in response.content if b.type == "text").strip()
+        text = "".join(block.text for block in response.content if block.type == "text").strip()
         return text, response.usage.input_tokens, response.usage.output_tokens
 
     # ------------------------------------------------------------------ LLMPort
@@ -184,7 +187,7 @@ class AnthropicBedrockLLM:
             messages=[{"role": "user", "content": content}],
             output_config={"effort": self._effort_light},
         )
-        return "".join(b.text for b in response.content if b.type == "text").strip()
+        return "".join(block.text for block in response.content if block.type == "text").strip()
 
     async def classify_intent(self, text: str, memory: str | None = None) -> list[Intent]:
         raw = await self._structured(
@@ -192,8 +195,8 @@ class AnthropicBedrockLLM:
         )
         try:
             return _IntentList.model_validate(raw).intents
-        except ValidationError as exc:
-            raise LLMError("invalid_output", "invalid intent list") from exc
+        except ValidationError as exception:
+            raise LLMError("invalid_output", "invalid intent list") from exception
 
     async def extract_report(self, prompt: ReportPrompt) -> dict[str, Any]:
         user = _render_sources(prompt.sources, prompt.now) + _render_feedback(prompt.feedback)
@@ -203,14 +206,15 @@ class AnthropicBedrockLLM:
 
     async def extract_booking(self, prompt: BookingPrompt) -> dict[str, Any]:
         catalog = "\n".join(
-            f"- {d.code}: {d.name} (also called: {', '.join(d.aliases) or '—'})" for d in prompt.departments
+            f"- {department.code}: {department.name} (also called: {', '.join(department.aliases) or '—'})"
+            for department in prompt.departments
         )
         user = (
             _render_sources(prompt.sources, prompt.now)
             + f"\n\nDepartment catalog:\n{catalog}"
             + _render_feedback(prompt.feedback)
         )
-        codes = [d.code for d in prompt.departments]
+        codes = [department.code for department in prompt.departments]
         schema = strict_schema(
             BookingRequest,
             overrides={"department_code": {"anyOf": [{"type": "string", "enum": codes}, {"type": "null"}]}},
@@ -218,7 +222,7 @@ class AnthropicBedrockLLM:
         return await self._structured(_prompt("extract_booking"), user, schema, self._effort_extract)
 
     async def choose_slot(self, reply: str, options: list[SlotOption]) -> int | None:
-        listing = "\n".join(f"{o.option_no}. {o.slot.label()}" for o in options)
+        listing = "\n".join(f"{option.option_no}. {option.slot.label()}" for option in options)
         raw = await self._structured(
             _prompt("choose_slot"),
             f"Options:\n{listing}\n\nUser's reply: {reply}",
@@ -228,7 +232,7 @@ class AnthropicBedrockLLM:
         return _SlotChoice.model_validate(raw).option_no
 
     async def answer_question(
-        self, question: str, tools: list[ToolSpec], max_tool_calls: int, memory: str | None = None
+        self, question: str, tools: list[ToolSpecification], max_tool_calls: int, memory: str | None = None
     ) -> GroundedAnswer:
         loop = await self._tool_loop(
             _prompt("answer_question"),
@@ -244,7 +248,7 @@ class AnthropicBedrockLLM:
         task: Literal["booking", "assistant"],
         context: str,
         history: list[AgentMessage],
-        tools: list[ToolSpec],
+        tools: list[ToolSpecification],
         max_tool_calls: int,
     ) -> AgentReply:
         system = _prompt(f"{task}_agent") + f"\n\n<context>\n{context}\n</context>"
@@ -252,12 +256,22 @@ class AnthropicBedrockLLM:
         return AgentReply(text=loop.text, tool_calls=loop.calls, stopped_by=loop.stopped_by)
 
     async def _tool_loop(
-        self, system_text: str, messages: list[dict[str, Any]], tools: list[ToolSpec], max_tool_calls: int, effort: str
+        self,
+        system_text: str,
+        messages: list[dict[str, Any]],
+        tools: list[ToolSpecification],
+        max_tool_calls: int,
+        effort: str,
     ) -> _LoopResult:
-        by_name = {t.name: t for t in tools}
+        by_name = {tool.name: tool for tool in tools}
         tool_defs = [
-            {"name": t.name, "description": t.description, "input_schema": strict_schema(t.input_model), "strict": True}
-            for t in tools
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": strict_schema(tool.input_model),
+                "strict": True,
+            }
+            for tool in tools
         ]
         messages = list(messages)
         source_ids: list[str] = []
@@ -273,25 +287,27 @@ class AnthropicBedrockLLM:
                 output_config={"effort": effort},
             )
             if response.stop_reason != "tool_use":
-                text = "".join(b.text for b in response.content if b.type == "text").strip()
+                text = "".join(block.text for block in response.content if block.type == "text").strip()
                 return _LoopResult(text=text, source_ids=source_ids, calls=calls)
             # Giữ nguyên toàn bộ content (kể cả thinking) khi gửi lại.
             messages.append(
-                {"role": "assistant", "content": [b.model_dump(exclude_none=True) for b in response.content]}
+                {"role": "assistant", "content": [block.model_dump(exclude_none=True) for block in response.content]}
             )
             results = []
             stopped_by: str | None = None
-            for block in (b for b in response.content if b.type == "tool_use"):
+            for block in (content_block for content_block in response.content if content_block.type == "tool_use"):
                 calls += 1
-                spec = by_name.get(block.name)
+                specification = by_name.get(block.name)
                 try:
-                    if spec is None:
+                    if specification is None:
                         raise ValueError(f"unknown tool {block.name}")
-                    result = await spec.handler(spec.input_model.model_validate(block.input))
-                    source_ids += [s for s in result.get("source_ids", []) if s not in source_ids]
+                    result = await specification.handler(specification.input_model.model_validate(block.input))
+                    source_ids += [
+                        source_id for source_id in result.get("source_ids", []) if source_id not in source_ids
+                    ]
                     # Tool kết thúc: chạy xong (ok) hoặc code yêu cầu dừng hẳn (vd. sửa quá số lần -> chuyển nhân viên).
-                    if spec.terminal and (result.get("status") == "ok" or result.get("stop")):
-                        stopped_by = spec.name
+                    if specification.terminal and (result.get("status") == "ok" or result.get("stop")):
+                        stopped_by = specification.name
                     results.append(
                         {
                             "type": "tool_result",
@@ -299,17 +315,17 @@ class AnthropicBedrockLLM:
                             "content": json.dumps(result, ensure_ascii=False),
                         }
                     )
-                except (ValueError, ValidationError) as exc:
+                except (ValueError, ValidationError) as exception:
                     results.append(
                         {
                             "type": "tool_result",
                             "tool_use_id": block.id,
                             "is_error": True,
-                            "content": f"Invalid arguments: {exc}",
+                            "content": f"Invalid arguments: {exception}",
                         }
                     )
             if stopped_by:
-                text = "".join(b.text for b in response.content if b.type == "text").strip()
+                text = "".join(block.text for block in response.content if block.type == "text").strip()
                 return _LoopResult(text=text, source_ids=source_ids, calls=calls, stopped_by=stopped_by)
             messages.append({"role": "user", "content": results})
 
@@ -325,11 +341,11 @@ class _LoopResult:
 def _agent_messages(history: list[AgentMessage]) -> list[dict[str, Any]]:
     """Lịch sử chat -> messages của API: bắt đầu bằng user, hai vai xen kẽ (gộp tin liền nhau cùng vai)."""
     out: list[dict[str, Any]] = []
-    for msg in history:
-        if not msg.text.strip():
+    for message in history:
+        if not message.text.strip():
             continue
-        if out and out[-1]["role"] == msg.role:
-            out[-1]["content"] += "\n\n" + msg.text
-        elif out or msg.role == "user":
-            out.append({"role": msg.role, "content": msg.text})
+        if out and out[-1]["role"] == message.role:
+            out[-1]["content"] += "\n\n" + message.text
+        elif out or message.role == "user":
+            out.append({"role": message.role, "content": message.text})
     return out

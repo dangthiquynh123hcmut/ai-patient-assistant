@@ -107,23 +107,23 @@ def _outcome(update: dict[str, Any]) -> str | None:
 
 
 def _decision(update: dict[str, Any]) -> str:
-    d = update.get("decision") or {}
-    parts = [f"action={d.get('action')}"]
-    if d.get("text"):
-        parts.append(f"“{d['text']}”")
-    if d.get("option_no"):
-        parts.append(f"option {d['option_no']}")
-    if d.get("fields"):
-        parts.append(f"sửa {d['fields']}")
+    decision = update.get("decision") or {}
+    parts = [f"action={decision.get('action')}"]
+    if decision.get("text"):
+        parts.append(f"“{decision['text']}”")
+    if decision.get("option_no"):
+        parts.append(f"option {decision['option_no']}")
+    if decision.get("fields"):
+        parts.append(f"sửa {decision['fields']}")
     return "Người dùng trả lời: " + ", ".join(parts)
 
 
-def _summary(node: str, u: dict[str, Any]) -> str:  # noqa: C901 - một nhánh cho mỗi loại node
-    outcome = _outcome(u)
+def _summary(node: str, update: dict[str, Any]) -> str:  # noqa: C901 - một nhánh cho mỗi loại node
+    outcome = _outcome(update)
     if node == "ingest":
         return "Chuẩn hóa văn bản đầu vào (text hoặc transcript từ giọng nói)."
     if node == "guard_input":
-        kind = u.get("safety", "ok")
+        kind = update.get("safety", "ok")
         return (
             "Không phát hiện cấp cứu / yêu cầu chẩn đoán."
             if kind == "ok"
@@ -132,125 +132,133 @@ def _summary(node: str, u: dict[str, Any]) -> str:  # noqa: C901 - một nhánh 
     if node == "classify":
         if outcome:
             return outcome
-        text = f"Intent = {u.get('intent')} — {_INTENT_SOURCE.get(u.get('intent_source') or '', '')}."
-        if u.get("pending_intents"):
-            text += f" Việc khác để sau: {', '.join(u['pending_intents'])}."
+        text = f"Intent = {update.get('intent')} — {_INTENT_SOURCE.get(update.get('intent_source') or '', '')}."
+        if update.get("pending_intents"):
+            text += f" Việc khác để sau: {', '.join(update['pending_intents'])}."
         return text
     if node in ("extract", "correct", "extract_booking"):
         if outcome:
             return f"LLM lỗi, không đoán kết quả. {outcome}"
-        prefix = f"Lần sửa thứ {u['correction_count']}. " if "correction_count" in u else ""
-        draft = u.get("report_draft") or u.get("booking_request")
+        prefix = f"Lần sửa thứ {update['correction_count']}. " if "correction_count" in update else ""
+        draft = update.get("report_draft") or update.get("booking_request")
         if draft is None:
-            return prefix + f"Đầu ra sai schema: {_issues(u.get('issues', []))}"
+            return prefix + f"Đầu ra sai schema: {_issues(update.get('issues', []))}"
         filled = {k: v for k, v in draft.items() if v not in (None, [], "") and k not in ("evidence", "missing_fields")}
         text = prefix + "Trích được: " + ", ".join(f"{_REPORT_LABELS.get(k, k)}={v}" for k, v in filled.items())
         if draft.get("missing_fields"):
             text += f". Thiếu: {', '.join(draft['missing_fields'])}"
-        if u.get("department_from_plan"):
+        if update.get("department_from_plan"):
             text += ". Khoa không được nêu → code lấy từ kế hoạch theo dõi (backend)."
         return text
     if node == "resolve_datetime":
-        w = u.get("resolved_window")
-        if w:
-            when = f"{w['date_from']}" + (f" → {w['date_to']}" if w["date_to"] != w["date_from"] else "")
-            if w.get("time_from"):
-                when += f", {w['time_from'][:5]}–{w['time_to'][:5]}"
-            return f"Quy đổi bằng code: {when} (luật: {', '.join(w.get('rules', []))})."
-        if u.get("date_issues"):
-            return f"Không quy đổi được: {_issues(u['date_issues'])}"
+        window = update.get("resolved_window")
+        if window:
+            when = f"{window['date_from']}" + (
+                f" → {window['date_to']}" if window["date_to"] != window["date_from"] else ""
+            )
+            if window.get("time_from"):
+                when += f", {window['time_from'][:5]}–{window['time_to'][:5]}"
+            return f"Quy đổi bằng code: {when} (luật: {', '.join(window.get('rules', []))})."
+        if update.get("date_issues"):
+            return f"Không quy đổi được: {_issues(update['date_issues'])}"
         return "Chưa có cụm ngày để quy đổi."
     if node in ("validate", "validate_booking"):
-        issues = u.get("issues", [])
+        issues = update.get("issues", [])
         if not issues:
             return "Đạt mọi lớp kiểm tra (schema, nghiệp vụ, grounding, nhất quán) → đi tiếp."
         return f"Phát hiện: {_issues(issues)}. {_route_hint(issues)}"
     if node in ("clarify", "clarify_intent", "present_draft", "present_slot_options", "present_booking_draft"):
-        return outcome or _decision(u)
+        return outcome or _decision(update)
     if node == "apply_edits":
-        return f"Trường người dùng sửa: {', '.join(u.get('edited_fields', []))} → chạy lại validator."
+        return f"Trường người dùng sửa: {', '.join(update.get('edited_fields', []))} → chạy lại validator."
     if node in ("save", "create_booking"):
         if outcome:
             return f"Chốt chặn/tool báo lỗi. {outcome}"
-        w = u.get("write_result") or {}
-        err = (w.get("error") or {}).get("code")
-        return f"Tool trả status={w.get('status')}" + (f", lỗi={err}" if err else "") + " → đi xác minh, chưa báo gì."
+        write_result = update.get("write_result") or {}
+        error = (write_result.get("error") or {}).get("code")
+        return (
+            f"Tool trả status={write_result.get('status')}"
+            + (f", lỗi={error}" if error else "")
+            + " → đi xác minh, chưa báo gì."
+        )
     if node in ("verify_save", "verify_booking"):
-        if u.get("notice"):
-            return f"Slot bị người khác đặt mất (conflict) → tìm lại slot. Lần thử lại: {u.get('conflict_retries')}."
+        if update.get("notice"):
+            return (
+                f"Slot bị người khác đặt mất (conflict) → tìm lại slot. Lần thử lại: {update.get('conflict_retries')}."
+            )
         verified = outcome and "error" not in outcome
         return (outcome or "") + (" — đã đọc lại được bản ghi từ backend." if verified else "")
     if node in ("search_slots", "offer_alternatives"):
         if outcome:
             return outcome
-        slots = u.get("offered_slots", [])
+        slots = update.get("offered_slots", [])
         relaxed = " (đã nới ±7 ngày, bỏ ràng buộc giờ/bác sĩ)" if node == "offer_alternatives" else ""
         return f"Backend trả {len(slots)} slot{relaxed}." if slots else "Không có slot đúng điều kiện → nới điều kiện."
     if node == "match_selection":
-        if u.get("selected_slot_id"):
-            return f"Khớp đúng 1 slot trong danh sách đã đưa: {u['selected_slot_id']}."
-        return f"Chưa xác định được: {u.get('notice')} → hỏi lại."
+        if update.get("selected_slot_id"):
+            return f"Khớp đúng 1 slot trong danh sách đã đưa: {update['selected_slot_id']}."
+        return f"Chưa xác định được: {update.get('notice')} → hỏi lại."
     if node == "fetch_patient_info":
-        o = u.get("outcome") or {}
-        if o.get("kind") != "patient_info":
-            return _outcome(u) or ""
+        patient_info_outcome = update.get("outcome") or {}
+        if patient_info_outcome.get("kind") != "patient_info":
+            return _outcome(update) or ""
         note = (
             " Người dùng hỏi về người khác → chỉ trả thông tin của tài khoản đang đăng nhập."
-            if o.get("code") == "own_data_only"
+            if patient_info_outcome.get("code") == "own_data_only"
             else ""
         )
         return f"Ghép hồ sơ + kế hoạch + báo cáo gần đây + lịch hẹn từ backend (bằng code).{note}"
     if node == "rag_answer":
-        if outcome and u["outcome"].get("source_ids"):
-            return f"Trả lời dựa trên tài liệu: {', '.join(u['outcome']['source_ids'])}."
+        if outcome and update["outcome"].get("source_ids"):
+            return f"Trả lời dựa trên tài liệu: {', '.join(update['outcome']['source_ids'])}."
         return outcome or ""
     if node == "agent":
-        if u.get("outcome") and u["outcome"].get("kind") == "error":
+        if update.get("outcome") and update["outcome"].get("kind") == "error":
             return f"LLM lỗi, không đoán kết quả. {outcome}"
-        calls = u.get("agent_run_tools", [])
+        calls = update.get("agent_run_tools", [])
         used = f"LLM gọi tool: {', '.join(calls)}. " if calls else "LLM không cần gọi tool. "
-        proposal = u.get("agent_proposal")
+        proposal = update.get("agent_proposal")
         if proposal:
             what = {"booking": "đặt lịch", "reschedule": "dời lịch", "cancel": "hủy lịch", "report": "lưu báo cáo"}
             return (
                 used + f"Đề xuất {what.get(proposal['kind'], proposal['kind'])} → code đã kiểm tra, hiện thẻ xác nhận."
             )
-        if u.get("agent_followup") is not None or (u.get("outcome") or {}).get("kind") not in (None, "chat"):
+        if update.get("agent_followup") is not None or (update.get("outcome") or {}).get("kind") not in (None, "chat"):
             return (
                 used + "Không còn việc nào chưa làm."
-                if not u.get("agent_followup")
+                if not update.get("agent_followup")
                 else used + "Nói thêm với người dùng."
             )
         return used + "Trả lời/hỏi lại người dùng bằng lời tự nhiên."
     if node == "agent_confirm":
         if outcome:
             return outcome
-        action = (u.get("decision") or {}).get("action")
+        action = (update.get("decision") or {}).get("action")
         if action == "confirm":
             return "Người dùng xác nhận → ghi."
-        if action == "edit" and u.get("agent_proposal"):
+        if action == "edit" and update.get("agent_proposal"):
             return "Người dùng sửa trên thẻ → code áp giá trị, chạy lại validator, hiện lại thẻ."
         return "Người dùng muốn đổi → quay lại agent."
     if node == "agent_after_write":
-        if u.get("agent_note"):
+        if update.get("agent_note"):
             return "Kết quả đã xác minh → cho agent làm tiếp việc còn lại người dùng đã yêu cầu (nếu có)."
         return "Kết quả đã xác minh → kết thúc lượt."
     if node == "change_appointment":
-        w = u.get("write_result") or {}
-        return outcome or f"Tool trả status={w.get('status')} → đi xác minh, chưa báo gì."
+        write_result = update.get("write_result") or {}
+        return outcome or f"Tool trả status={write_result.get('status')} → đi xác minh, chưa báo gì."
     if node == "verify_change":
-        if u.get("notice"):
+        if update.get("notice"):
             return "Slot mới vừa bị đặt mất → agent tìm slot khác, lịch cũ giữ nguyên."
         if not outcome or "error" in outcome:
             return outcome or ""
-        cancelled = (u.get("outcome") or {}).get("kind") == "appointment_cancelled"
+        cancelled = (update.get("outcome") or {}).get("kind") == "appointment_cancelled"
         return outcome + (" — đã đọc lại, lịch đã hủy." if cancelled else " — đã đọc lại cả lịch cũ lẫn lịch mới.")
     if node == "agent_wrapup":
         return "Ghi kết quả vào lịch sử hội thoại của agent cho các lượt sau."
     if node == "converse":
         return "Câu chào hỏi/trò chuyện → LLM trả lời tự nhiên, không gọi tool, không đọc dữ liệu bệnh nhân."
     if node == "respond":
-        response = u.get("response") or {}
+        response = update.get("response") or {}
         return f"Câu trả lời dựng bằng template từ kết quả đã xác minh (kind={response.get('kind')})."
     if node == "handoff":
         return outcome or "Dừng an toàn."

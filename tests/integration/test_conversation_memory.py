@@ -37,13 +37,13 @@ async def test_same_as_before_reuses_department_and_doctor_of_booked_appointment
         "choose_slot",
     ).interrupt.options
     assert options
-    assert all(o.slot.department_code == "PHCN" and o.slot.doctor_id == doctor_id for o in options)
-    assert all(o.slot.start_at.date() == date(2026, 11, 5) for o in options)
+    assert all(option.slot.department_code == "PHCN" and option.slot.doctor_id == doctor_id for option in options)
+    assert all(option.slot.start_at.date() == date(2026, 11, 5) for option in options)
 
     confirm = waiting(
         await app.chat().resume("m1", PATIENT, UserDecision(action="choose", option_no=1)), "confirm_booking"
     )
-    explain = {e.field: e for e in confirm.interrupt.explanations}
+    explain = {explanation.field: explanation for explanation in confirm.interrupt.explanations}
     assert explain["department_code"].origin == Origin.BACKEND
     assert explain["department_code"].evidence == "như vậy"
     assert first["id"] in explain["department_code"].explanation
@@ -72,7 +72,9 @@ async def test_doctor_named_in_earlier_question_is_that_doctor(make_app: Any) ->
         await app.chat().send_message("m3", PATIENT, "Cho tôi đặt lịch với bác sĩ đó thứ ba tuần sau buổi sáng"),
         "choose_slot",
     ).interrupt.options
-    assert options and all(o.slot.doctor_id == "doc-an" and o.slot.department_code == "PHCN" for o in options)
+    assert options and all(
+        option.slot.doctor_id == "doc-an" and option.slot.department_code == "PHCN" for option in options
+    )
 
 
 async def test_earlier_turns_are_passed_to_the_llm_as_notes_only_in_same_conversation(make_app: Any) -> None:

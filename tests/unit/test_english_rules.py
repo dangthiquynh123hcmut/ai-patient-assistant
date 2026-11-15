@@ -22,8 +22,8 @@ from patient_assistant.domain.conversation import (
 from patient_assistant.domain.text.vi_dates import mentions_when, resolve
 from patient_assistant.infrastructure.persistence.seed import DEPARTMENTS
 
-TZ = ZoneInfo("Asia/Ho_Chi_Minh")
-NOW = datetime(2026, 10, 28, 10, 0, tzinfo=TZ)  # Thứ Tư
+TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
+NOW = datetime(2026, 10, 28, 10, 0, tzinfo=TIMEZONE)  # Thứ Tư
 
 
 @pytest.mark.parametrize(
@@ -106,7 +106,7 @@ def test_english_spoken_confirmation(text: str, expected: ConfirmIntent) -> None
 
 def _options() -> list[SlotOption]:
     def slot(i: int, day: int, hh: int, doctor: str) -> SlotOption:
-        start = datetime(2026, 11, day, hh, 0, tzinfo=TZ)
+        start = datetime(2026, 11, day, hh, 0, tzinfo=TIMEZONE)
         return SlotOption(
             option_no=i,
             slot=Slot(
@@ -175,8 +175,8 @@ def test_english_intent_rules(text: str, intent: Intent) -> None:
 
 
 def test_english_department_and_doctor_names() -> None:
-    assert [d.code for d in departments_matching("rehabilitation", list(DEPARTMENTS))] == ["PHCN"]
-    assert [d.code for d in departments_matching("cardiology", list(DEPARTMENTS))] == ["TM"]
+    assert [department.code for department in departments_matching("rehabilitation", list(DEPARTMENTS))] == ["PHCN"]
+    assert [department.code for department in departments_matching("cardiology", list(DEPARTMENTS))] == ["TM"]
     doctors = [
         Doctor(id="doc-an", name="BS. Trần Văn An", department_code="PHCN"),
         Doctor(id="doc-binh", name="BS. Lê Thị Bình", department_code="PHCN"),

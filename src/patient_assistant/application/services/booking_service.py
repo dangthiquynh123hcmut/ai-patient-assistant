@@ -29,9 +29,9 @@ class BookingService:
         self.policy = policy
 
     def _bounds(self, window: DateWindow, now: datetime) -> tuple[datetime, datetime]:
-        tz = now.tzinfo
-        start = datetime.combine(window.date_from, window.time_from or time(0, 0), tz)
-        end = datetime.combine(window.date_to, window.time_to or time(23, 59), tz)
+        timezone = now.tzinfo
+        start = datetime.combine(window.date_from, window.time_from or time(0, 0), timezone)
+        end = datetime.combine(window.date_to, window.time_to or time(23, 59), timezone)
         return max(start, now + self.policy.min_lead_time), end
 
     async def _find(
@@ -123,41 +123,44 @@ class BookingService:
             return ToolResult.failure(tool, ToolErrorCode.NOT_FOUND, "Slot không tồn tại.")
         mine = await self._appointments.list_for_patient(patient_id)
         issues = slot_issues(slot, now, self.policy, mine)
-        if issues and all(i.code in RECOVERABLE_ISSUES for i in issues):
-            return ToolResult.failure(tool, ToolErrorCode.CONFLICT, " ".join(i.message for i in issues))
+        if issues and all(issue.code in RECOVERABLE_ISSUES for issue in issues):
+            return ToolResult.failure(tool, ToolErrorCode.CONFLICT, " ".join(issue.message for issue in issues))
         if issues:
             return ToolResult.failure(
-                tool, ToolErrorCode.INVALID_ARGS, "Không thể đặt slot này.", details=[i.message for i in issues]
+                tool,
+                ToolErrorCode.INVALID_ARGUMENTS,
+                "Không thể đặt slot này.",
+                details=[issue.message for issue in issues],
             )
         try:
-            appt = await self._appointments.book(patient_id, slot, reason, idempotency_key)
+            appointment = await self._appointments.book(patient_id, slot, reason, idempotency_key)
         except SlotTakenError:
             return ToolResult.failure(
                 tool, ToolErrorCode.CONFLICT, "Slot bạn chọn vừa được người khác đặt.", retryable=False
             )
-        return ToolResult.success(tool, appt.model_dump(mode="json"), [appt.id])
+        return ToolResult.success(tool, appointment.model_dump(mode="json"), [appointment.id])
 
     async def _own_upcoming(
         self, tool: str, patient_id: str, appointment_id: str, now: datetime
     ) -> Appointment | ToolResult:
-        appt = await self.get_appointment(patient_id, appointment_id)
-        if appt is None:
+        appointment = await self.get_appointment(patient_id, appointment_id)
+        if appointment is None:
             return ToolResult.failure(tool, ToolErrorCode.NOT_FOUND, "Không có lịch hẹn này.")
-        if appt.status != AppointmentStatus.BOOKED:
-            return ToolResult.failure(tool, ToolErrorCode.INVALID_ARGS, "Lịch hẹn này đã bị hủy trước đó.")
-        if appt.slot.start_at < now:
-            return ToolResult.failure(tool, ToolErrorCode.INVALID_ARGS, "Lịch hẹn này đã qua, không đổi/hủy được.")
-        return appt
+        if appointment.status != AppointmentStatus.BOOKED:
+            return ToolResult.failure(tool, ToolErrorCode.INVALID_ARGUMENTS, "Lịch hẹn này đã bị hủy trước đó.")
+        if appointment.slot.start_at < now:
+            return ToolResult.failure(tool, ToolErrorCode.INVALID_ARGUMENTS, "Lịch hẹn này đã qua, không đổi/hủy được.")
+        return appointment
 
     async def cancel(self, patient_id: str, appointment_id: str, now: datetime) -> ToolResult:
         tool = "cancel_appointment"
         existing = await self.get_appointment(patient_id, appointment_id)
         if existing and existing.status == AppointmentStatus.CANCELLED:  # gọi lại sau lỗi mạng -> như đã hủy
             return ToolResult.success(tool, existing.model_dump(mode="json"), [existing.id])
-        appt = await self._own_upcoming(tool, patient_id, appointment_id, now)
-        if isinstance(appt, ToolResult):
-            return appt
-        cancelled = await self._appointments.cancel(appt.id)
+        appointment = await self._own_upcoming(tool, patient_id, appointment_id, now)
+        if isinstance(appointment, ToolResult):
+            return appointment
+        cancelled = await self._appointments.cancel(appointment.id)
         if cancelled is None:
             return ToolResult.failure(tool, ToolErrorCode.NOT_FOUND, "Không có lịch hẹn này.")
         return ToolResult.success(tool, cancelled.model_dump(mode="json"), [cancelled.id])
@@ -178,31 +181,36 @@ class BookingService:
             if existing.patient_id != patient_id:
                 return ToolResult.failure(tool, ToolErrorCode.FORBIDDEN, "Khóa idempotency không hợp lệ.")
             return ToolResult.success(tool, existing.model_dump(mode="json"), [existing.id])
-        appt = await self._own_upcoming(tool, patient_id, appointment_id, now)
-        if isinstance(appt, ToolResult):
-            return appt
+        appointment = await self._own_upcoming(tool, patient_id, appointment_id, now)
+        if isinstance(appointment, ToolResult):
+            return appointment
         slot = await self._slots.get(slot_id)
         if slot is None:
             return ToolResult.failure(tool, ToolErrorCode.NOT_FOUND, "Slot không tồn tại.")
-        others = [a for a in await self._appointments.list_for_patient(patient_id) if a.id != appt.id]
+        others = [
+            other for other in await self._appointments.list_for_patient(patient_id) if other.id != appointment.id
+        ]
         issues = slot_issues(slot, now, self.policy, others)
-        if issues and all(i.code in RECOVERABLE_ISSUES for i in issues):
-            return ToolResult.failure(tool, ToolErrorCode.CONFLICT, " ".join(i.message for i in issues))
+        if issues and all(issue.code in RECOVERABLE_ISSUES for issue in issues):
+            return ToolResult.failure(tool, ToolErrorCode.CONFLICT, " ".join(issue.message for issue in issues))
         if issues:
             return ToolResult.failure(
-                tool, ToolErrorCode.INVALID_ARGS, "Không thể dời sang slot này.", details=[i.message for i in issues]
+                tool,
+                ToolErrorCode.INVALID_ARGUMENTS,
+                "Không thể dời sang slot này.",
+                details=[issue.message for issue in issues],
             )
         try:
             new = await self._appointments.reschedule(
-                appt.id, patient_id, slot, reason if reason is not None else appt.reason, idempotency_key
+                appointment.id, patient_id, slot, reason if reason is not None else appointment.reason, idempotency_key
             )
         except SlotTakenError:
             return ToolResult.failure(tool, ToolErrorCode.CONFLICT, "Slot bạn chọn vừa được người khác đặt.")
-        return ToolResult.success(tool, new.model_dump(mode="json"), [new.id, appt.id])
+        return ToolResult.success(tool, new.model_dump(mode="json"), [new.id, appointment.id])
 
     async def get_appointment(self, patient_id: str, appointment_id: str) -> Appointment | None:
-        appt = await self._appointments.get(appointment_id)
-        return appt if appt and appt.patient_id == patient_id else None
+        appointment = await self._appointments.get(appointment_id)
+        return appointment if appointment and appointment.patient_id == patient_id else None
 
     async def find(
         self,
@@ -217,26 +225,30 @@ class BookingService:
         `when`: upcoming (sắp tới, gần nhất trước) | past (đã qua, gần nhất trước) | all (mới nhất trước).
         Chỉ lịch đang `booked`; lịch đã hủy không dùng làm mốc.
         """
-        appts = [
-            a
-            for a in await self._appointments.list_for_patient(patient_id)
-            if a.status == AppointmentStatus.BOOKED
-            and (department_code is None or a.slot.department_code == department_code)
-            and (when == "all" or (a.slot.start_at >= now) == (when == "upcoming"))
+        appointments = [
+            booked
+            for booked in await self._appointments.list_for_patient(patient_id)
+            if booked.status == AppointmentStatus.BOOKED
+            and (department_code is None or booked.slot.department_code == department_code)
+            and (when == "all" or (booked.slot.start_at >= now) == (when == "upcoming"))
         ]
-        appts.sort(key=lambda a: a.slot.start_at, reverse=when != "upcoming")
-        appts = appts[:limit]
+        appointments.sort(key=lambda booked: booked.slot.start_at, reverse=when != "upcoming")
+        appointments = appointments[:limit]
         return ToolResult.success(
-            "find_my_appointments", [a.model_dump(mode="json") for a in appts], [a.id for a in appts]
+            "find_my_appointments",
+            [booked.model_dump(mode="json") for booked in appointments],
+            [booked.id for booked in appointments],
         )
 
     async def upcoming(self, patient_id: str, now: datetime) -> ToolResult:
-        appts = [
-            a
-            for a in await self._appointments.list_for_patient(patient_id)
-            if a.status == AppointmentStatus.BOOKED and a.slot.start_at >= now
+        appointments = [
+            booked
+            for booked in await self._appointments.list_for_patient(patient_id)
+            if booked.status == AppointmentStatus.BOOKED and booked.slot.start_at >= now
         ]
-        appts.sort(key=lambda a: a.slot.start_at)
+        appointments.sort(key=lambda booked: booked.slot.start_at)
         return ToolResult.success(
-            "list_my_appointments", [a.model_dump(mode="json") for a in appts], [a.id for a in appts]
+            "list_my_appointments",
+            [booked.model_dump(mode="json") for booked in appointments],
+            [booked.id for booked in appointments],
         )

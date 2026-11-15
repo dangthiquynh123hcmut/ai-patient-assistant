@@ -28,5 +28,5 @@ class TranscribeUseCase:
         if chosen not in STT_LANGUAGES:
             raise ValueError(f"unsupported STT language: {chosen}")
         result = await self._stt.transcribe(audio, None if chosen == "auto" else chosen)
-        flags = stt_flags_from_words([(w.word, w.probability) for w in result.words], self._threshold)
+        flags = stt_flags_from_words([(word.word, word.probability) for word in result.words], self._threshold)
         return TranscriptReview(text=result.text, words=result.words, flags=flags, language=result.language)

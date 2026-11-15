@@ -8,12 +8,12 @@ from typing import Any
 
 from patient_assistant.application.agent.nodes.assistant_agent import SYSTEM_NOTE
 from patient_assistant.application.agent.state import UserDecision
-from patient_assistant.application.ports.llm import AgentMessage, AgentReply, ToolSpec
+from patient_assistant.application.ports.llm import AgentMessage, AgentReply, ToolSpecification
 from patient_assistant.domain.common import SttFlag
 from patient_assistant.domain.text.vi_dates import DateWindow
 from tests.conftest import NOW, PATIENT, ScriptedLLM, call_tool, done, waiting
 
-Tools = dict[str, ToolSpec]
+Tools = dict[str, ToolSpecification]
 REPORT_SAID = (
     "Tuần này tôi đau mức 5, tập được 4 ngày, rồi đặt giúp tôi lịch tái khám phục hồi chức năng thứ ba tuần sau"
 )
@@ -101,7 +101,7 @@ async def test_report_and_booking_in_one_message(make_app: Any) -> None:
     chat = app.chat()
 
     card = waiting(await chat.send_message("f1", PATIENT, REPORT_SAID), "confirm_report")
-    assert {e.field: e.value for e in card.interrupt.explanations}["pain_level"] == 5
+    assert {explanation.field: explanation.value for explanation in card.interrupt.explanations}["pain_level"] == 5
     assert llm.intents == [] and llm.memories == []  # không qua bước phân loại
 
     second = waiting(await chat.resume("f1", PATIENT, UserDecision(action="confirm")), "confirm_booking")
@@ -149,11 +149,11 @@ async def test_report_edit_on_card_is_revalidated_by_code(make_app: Any) -> None
     edited = waiting(
         await chat.resume("f3", PATIENT, UserDecision(action="edit", fields={"pain_level": 4})), "confirm_report"
     )
-    row = {e.field: e for e in edited.interrupt.explanations}["pain_level"]
+    row = {explanation.field: explanation for explanation in edited.interrupt.explanations}["pain_level"]
     assert row.value == 4 and row.origin.value == "user_edit"
     assert len(llm.agent_calls) == 1  # sửa trên form không cần gọi LLM
     done(await chat.resume("f3", PATIENT, UserDecision(action="confirm")), "report_saved")
-    assert [r["pain_level"] for r in await _history(app)] == [4]
+    assert [report["pain_level"] for report in await _history(app)] == [4]
 
 
 async def test_current_week_without_quote_is_not_a_rejection(make_app: Any) -> None:
@@ -169,7 +169,7 @@ async def test_current_week_without_quote_is_not_a_rejection(make_app: Any) -> N
     chat = app.chat()
     waiting(await chat.send_message("f9", PATIENT, "Tuần này tôi đau mức 5, tập được 4 ngày"), "confirm_report")
     done(await chat.resume("f9", PATIENT, UserDecision(action="confirm")), "report_saved")
-    assert [r["reporting_period"] for r in await _history(app)] == [f"{NOW:%G-W%V}"]
+    assert [report["reporting_period"] for report in await _history(app)] == [f"{NOW:%G-W%V}"]
 
 
 async def test_report_rejected_too_many_times_is_handed_to_staff(make_app: Any) -> None:
@@ -190,7 +190,9 @@ async def test_report_rejected_too_many_times_is_handed_to_staff(make_app: Any) 
     app = await _make(make_app, ScriptedLLM(agents=[keeps_inventing]))
     turn = done(await app.chat().send_message("f8", PATIENT, "Tuần này tôi đau mức 5, tập được 4 ngày"), "handoff")
     assert "nhân viên" in turn.response.text
-    assert [r["status"] for r in results] == ["error"] * 4 and [bool(r.get("stop")) for r in results] == [
+    assert [result["status"] for result in results] == ["error"] * 4 and [
+        bool(result.get("stop")) for result in results
+    ] == [
         False,
         False,
         False,
@@ -205,10 +207,10 @@ async def test_filler_reply_on_card_shows_the_same_card_without_writing(make_app
     chat = app.chat()
     waiting(await chat.send_message("f6", PATIENT, "Tuần này tôi đau mức 5, tập được 4 ngày"), "confirm_report")
     again = waiting(await chat.resume("f6", PATIENT, UserDecision(action="reply", text="ờ")), "confirm_report")
-    assert {e.field: e.value for e in again.interrupt.explanations}["pain_level"] == 5
+    assert {explanation.field: explanation.value for explanation in again.interrupt.explanations}["pain_level"] == 5
     assert await _history(app) == [] and len(llm.agent_calls) == 1  # không ghi, không quay lại LLM
     done(await chat.resume("f6", PATIENT, UserDecision(action="reply", text="đồng ý lưu")), "report_saved")
-    assert [r["pain_level"] for r in await _history(app)] == [5]
+    assert [report["pain_level"] for report in await _history(app)] == [5]
 
 
 async def test_low_confidence_voice_words_reach_the_agent(make_app: Any) -> None:
@@ -243,8 +245,8 @@ async def test_reschedule_moves_the_appointment(make_app: Any) -> None:
     card = waiting(
         await app.chat().send_message("f4", PATIENT, "dời lịch thứ ba sang thứ năm giúp tôi"), "confirm_booking"
     )
-    assert {e.field for e in card.interrupt.explanations} >= {"appointment", "slot"}
-    assert [a["id"] for a in await _booked(app)] == [old["id"]]
+    assert {explanation.field for explanation in card.interrupt.explanations} >= {"appointment", "slot"}
+    assert [appointment["id"] for appointment in await _booked(app)] == [old["id"]]
 
     final = done(await app.chat().resume("f4", PATIENT, UserDecision(action="confirm")), "appointment_rescheduled")
     booked = await _booked(app)
@@ -274,11 +276,11 @@ async def test_cancel_only_own_upcoming_appointment(make_app: Any) -> None:
 async def test_knowledge_answer_keeps_sources_and_follow_up_goes_to_agent(make_app: Any) -> None:
     async def answers(tools: Tools, history: list[AgentMessage], context: str) -> AgentReply:
         found = await call_tool(tools, "search_approved_knowledge", query="chườm lạnh sau khi tập gập gối")
-        doc = found["data"][0]
-        return AgentReply(text=f"{doc['content']} ({doc['doc_id']})")
+        document = found["data"][0]
+        return AgentReply(text=f"{document['content']} ({document['doc_id']})")
 
     async def sees_previous_turn(tools: Tools, history: list[AgentMessage], context: str) -> AgentReply:
-        assert [m.role for m in history] == ["user", "assistant", "user"]
+        assert [message.role for message in history] == ["user", "assistant", "user"]
         return AgentReply(text="Không có gì đâu bạn!")
 
     app = await _make(make_app, ScriptedLLM(agents=[answers, sees_previous_turn]))

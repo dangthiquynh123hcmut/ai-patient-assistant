@@ -142,19 +142,25 @@ def english_to_vi(text: str) -> str:
     # Ngày có tên tháng: "november 5th 2026", "5 nov", "the 5th of november".
     out = re.sub(
         rf"\b({_MONTH}) (?:the )?{_ORDINAL}(?: (\d{{4}}))?\b",
-        lambda m: f"ngày {m.group(2)} tháng {_MONTHS[m.group(1)]}" + (f" năm {m.group(3)}" if m.group(3) else ""),
+        lambda match: (
+            f"ngày {match.group(2)} tháng {_MONTHS[match.group(1)]}"
+            + (f" năm {match.group(3)}" if match.group(3) else "")
+        ),
         out,
     )
     out = re.sub(
         rf"\b(?:the )?{_ORDINAL} (?:of )?({_MONTH})(?: (\d{{4}}))?\b",
-        lambda m: f"ngày {m.group(1)} tháng {_MONTHS[m.group(2)]}" + (f" năm {m.group(3)}" if m.group(3) else ""),
+        lambda match: (
+            f"ngày {match.group(1)} tháng {_MONTHS[match.group(2)]}"
+            + (f" năm {match.group(3)}" if match.group(3) else "")
+        ),
         out,
     )
     out = re.sub(r"\bthe (\d{1,2})(?:st|nd|rd|th)\b", r"ngày \1", out)
     # Thứ: "next tuesday" / "tuesday next week" -> tuần sau; "this tuesday" -> tuần này.
-    out = re.sub(rf"\bnext ({_WEEKDAY})\b", lambda m: f"{_WEEKDAYS[m.group(1)]} tuần sau", out)
-    out = re.sub(rf"\bthis ({_WEEKDAY})\b", lambda m: f"{_WEEKDAYS[m.group(1)]} tuần này", out)
-    out = re.sub(rf"\b({_WEEKDAY})s?\b", lambda m: _WEEKDAYS[m.group(1)], out)
+    out = re.sub(rf"\bnext ({_WEEKDAY})\b", lambda match: f"{_WEEKDAYS[match.group(1)]} tuần sau", out)
+    out = re.sub(rf"\bthis ({_WEEKDAY})\b", lambda match: f"{_WEEKDAYS[match.group(1)]} tuần này", out)
+    out = re.sub(rf"\b({_WEEKDAY})s?\b", lambda match: _WEEKDAYS[match.group(1)], out)
     # Giờ: "half past 9", "quarter past 9", "9:30 am", "9 30 pm", "9 am", "9 o clock", "at 9".
     out = re.sub(r"\bhalf past (\d{1,2})\b", r"\1 giờ rưỡi", out)
     out = re.sub(r"\bquarter past (\d{1,2})\b", r"\1 giờ 15", out)

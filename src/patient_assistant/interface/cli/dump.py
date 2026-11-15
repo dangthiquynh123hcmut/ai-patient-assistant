@@ -33,33 +33,41 @@ async def collect(database_url: str, slot_limit: int) -> dict[str, Any]:
         await engine.dispose()
 
 
-async def _collect(repos: dict[str, Any], database_url: str, now: datetime, slot_limit: int) -> dict[str, Any]:
-    departments = await repos["catalog"].list_departments()
-    doctors = await repos["catalog"].list_doctors()
-    patients = [p.model_dump() for p in seed.PATIENTS]
+async def _collect(repositories: dict[str, Any], database_url: str, now: datetime, slot_limit: int) -> dict[str, Any]:
+    departments = await repositories["catalog"].list_departments()
+    doctors = await repositories["catalog"].list_doctors()
+    patients = [patient.model_dump() for patient in seed.PATIENTS]
     plans = []
     for patient in patients:
-        plan = await repos["plans"].get_active_plan(patient["id"])
+        plan = await repositories["plans"].get_active_plan(patient["id"])
         if plan:
             plans.append(plan)
-    reports = [r for x in patients for r in await repos["reports"].list_by_patient(x["id"], 100)]
-    appointments = [a for x in patients for a in await repos["appointments"].list_for_patient(x["id"])]
+    reports = [
+        report for patient in patients for report in await repositories["reports"].list_by_patient(patient["id"], 100)
+    ]
+    appointments = [
+        appointment
+        for patient in patients
+        for appointment in await repositories["appointments"].list_for_patient(patient["id"])
+    ]
     available = []
-    for d in departments:
-        available += await repos["slots"].find_available(d.code, now, now.replace(year=now.year + 1), None, 10_000)
-    available.sort(key=lambda s: s.start_at)
+    for department in departments:
+        available += await repositories["slots"].find_available(
+            department.code, now, now.replace(year=now.year + 1), None, 10_000
+        )
+    available.sort(key=lambda slot: slot.start_at)
     return {
         "source": database_url.split("@")[-1],  # bỏ user/mật khẩu khỏi URL
         "generated_at": now.isoformat(),
-        "departments": [d.model_dump() for d in departments],
-        "doctors": [d.model_dump() for d in doctors],
+        "departments": [department.model_dump() for department in departments],
+        "doctors": [doctor.model_dump() for doctor in doctors],
         "patients": patients,
-        "plans": [p.model_dump() for p in plans],
-        "reports": [r.model_dump(mode="json") for r in reports],
-        "appointments": [a.model_dump(mode="json") for a in appointments],
+        "plans": [plan.model_dump() for plan in plans],
+        "reports": [report.model_dump(mode="json") for report in reports],
+        "appointments": [appointment.model_dump(mode="json") for appointment in appointments],
         "available_slots": {
             "total": len(available),
-            "first": [s.model_dump(mode="json") for s in available[:slot_limit]],
+            "first": [slot.model_dump(mode="json") for slot in available[:slot_limit]],
         },
     }
 
@@ -69,13 +77,13 @@ def main() -> None:
     parser.add_argument("--database-url", default=Settings().database_url)
     parser.add_argument("--out", type=Path)
     parser.add_argument("--slots", type=int, default=10, help="Số slot trống in ra (mặc định 10)")
-    args = parser.parse_args()
-    if not args.database_url:
+    arguments = parser.parse_args()
+    if not arguments.database_url:
         sys.exit("Chưa có database: đặt PA_DATABASE_URL hoặc --database-url")
-    text = json.dumps(asyncio.run(collect(args.database_url, args.slots)), ensure_ascii=False, indent=2)
-    if args.out:
-        args.out.write_text(text, "utf-8")
-        print(f"Đã ghi {args.out}", file=sys.stderr)
+    text = json.dumps(asyncio.run(collect(arguments.database_url, arguments.slots)), ensure_ascii=False, indent=2)
+    if arguments.out:
+        arguments.out.write_text(text, "utf-8")
+        print(f"Đã ghi {arguments.out}", file=sys.stderr)
     else:
         print(text)
 

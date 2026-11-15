@@ -9,9 +9,9 @@ from patient_assistant.infrastructure.llm.schema import strict_schema
 
 def _walk(node: Any) -> list[dict[str, Any]]:
     if isinstance(node, dict):
-        return [node, *[x for v in node.values() for x in _walk(v)]]
+        return [node, *[child for v in node.values() for child in _walk(v)]]
     if isinstance(node, list):
-        return [x for v in node for x in _walk(v)]
+        return [child for v in node for child in _walk(v)]
     return []
 
 
@@ -19,10 +19,10 @@ def test_strict_schema_is_self_contained_and_closed() -> None:
     for model in (ReportExtraction, BookingRequest):
         schema = strict_schema(model)
         nodes = _walk(schema)
-        assert not any("$ref" in n or "$defs" in n for n in nodes)
-        for obj in (n for n in nodes if n.get("type") == "object" and "properties" in n):
-            assert obj["additionalProperties"] is False
-            assert set(obj["required"]) == set(obj["properties"])
+        assert not any("$ref" in node or "$defs" in node for node in nodes)
+        for value in (node for node in nodes if node.get("type") == "object" and "properties" in node):
+            assert value["additionalProperties"] is False
+            assert set(value["required"]) == set(value["properties"])
 
 
 def test_booking_schema_restricts_department_to_catalog() -> None:

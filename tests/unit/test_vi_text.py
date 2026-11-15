@@ -9,7 +9,7 @@ from hypothesis import strategies as st
 from patient_assistant.domain.text.grounding import quote_in_sources
 from patient_assistant.domain.text.vi_dates import resolve
 from patient_assistant.domain.text.vi_numbers import digitize, extract_numbers, number_supported
-from tests.conftest import NOW, TZ
+from tests.conftest import NOW, TIMEZONE
 
 
 @pytest.mark.parametrize(
@@ -100,7 +100,7 @@ _WEEKDAYS = ["thứ hai", "thứ ba", "thứ tư", "thứ năm", "thứ sáu", "
 
 @given(offset=st.integers(min_value=0, max_value=800), weekday=st.integers(min_value=0, max_value=6))
 def test_next_week_weekday_invariants(offset: int, weekday: int) -> None:
-    now = datetime(2026, 1, 1, 9, 0, tzinfo=TZ) + timedelta(days=offset)
+    now = datetime(2026, 1, 1, 9, 0, tzinfo=TIMEZONE) + timedelta(days=offset)
     window = resolve(f"{_WEEKDAYS[weekday]} tuần sau", None, now).window
     assert window is not None
     assert window.date_from.weekday() == weekday

@@ -14,7 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-from patient_assistant.application.ports.repositories import KnowledgeDoc
+from patient_assistant.application.ports.repositories import KnowledgeDocument
 from patient_assistant.domain.account import NewUser, Role
 from patient_assistant.domain.booking.models import (
     Appointment,
@@ -90,7 +90,7 @@ def _data() -> dict[str, Any]:
         "doctors": _load_list("doctors.json", Doctor),
         "patients": _load_list("patients.json", DemoPatient),
         "plans": _load_list("plans.json", PatientPlan),
-        "knowledge": _load_list("knowledge.json", KnowledgeDoc),
+        "knowledge": _load_list("knowledge.json", KnowledgeDocument),
         "schedule": Schedule.model_validate(_read("schedule.json")),
         "history": History.model_validate(_read("history.json")),
     }
@@ -100,28 +100,28 @@ def _data() -> dict[str, Any]:
 
 def _check_references(data: dict[str, Any]) -> None:
     """Bắt lỗi tham chiếu trong JSON (ví dụ bác sĩ thuộc khoa không tồn tại) ngay lúc nạp."""
-    departments = {d.code for d in data["departments"]}
-    doctors = {d.id for d in data["doctors"]}
-    patients = {p.id for p in data["patients"]}
+    departments = {department.code for department in data["departments"]}
+    doctors = {doctor.id for doctor in data["doctors"]}
+    patients = {patient.id for patient in data["patients"]}
     problems = [
-        f"doctors.json: {d.id} -> khoa '{d.department_code}' không có"
-        for d in data["doctors"]
-        if d.department_code not in departments
+        f"doctors.json: {doctor.id} -> khoa '{doctor.department_code}' không có"
+        for doctor in data["doctors"]
+        if doctor.department_code not in departments
     ]
     problems += [
-        f"plans.json: {p.plan_id} -> khoa '{p.department_code}' không có"
-        for p in data["plans"]
-        if p.department_code not in departments
+        f"plans.json: {plan.plan_id} -> khoa '{plan.department_code}' không có"
+        for plan in data["plans"]
+        if plan.department_code not in departments
     ]
     problems += [
-        f"plans.json: {p.plan_id} -> bệnh nhân '{p.patient_id}' không có"
-        for p in data["plans"]
-        if p.patient_id not in patients
+        f"plans.json: {plan.plan_id} -> bệnh nhân '{plan.patient_id}' không có"
+        for plan in data["plans"]
+        if plan.patient_id not in patients
     ]
     problems += [
-        f"history.json: lịch hẹn -> bác sĩ '{a.doctor_id}' không có"
-        for a in data["history"].appointments
-        if a.doctor_id not in doctors
+        f"history.json: lịch hẹn -> bác sĩ '{appointment.doctor_id}' không có"
+        for appointment in data["history"].appointments
+        if appointment.doctor_id not in doctors
     ]
     if problems:
         raise ValueError("Dữ liệu demo không hợp lệ:\n" + "\n".join(problems))
@@ -136,32 +136,32 @@ class DemoAccount(BaseModel):
 
 def demo_accounts(password: str) -> list[NewUser]:
     """Tài khoản demo trong `demo_data/users.json`, cùng một mật khẩu (cấu hình qua PA_SEED_PASSWORD)."""
-    patients = {p.id for p in PATIENTS}
+    patients = {patient.id for patient in PATIENTS}
     accounts = _load_list("users.json", DemoAccount)
-    missing = [a.username for a in accounts if a.patient_id and a.patient_id not in patients]
+    missing = [account.username for account in accounts if account.patient_id and account.patient_id not in patients]
     if missing:
         raise ValueError(f"users.json: bệnh nhân không có cho {missing}")
-    return [NewUser(**a.model_dump(), password=password) for a in accounts]
+    return [NewUser(**account.model_dump(), password=password) for account in accounts]
 
 
 def profiles() -> list[PatientProfile]:
-    return [PatientProfile(**p.model_dump(exclude={"label"})) for p in PATIENTS]
+    return [PatientProfile(**patient.model_dump(exclude={"label"})) for patient in PATIENTS]
 
 
 DEPARTMENTS: list[Department] = _data()["departments"]
 DOCTORS: list[Doctor] = _data()["doctors"]
 PATIENTS: list[DemoPatient] = _data()["patients"]
 PLANS: list[PatientPlan] = _data()["plans"]
-KNOWLEDGE: list[KnowledgeDoc] = _data()["knowledge"]
+KNOWLEDGE: list[KnowledgeDocument] = _data()["knowledge"]
 SCHEDULE: Schedule = _data()["schedule"]
 HISTORY: History = _data()["history"]
 
 
-def _slot_id(doctor_id: str, day: date, t: time) -> str:
-    return f"{doctor_id}-{day:%Y%m%d}-{t:%H%M}"
+def _slot_id(doctor_id: str, day: date, start_time: time) -> str:
+    return f"{doctor_id}-{day:%Y%m%d}-{start_time:%H%M}"
 
 
-def generate_slots(today: date, tz: tzinfo, days: int | None = None) -> list[Slot]:
+def generate_slots(today: date, timezone: tzinfo, days: int | None = None) -> list[Slot]:
     """Slot của mọi bác sĩ theo `schedule.json`, từ hôm nay tới `days_ahead` ngày."""
     duration = timedelta(minutes=SCHEDULE.slot_minutes)
     slots: list[Slot] = []
@@ -170,11 +170,11 @@ def generate_slots(today: date, tz: tzinfo, days: int | None = None) -> list[Slo
         if day.weekday() not in SCHEDULE.working_weekdays:
             continue
         for doctor in DOCTORS:
-            for t in SCHEDULE.start_times:
-                start = datetime.combine(day, t, tz)
+            for start_time in SCHEDULE.start_times:
+                start = datetime.combine(day, start_time, timezone)
                 slots.append(
                     Slot(
-                        slot_id=_slot_id(doctor.id, day, t),
+                        slot_id=_slot_id(doctor.id, day, start_time),
                         department_code=doctor.department_code,
                         doctor_id=doctor.id,
                         doctor_name=doctor.name,
@@ -185,21 +185,21 @@ def generate_slots(today: date, tz: tzinfo, days: int | None = None) -> list[Slo
     return slots
 
 
-def history_reports(today: date, tz: tzinfo) -> list[Report]:
+def history_reports(today: date, timezone: tzinfo) -> list[Report]:
     out = []
-    for i, r in enumerate(HISTORY.reports, start=1):
-        day = today - timedelta(weeks=r.weeks_ago)
-        created = datetime.combine(day, time(20, 0), tz).astimezone(UTC)
+    for i, report in enumerate(HISTORY.reports, start=1):
+        day = today - timedelta(weeks=report.weeks_ago)
+        created = datetime.combine(day, time(20, 0), timezone).astimezone(UTC)
         out.append(
             Report(
                 id=f"rep-demo-{i:03d}",
-                patient_id=r.patient_id,
+                patient_id=report.patient_id,
                 reporting_period=current_period(created),
-                pain_level=r.pain_level,
-                exercise_days=r.exercise_days,
-                symptom_change=r.symptom_change,
-                triggering_activity=r.triggering_activity,
-                evidence=r.evidence,
+                pain_level=report.pain_level,
+                exercise_days=report.exercise_days,
+                symptom_change=report.symptom_change,
+                triggering_activity=report.triggering_activity,
+                evidence=report.evidence,
                 idempotency_key=f"demo-history-report-{i}",
                 created_at=created,
             )
@@ -209,22 +209,24 @@ def history_reports(today: date, tz: tzinfo) -> list[Report]:
 
 def history_appointments(today: date, slots: list[Slot]) -> list[Appointment]:
     """Lịch hẹn demo gắn vào slot thật; ngày nghỉ thì dời sang ngày làm việc kế tiếp."""
-    by_id = {s.slot_id: s for s in slots}
+    by_id = {slot.slot_id: slot for slot in slots}
     out = []
-    for i, a in enumerate(HISTORY.appointments, start=1):
-        day = today + timedelta(days=a.days_from_today)
+    for i, appointment in enumerate(HISTORY.appointments, start=1):
+        day = today + timedelta(days=appointment.days_from_today)
         while day.weekday() not in SCHEDULE.working_weekdays:
             day += timedelta(days=1)
-        slot = by_id.get(_slot_id(a.doctor_id, day, a.time))
+        slot = by_id.get(_slot_id(appointment.doctor_id, day, appointment.time))
         if slot is None:
-            raise ValueError(f"history.json: lịch hẹn {i} không khớp slot nào ({a.doctor_id}, {day}, {a.time})")
+            raise ValueError(
+                f"history.json: lịch hẹn {i} không khớp slot nào ({appointment.doctor_id}, {day}, {appointment.time})"
+            )
         out.append(
             Appointment(
                 id=f"appt-demo-{i:03d}",
-                patient_id=a.patient_id,
+                patient_id=appointment.patient_id,
                 slot=slot,
                 status=AppointmentStatus.BOOKED,
-                reason=a.reason,
+                reason=appointment.reason,
                 idempotency_key=f"demo-history-appointment-{i}",
                 created_at=datetime.combine(today, time(8, 0), slot.start_at.tzinfo).astimezone(UTC),
             )

@@ -131,16 +131,16 @@ def doctors_mentioned(text: str, doctors: list[Doctor]) -> list[str]:
     So khớp không dấu để nhận cả người gõ/nói không dấu hoặc tiếng Anh."""
     plain = f" {unaccent(text)} "
     found: list[str] = []
-    for d in doctors:
-        full = unaccent(d.name).removeprefix("bs ").strip()
+    for doctor in doctors:
+        full = unaccent(doctor.name).removeprefix("bs ").strip()
         given = full.split(" ")[-1]
         if f" {full} " in plain:
-            found.append(d.id)
+            found.append(doctor.id)
             continue
-        same_given = [o for o in doctors if unaccent(o.name).split(" ")[-1] == given]
+        same_given = [other_doctor for other_doctor in doctors if unaccent(other_doctor.name).split(" ")[-1] == given]
         titles = ("bac si", "bs", "doctor", "dr")
-        if len(same_given) == 1 and any(f" {t} {given} " in plain for t in titles):
-            found.append(d.id)
+        if len(same_given) == 1 and any(f" {title} {given} " in plain for title in titles):
+            found.append(doctor.id)
     return found
 
 
@@ -148,7 +148,7 @@ def _appointment(data: Any, departments: list[Department]) -> MemoryAppointment 
     if not isinstance(data, dict) or not isinstance(data.get("slot"), dict):
         return None
     slot = data["slot"]
-    names = {d.code: d.name for d in departments}
+    names = {department.code: department.name for department in departments}
     try:
         return MemoryAppointment(
             id=str(data["id"]),
@@ -180,11 +180,11 @@ _RESULT_TEXT = {
 _EN_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 
 
-def _booked_note(appt: MemoryAppointment) -> str:
-    start = appt.start_at
+def _booked_note(appointment: MemoryAppointment) -> str:
+    start = appointment.start_at
     return (
-        f"appointment booked: {appt.department_name}, {appt.doctor_name}, {start:%H:%M} "
-        f"{_EN_WEEKDAYS[start.weekday()]} {start:%Y-%m-%d} (id {appt.id})"
+        f"appointment booked: {appointment.department_name}, {appointment.doctor_name}, {start:%H:%M} "
+        f"{_EN_WEEKDAYS[start.weekday()]} {start:%Y-%m-%d} (id {appointment.id})"
     )
 
 
@@ -206,14 +206,14 @@ def note_for_turn(
         result = "not finished; the user switched to another task"
     else:
         result = _RESULT_TEXT.get(outcome_kind, outcome_kind)
-    dept = department_in_text(said, departments)
+    department = department_in_text(said, departments)
     return TurnNote(
         said=_short(said),
         intent=intent,
         result=result,
         appointment=appointment,
         doctor_ids=doctors_mentioned(said, doctors),
-        department_codes=[dept.code] if dept else [],
+        department_codes=[department.code] if department else [],
     )
 
 
@@ -251,7 +251,9 @@ def mentions_reference(text: str) -> bool:
 def is_reference(text: str) -> bool:
     """Cụm chỉ là lời nhắc lại ("khoa đó", "bác sĩ ấy", "như vậy"), không phải tên khoa/bác sĩ."""
     norm = normalize(text)
-    return any(norm == normalize(p) for p in (*SAME_AS_BEFORE, *DOCTOR_REF, *DEPARTMENT_REF))
+    return any(
+        norm == normalize(reference_phrase) for reference_phrase in (*SAME_AS_BEFORE, *DOCTOR_REF, *DEPARTMENT_REF)
+    )
 
 
 def resolve_reference(text: str, memory: list[TurnNote], doctors: list[Doctor]) -> MemoryRef | None:
@@ -259,19 +261,19 @@ def resolve_reference(text: str, memory: list[TurnNote], doctors: list[Doctor]) 
     để luồng hỏi lại thay vì đoán."""
     if not memory:
         return None
-    by_id = {d.id: d for d in doctors}
+    by_id = {doctor.id: doctor for doctor in doctors}
 
     if phrase := contains_phrase(text, SAME_AS_BEFORE):
         booked = _distinct_appointments(memory)
         if len(booked) != 1:
             return None
-        appt = booked[0]
+        appointment = booked[0]
         return MemoryRef(
             phrase=phrase,
-            department_code=appt.department_code,
-            doctor_id=appt.doctor_id,
-            appointment_id=appt.id,
-            explanation=f"Bạn nói “{phrase}”: lấy theo lịch hẹn đã đặt ở lượt trước ({appt.describe()}).",
+            department_code=appointment.department_code,
+            doctor_id=appointment.doctor_id,
+            appointment_id=appointment.id,
+            explanation=f"Bạn nói “{phrase}”: lấy theo lịch hẹn đã đặt ở lượt trước ({appointment.describe()}).",
         )
 
     if phrase := contains_phrase(text, DOCTOR_REF):

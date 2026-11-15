@@ -20,10 +20,12 @@ def _reply(text: str) -> UserDecision:
 async def test_english_booking_happy_path(make_app: Any) -> None:
     app = await make_app(llm=ScriptedLLM(bookings=[REQUEST_OUT]))
     options = waiting(await app.chat().send_message("en1", PATIENT, REQUEST, "voice"), "choose_slot").interrupt.options
-    assert options and all(o.slot.start_at.date() == date(2026, 11, 3) and o.slot.start_at.hour < 12 for o in options)
+    assert options and all(
+        option.slot.start_at.date() == date(2026, 11, 3) and option.slot.start_at.hour < 12 for option in options
+    )
 
     confirm = waiting(await app.chat().resume("en1", PATIENT, _reply("the second one")), "confirm_booking")
-    explain = {e.field: e for e in confirm.interrupt.explanations}
+    explain = {explanation.field: explanation for explanation in confirm.interrupt.explanations}
     assert explain["department_code"].origin == Origin.USER_SAID
     # Giọng nói: "yes" chưa đủ rõ -> hỏi lại, chưa ghi gì.
     again = waiting(await app.chat().resume("en1", PATIENT, _reply("yes")), "confirm_booking")
@@ -41,7 +43,7 @@ async def test_english_other_time_and_cancel(make_app: Any) -> None:
     app = await make_app(llm=ScriptedLLM(bookings=[REQUEST_OUT, afternoon]))
     waiting(await app.chat().send_message("en2", PATIENT, REQUEST), "choose_slot")
     later = waiting(await app.chat().resume("en2", PATIENT, _reply("something in the afternoon please")), "choose_slot")
-    assert all(o.slot.start_at.hour >= 12 for o in later.interrupt.options)
+    assert all(option.slot.start_at.hour >= 12 for option in later.interrupt.options)
     done(await app.chat().resume("en2", PATIENT, _reply("never mind, cancel")), "cancelled")
     assert (await app.toolbox().list_my_appointments(PATIENT, NOW)).data == []
 

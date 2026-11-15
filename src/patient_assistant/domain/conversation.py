@@ -289,7 +289,7 @@ def rank_intents(text: str) -> list[tuple[Intent, float]]:
     norm = f" {normalize(text)} "
     scores: dict[Intent, float] = {}
     for intent, words in _INTENT_KEYWORDS.items():
-        score = sum(1.0 + 0.5 * (len(w.split()) - 1) for w in words if f" {w} " in norm)
+        score = sum(1.0 + 0.5 * (len(word.split()) - 1) for word in words if f" {word} " in norm)
         if score:
             scores[intent] = score
     return sorted(scores.items(), key=lambda kv: -kv[1])
@@ -331,12 +331,12 @@ def classify_by_rules(text: str) -> IntentGuess:
     norm = f" {normalize(text)} "
     positions: dict[Intent, int] = {}
     for intent, phrases in _INTENT_PHRASES.items():
-        hits = [norm.find(f" {normalize(p)} ") for p in phrases]
-        hits = [h for h in hits if h >= 0]
+        hits = [norm.find(f" {normalize(phrase)} ") for phrase in phrases]
+        hits = [hit for hit in hits if hit >= 0]
         if hits:
             positions[intent] = min(hits)
-    if m := _REPORT_PATTERN.search(digitize(text)):
-        positions[Intent.CREATE_REPORT] = min(positions.get(Intent.CREATE_REPORT, m.start()), m.start())
+    if match := _REPORT_PATTERN.search(digitize(text)):
+        positions[Intent.CREATE_REPORT] = min(positions.get(Intent.CREATE_REPORT, match.start()), match.start())
     # "xem lịch hẹn" chứa "hẹn" nhưng không phải đặt lịch; báo cáo cũ không phải báo cáo mới.
     if Intent.LIST_APPOINTMENTS in positions:
         positions.pop(Intent.BOOK_APPOINTMENT, None)

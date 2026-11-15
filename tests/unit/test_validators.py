@@ -11,12 +11,12 @@ from patient_assistant.domain.report.models import ReportExtraction
 from patient_assistant.domain.report.validators import ReportValidationContext, parse_report, validate_report
 from patient_assistant.domain.text.vi_dates import resolve
 from patient_assistant.infrastructure.persistence.seed import DEPARTMENTS, DOCTORS
-from tests.conftest import NOW, TZ
+from tests.conftest import NOW, TIMEZONE
 
 SOURCE = "Tuần này tôi đau mức 5 trên 10, đã tập 4 ngày, thấy đau tăng khi gập gối"
 
 
-def _report(**kw: object) -> ReportExtraction:
+def _report(**overrides: object) -> ReportExtraction:
     base: dict[str, object] = {
         "pain_level": 5,
         "exercise_days": 4,
@@ -27,12 +27,12 @@ def _report(**kw: object) -> ReportExtraction:
             Evidence(field="symptom_change", quote="thấy đau tăng khi gập gối"),
         ],
     }
-    base.update(kw)
+    base.update(overrides)
     return ReportExtraction.model_validate(base)
 
 
-def _codes(draft: ReportExtraction, sources: list[str] | None = None, **ctx: object) -> dict[str, Resolution]:
-    issues = validate_report(draft, ReportValidationContext(sources=sources or [SOURCE], now=NOW, **ctx))  # type: ignore[arg-type]
+def _codes(draft: ReportExtraction, sources: list[str] | None = None, **context: object) -> dict[str, Resolution]:
+    issues = validate_report(draft, ReportValidationContext(sources=sources or [SOURCE], now=NOW, **context))  # type: ignore[arg-type]
     return {i.code: i.resolution for i in issues}
 
 
@@ -88,39 +88,45 @@ def test_stt_flag_on_evidence_asks_user() -> None:
     assert codes == {"stt_uncertain": Resolution.ASK_USER}
 
 
-def _booking_ctx(sources: list[str], **kw: object) -> BookingValidationContext:
+def _booking_context(sources: list[str], **overrides: object) -> BookingValidationContext:
     return BookingValidationContext(
-        sources=sources, now=NOW, policy=BookingPolicy(), departments=DEPARTMENTS, doctors=DOCTORS, **kw
+        sources=sources, now=NOW, policy=BookingPolicy(), departments=DEPARTMENTS, doctors=DOCTORS, **overrides
     )  # type: ignore[arg-type]
 
 
 def test_booking_department_must_be_said_by_user() -> None:
     sources = ["tôi bị đau khớp gối, đặt lịch thứ ba tuần sau"]
-    req = BookingRequest(department_code="CXK", date_expression="thứ ba tuần sau")
-    issues = validate_booking(req, resolve(req.date_expression, None, NOW), _booking_ctx(sources))
+    request = BookingRequest(department_code="CXK", date_expression="thứ ba tuần sau")
+    issues = validate_booking(request, resolve(request.date_expression, None, NOW), _booking_context(sources))
     assert [i.code for i in issues] == ["department_not_in_source"]
     assert (
-        validate_booking(req, resolve(req.date_expression, None, NOW), _booking_ctx(sources, department_from_plan=True))
+        validate_booking(
+            request, resolve(request.date_expression, None, NOW), _booking_context(sources, department_from_plan=True)
+        )
         == []
     )
 
 
 def test_booking_weekday_mismatch_and_sunday() -> None:
     sources = ["đặt lịch khoa phục hồi chức năng thứ hai ngày 5/11"]
-    req = BookingRequest(department_code="PHCN", date_expression="thứ hai ngày 5/11")
-    issues = validate_booking(req, resolve(req.date_expression, None, NOW), _booking_ctx(sources))
+    request = BookingRequest(department_code="PHCN", date_expression="thứ hai ngày 5/11")
+    issues = validate_booking(request, resolve(request.date_expression, None, NOW), _booking_context(sources))
     assert [i.code for i in issues] == ["weekday_mismatch"]
     sunday = BookingRequest(department_code="PHCN", date_expression="chủ nhật tuần sau")
     issues = validate_booking(
-        sunday, resolve(sunday.date_expression, None, NOW), _booking_ctx(["khoa phục hồi chức năng chủ nhật tuần sau"])
+        sunday,
+        resolve(sunday.date_expression, None, NOW),
+        _booking_context(["khoa phục hồi chức năng chủ nhật tuần sau"]),
     )
     assert [i.code for i in issues] == ["non_working_day"]
 
 
 def test_booking_expression_must_be_verbatim() -> None:
-    req = BookingRequest(department_code="PHCN", date_expression="03/11/2026")
+    request = BookingRequest(department_code="PHCN", date_expression="03/11/2026")
     issues = validate_booking(
-        req, resolve(req.date_expression, None, NOW), _booking_ctx(["khoa phục hồi chức năng thứ ba tuần sau"])
+        request,
+        resolve(request.date_expression, None, NOW),
+        _booking_context(["khoa phục hồi chức năng thứ ba tuần sau"]),
     )
     assert [i.code for i in issues] == ["expression_not_in_source"]
 
@@ -131,7 +137,7 @@ def _options() -> list[SlotOption]:
     for i, (hour, minute, doctor) in enumerate(
         [(8, 0, "BS. Trần Văn An"), (9, 0, "BS. Trần Văn An"), (9, 0, "BS. Lê Thị Bình")], start=1
     ):
-        start = datetime(day.year, day.month, day.day, hour, minute, tzinfo=TZ)
+        start = datetime(day.year, day.month, day.day, hour, minute, tzinfo=TIMEZONE)
         out.append(
             SlotOption(
                 option_no=i,
@@ -167,7 +173,7 @@ def test_departments_matching_partial_and_unaccented_names() -> None:
     from patient_assistant.infrastructure.persistence import seed
 
     def names(text: str) -> list[str]:
-        return [d.name for d in departments_matching(text, seed.DEPARTMENTS)]
+        return [department.name for department in departments_matching(text, seed.DEPARTMENTS)]
 
     assert names("nội tổng") == ["Nội tổng quát"]
     assert names("noi tong quat") == ["Nội tổng quát"]

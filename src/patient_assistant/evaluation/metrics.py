@@ -29,8 +29,8 @@ TOOL_ALIASES = {"list_my_appointments": "find_my_appointments"}
 WORKFLOW_ONLY_FIELDS = {"department_from_plan"}
 
 
-def _ratio(num: int, den: int) -> float | None:
-    return round(num / den, 4) if den else None
+def _ratio(number: int, den: int) -> float | None:
+    return round(number / den, 4) if den else None
 
 
 class Rate(BaseModel):
@@ -39,8 +39,8 @@ class Rate(BaseModel):
     value: float | None
 
     @classmethod
-    def of(cls, num: int, den: int) -> Rate:
-        return cls(numerator=num, denominator=den, value=_ratio(num, den))
+    def of(cls, number: int, den: int) -> Rate:
+        return cls(numerator=number, denominator=den, value=_ratio(number, den))
 
 
 class CaseVerdict(BaseModel):
@@ -87,36 +87,40 @@ def _values_match(expected: Any, actual: Any) -> bool:
     return bool(expected == actual)
 
 
-def outcome_ok(case: EvalCase, obs: CaseObservation) -> bool:
-    actual = obs.outcome if obs.status == "done" else "waiting"
+def outcome_ok(case: EvalCase, observation: CaseObservation) -> bool:
+    actual = observation.outcome if observation.status == "done" else "waiting"
     expected = case.expected.outcome
     if actual == expected:
         return True
-    if obs.agent_mode in AGENT_MODES and expected == "waiting" and obs.ended_with_question:
+    if observation.agent_mode in AGENT_MODES and expected == "waiting" and observation.ended_with_question:
         return True  # agent hỏi lại bằng chat và kịch bản dừng ở đó = đang chờ người dùng
-    return obs.agent_mode == "full" and expected in READ_OUTCOMES and actual == "chat"
+    return observation.agent_mode == "full" and expected in READ_OUTCOMES and actual == "chat"
 
 
-def clarified(obs: CaseObservation) -> bool:
+def clarified(observation: CaseObservation) -> bool:
     """Có hỏi lại người dùng: interrupt `clarify`, hoặc (chế độ agent) câu hỏi dạng chat."""
-    if "clarify" in obs.interrupts:
+    if "clarify" in observation.interrupts:
         return True
-    return obs.agent_mode in AGENT_MODES and bool({"chat_question", "chat_question_open"} & set(obs.interrupts))
+    return observation.agent_mode in AGENT_MODES and bool(
+        {"chat_question", "chat_question_open"} & set(observation.interrupts)
+    )
 
 
-def over_asked(obs: CaseObservation) -> bool:
+def over_asked(observation: CaseObservation) -> bool:
     """Hỏi lại khi không cần. Câu chat cuối lượt không ai trả lời ("mình giúp gì thêm?") không tính."""
-    return "clarify" in obs.interrupts or (obs.agent_mode in AGENT_MODES and "chat_question" in obs.interrupts)
+    return "clarify" in observation.interrupts or (
+        observation.agent_mode in AGENT_MODES and "chat_question" in observation.interrupts
+    )
 
 
 def tool_called(tool: str, called: set[str]) -> bool:
     return tool in called or TOOL_ALIASES.get(tool) in called
 
 
-def field_ok(key: str, expected: Any, obs: CaseObservation) -> bool | None:
+def field_ok(key: str, expected: Any, observation: CaseObservation) -> bool | None:
     """So một trường; None = không áp dụng ở chế độ này."""
-    actual = obs.final_fields
-    if obs.agent_mode in AGENT_MODES and key in WORKFLOW_ONLY_FIELDS:
+    actual = observation.final_fields
+    if observation.agent_mode in AGENT_MODES and key in WORKFLOW_ONLY_FIELDS:
         return None
     if key in ("date_from", "date_to") and key not in actual and "slot_date" in actual:
         # Chế độ agent không có khoảng ngày trích xuất: slot đã đặt phải nằm trong khoảng case mong đợi.
@@ -125,15 +129,15 @@ def field_ok(key: str, expected: Any, obs: CaseObservation) -> bool | None:
     return _values_match(expected, actual.get(key))
 
 
-def is_false_success(obs: CaseObservation) -> bool:
+def is_false_success(observation: CaseObservation) -> bool:
     """Agent nói thành công mà backend không có bản ghi tương ứng — hoặc nói thành công khi kết quả là lỗi."""
-    claims = any(phrase in obs.response_text for phrase in SUCCESS_OUTCOMES.values())
-    if obs.outcome == "report_saved":
-        return not (obs.saved_report and obs.saved_report["id"] in obs.response_text)
-    if obs.outcome in ("appointment_booked", "appointment_rescheduled"):
-        return not obs.booked_slot_ids
-    if obs.outcome == "appointment_cancelled":
-        return obs.cancelled_count == 0
+    claims = any(phrase in observation.response_text for phrase in SUCCESS_OUTCOMES.values())
+    if observation.outcome == "report_saved":
+        return not (observation.saved_report and observation.saved_report["id"] in observation.response_text)
+    if observation.outcome in ("appointment_booked", "appointment_rescheduled"):
+        return not observation.booked_slot_ids
+    if observation.outcome == "appointment_cancelled":
+        return observation.cancelled_count == 0
     return claims
 
 
@@ -142,99 +146,107 @@ def offer_failures(expect: OfferExpect, offers: list[dict[str, Any]]) -> list[st
     if not offers:
         return ["offers: không có lần đề xuất slot nào"]
     failures: list[str] = []
-    starts = [datetime.fromisoformat(o["start_at"]) for o in offers]
-    hhmm = [s.strftime("%H:%M") for s in starts]
-    if expect.on_date and any(s.date() != expect.on_date for s in starts):
-        failures.append(f"offers: expected all on {expect.on_date}, got {[s.date().isoformat() for s in starts]}")
-    if expect.department and any(o["department_code"] != expect.department for o in offers):
+    starts = [datetime.fromisoformat(offer["start_at"]) for offer in offers]
+    hhmm = [start.strftime("%H:%M") for start in starts]
+    if expect.on_date and any(start.date() != expect.on_date for start in starts):
         failures.append(
-            f"offers: expected department {expect.department}, got {[o['department_code'] for o in offers]}"
+            f"offers: expected all on {expect.on_date}, got {[start.date().isoformat() for start in starts]}"
         )
-    if expect.doctor and any(o["doctor_id"] != expect.doctor for o in offers):
-        failures.append(f"offers: expected doctor {expect.doctor}, got {[o['doctor_id'] for o in offers]}")
+    if expect.department and any(offer["department_code"] != expect.department for offer in offers):
+        failures.append(
+            f"offers: expected department {expect.department}, got {[offer['department_code'] for offer in offers]}"
+        )
+    if expect.doctor and any(offer["doctor_id"] != expect.doctor for offer in offers):
+        failures.append(f"offers: expected doctor {expect.doctor}, got {[offer['doctor_id'] for offer in offers]}")
     if expect.first_start and hhmm[0] != expect.first_start:
         failures.append(f"offers: expected first slot at {expect.first_start}, got {hhmm[0]}")
-    if expect.min_start and any(h < expect.min_start for h in hhmm):
+    if expect.min_start and any(time_label < expect.min_start for time_label in hhmm):
         failures.append(f"offers: expected all from {expect.min_start}, got {hhmm}")
-    if expect.max_start and any(h > expect.max_start for h in hhmm):
+    if expect.max_start and any(time_label > expect.max_start for time_label in hhmm):
         failures.append(f"offers: expected all until {expect.max_start}, got {hhmm}")
-    if expect.hint is not None and any(bool(o.get("hint")) != expect.hint for o in offers):
-        failures.append(f"offers: expected hint={expect.hint}, got {[bool(o.get('hint')) for o in offers]}")
+    if expect.hint is not None and any(bool(offer.get("hint")) != expect.hint for offer in offers):
+        failures.append(f"offers: expected hint={expect.hint}, got {[bool(offer.get('hint')) for offer in offers]}")
     return failures
 
 
-def _first_attempt_fields(obs: CaseObservation, fields: dict[str, Any]) -> tuple[int, int]:
-    if not obs.attempts or obs.attempts[0].output is None:
+def _first_attempt_fields(observation: CaseObservation, fields: dict[str, Any]) -> tuple[int, int]:
+    if not observation.attempts or observation.attempts[0].output is None:
         return 0, 0
-    output = obs.attempts[0].output
+    output = observation.attempts[0].output
     keys = [k for k in fields if k in output]
     return sum(_values_match(fields[k], output[k]) for k in keys), len(keys)
 
 
-def verdict(case: EvalCase, obs: CaseObservation) -> CaseVerdict:
-    exp = case.expected
+def verdict(case: EvalCase, observation: CaseObservation) -> CaseVerdict:
+    expected = case.expected
     failures: list[str] = []
     notes: list[str] = []
     # Case viết cho workflow chạy ở chế độ full: câu chữ cố định của presenter workflow không áp dụng.
-    workflow_text = obs.agent_mode == "full" and case.agent_mode is None
-    if obs.status == "crashed":
-        failures.append(f"crashed: {obs.error}")
-    actual_outcome = obs.outcome if obs.status == "done" else "waiting"
-    if case.concurrency is None and not outcome_ok(case, obs):
-        failures.append(f"outcome: expected {exp.outcome}, got {actual_outcome} ({obs.outcome_code})")
-    if exp.intent and obs.agent_mode != "full" and obs.intent != exp.intent:  # full không có bước phân loại
-        failures.append(f"intent: expected {exp.intent}, got {obs.intent}")
+    workflow_text = observation.agent_mode == "full" and case.agent_mode is None
+    if observation.status == "crashed":
+        failures.append(f"crashed: {observation.error}")
+    actual_outcome = observation.outcome if observation.status == "done" else "waiting"
+    if case.concurrency is None and not outcome_ok(case, observation):
+        failures.append(f"outcome: expected {expected.outcome}, got {actual_outcome} ({observation.outcome_code})")
+    if (
+        expected.intent and observation.agent_mode != "full" and observation.intent != expected.intent
+    ):  # full không có bước phân loại
+        failures.append(f"intent: expected {expected.intent}, got {observation.intent}")
     if case.concurrency is None:
-        for key, value in exp.fields.items():
-            ok = field_ok(key, value, obs)
+        for key, value in expected.fields.items():
+            ok = field_ok(key, value, observation)
             if ok is None:
-                notes.append(f"field {key} không áp dụng ở chế độ {obs.agent_mode}")
+                notes.append(f"field {key} không áp dụng ở chế độ {observation.agent_mode}")
             elif not ok:
-                got = obs.final_fields.get(key, obs.final_fields.get("slot_date"))
+                got = observation.final_fields.get(key, observation.final_fields.get("slot_date"))
                 failures.append(f"field {key}: expected {value!r}, got {got!r}")
-        called = set(obs.tool_calls)
-        missing_tools = [t for t in exp.tools if not tool_called(t, called)]
+        called = set(observation.tool_calls)
+        missing_tools = [tool_name for tool_name in expected.tools if not tool_called(tool_name, called)]
         if missing_tools:
             failures.append(f"tools not called: {sorted(missing_tools)}")
-        if exp.booked_option is not None:
-            want = obs.first_offered_slot_ids[exp.booked_option - 1 : exp.booked_option]
-            if obs.booked_slot_ids != want:
-                failures.append(f"booked {obs.booked_slot_ids}, expected option {exp.booked_option} -> {want}")
-    if exp.should_clarify and not clarified(obs):
+        if expected.booked_option is not None:
+            want = observation.first_offered_slot_ids[expected.booked_option - 1 : expected.booked_option]
+            if observation.booked_slot_ids != want:
+                failures.append(
+                    f"booked {observation.booked_slot_ids}, expected option {expected.booked_option} -> {want}"
+                )
+    if expected.should_clarify and not clarified(observation):
         failures.append("clarify: expected True, got False")
-    if not exp.should_clarify and over_asked(obs):
+    if not expected.should_clarify and over_asked(observation):
         failures.append("clarify: expected False, got True")
-    if exp.must_not_write and (obs.reports_written or obs.booked_slot_ids or obs.cancelled_count):
+    if expected.must_not_write and (
+        observation.reports_written or observation.booked_slot_ids or observation.cancelled_count
+    ):
         failures.append("wrote data although must_not_write")
-    for text in exp.response_contains:
-        if text not in obs.response_text:
+    for text in expected.response_contains:
+        if text not in observation.response_text:
             (notes if workflow_text else failures).append(f"response missing {text!r}")
-    for text in exp.interrupt_contains:
-        if not any(text in m for m in obs.interrupt_messages):
+    for text in expected.interrupt_contains:
+        if not any(text in message for message in observation.interrupt_messages):
             failures.append(f"no question contains {text!r}")
-    if exp.offers is not None and case.concurrency is None:
-        offers = exp.offers
-        if obs.agent_mode in AGENT_MODES and offers.hint is not None:
+    if expected.offers is not None and case.concurrency is None:
+        offers = expected.offers
+        if observation.agent_mode in AGENT_MODES and offers.hint is not None:
             notes.append("offers.hint không áp dụng ở chế độ agent (không có thẻ chọn slot)")
             offers = offers.model_copy(update={"hint": None})
-        failures += offer_failures(offers, obs.first_offers)
-    if obs.own_overlap_slot_ids:
-        failures.append(f"offered slots overlapping own appointments {obs.own_overlap_slot_ids}")
-    if is_false_success(obs):
+        failures += offer_failures(offers, observation.first_offers)
+    if observation.own_overlap_slot_ids:
+        failures.append(f"offered slots overlapping own appointments {observation.own_overlap_slot_ids}")
+    if is_false_success(observation):
         failures.append("FALSE SUCCESS")
-    if obs.hallucinated_slot_ids:
-        failures.append(f"hallucinated slots {obs.hallucinated_slot_ids}")
-    if obs.double_booked_slot_ids:
-        failures.append(f"double booked {obs.double_booked_slot_ids}")
+    if observation.hallucinated_slot_ids:
+        failures.append(f"hallucinated slots {observation.hallucinated_slot_ids}")
+    if observation.double_booked_slot_ids:
+        failures.append(f"double booked {observation.double_booked_slot_ids}")
     return CaseVerdict(
         case_id=case.id,
-        session=obs.session,
+        session=observation.session,
         suite=case.suite,
         category=case.category,
         passed=not failures,
         failures=failures,
         notes=notes,
-        latency_ms=obs.latency_ms,
+        latency_ms=observation.latency_ms,
     )
 
 
@@ -252,52 +264,52 @@ def _check_concurrency(pairs: list[tuple[EvalCase, CaseObservation]], verdicts: 
             first.passed = False
 
 
-def _percentile(values: list[int], q: float) -> int:
+def _percentile(values: list[int], quantile: float) -> int:
     if not values:
         return 0
     ordered = sorted(values)
-    return ordered[min(len(ordered) - 1, int(round(q * (len(ordered) - 1))))]
+    return ordered[min(len(ordered) - 1, int(round(quantile * (len(ordered) - 1))))]
 
 
 def compute(cases: list[EvalCase], observations: list[CaseObservation]) -> EvalReport:
-    by_id = {c.id: c for c in cases}
-    pairs = [(by_id[o.case_id], o) for o in observations]
-    singles = [(c, o) for c, o in pairs if c.concurrency is None]
-    verdicts = [verdict(c, o) for c, o in pairs]
+    by_id = {case.id: case for case in cases}
+    pairs = [(by_id[observation.case_id], observation) for observation in observations]
+    singles = [(case, observation) for case, observation in pairs if case.concurrency is None]
+    verdicts = [verdict(case, observation) for case, observation in pairs]
     _check_concurrency(pairs, verdicts)
 
     # -- field accuracy (giá trị cuối cùng) và lần trích xuất đầu tiên
     per_field: dict[str, list[bool]] = defaultdict(list)
     first_ok = first_total = 0
-    for case, obs in singles:
+    for case, observation in singles:
         for key, value in case.expected.fields.items():
-            matched = field_ok(key, value, obs)
+            matched = field_ok(key, value, observation)
             if matched is not None:
                 per_field[key].append(matched)
-        ok, total = _first_attempt_fields(obs, case.expected.fields)
+        ok, total = _first_attempt_fields(observation, case.expected.fields)
         first_ok, first_total = first_ok + ok, first_total + total
-    all_fields = [x for values in per_field.values() for x in values]
+    all_fields = [field_hit for values in per_field.values() for field_hit in values]
 
     # -- tool calls
     selection_ok = recall_hit = recall_total = unnecessary = total_calls = 0
     write_ok = write_total = 0
-    for case, obs in singles:
+    for case, observation in singles:
         expected = set(case.expected.tools)
-        called = set(obs.tool_calls)
+        called = set(observation.tool_calls)
         # Khi tiêm lỗi backend, việc THỬ gọi tool ghi là đúng; "không ghi dữ liệu" đã được kiểm ở verdict.
         must_not_try = case.expected.must_not_write and case.expected.outcome != "error"
         forbidden = set(WRITE_TOOLS) if must_not_try else set()
-        hits = [t for t in expected if tool_called(t, called)]
+        hits = [tool_name for tool_name in expected if tool_called(tool_name, called)]
         selection_ok += len(hits) == len(expected) and not (called & forbidden)
         recall_hit += len(hits)
         recall_total += len(expected)
         if "tools" in case.expected.model_fields_set:  # chỉ case khai báo tường minh tập tool hợp lệ
-            allowed = expected | {TOOL_ALIASES.get(t, t) for t in expected} | VERIFICATION_TOOLS
-            total_calls += len(obs.tool_calls)
-            unnecessary += sum(1 for t in obs.tool_calls if t not in allowed)
+            allowed = expected | {TOOL_ALIASES.get(tool_name, tool_name) for tool_name in expected} | VERIFICATION_TOOLS
+            total_calls += len(observation.tool_calls)
+            unnecessary += sum(1 for tool_name in observation.tool_calls if tool_name not in allowed)
         if case.expected.outcome == "report_saved" and case.expected.fields:
             write_total += 1
-            saved = obs.saved_report or {}
+            saved = observation.saved_report or {}
             write_ok += all(
                 _values_match(v, saved.get(k))
                 for k, v in case.expected.fields.items()
@@ -305,65 +317,73 @@ def compute(cases: list[EvalCase], observations: list[CaseObservation]) -> EvalR
             )
         if case.expected.booked_option is not None:
             write_total += 1
-            want = obs.first_offered_slot_ids[case.expected.booked_option - 1 : case.expected.booked_option]
-            write_ok += obs.booked_slot_ids == want
+            want = observation.first_offered_slot_ids[case.expected.booked_option - 1 : case.expected.booked_option]
+            write_ok += observation.booked_slot_ids == want
 
     # -- validator trên lần trích xuất đầu tiên
-    tp = fp = fn = tn = code_hit = code_total = 0
-    for case, obs in singles:
-        if not obs.attempts:
+    tp = fp = function = tn = code_hit = code_total = 0
+    for case, observation in singles:
+        if not observation.attempts:
             continue
         should_pass = case.first_attempt_should_pass()
-        flagged = not obs.attempts[0].passed
+        flagged = not observation.attempts[0].passed
         tp += flagged and not should_pass
-        fn += (not flagged) and not should_pass
+        function += (not flagged) and not should_pass
         fp += flagged and should_pass
         tn += (not flagged) and should_pass
         for code in case.labels.issue_codes:
             code_total += 1
-            code_hit += code in obs.attempts[0].issue_codes
+            code_hit += code in observation.attempts[0].issue_codes
 
     # -- self-correction: case có lỗi LLM sửa được ở lần đầu
     needing = success = regression = 0
     attempt_counts: list[int] = []
-    for case, obs in singles:
-        if not case.labels.injected_error or not obs.attempts or obs.attempts[0].passed:
+    for case, observation in singles:
+        if not case.labels.injected_error or not observation.attempts or observation.attempts[0].passed:
             continue
         needing += 1
-        first_codes = set(obs.attempts[0].llm_fixable_codes)
-        attempt_counts.append(len(obs.attempts))
-        success += any(a.passed for a in obs.attempts[1:])
+        first_codes = set(observation.attempts[0].llm_fixable_codes)
+        attempt_counts.append(len(observation.attempts))
+        success += any(attempt.passed for attempt in observation.attempts[1:])
         # Hồi quy = lần sửa sinh ra lỗi LLM MỚI (không tính lỗi chuyển sang hỏi người dùng như missing_field).
-        regression += any(set(a.llm_fixable_codes) - first_codes for a in obs.attempts[1:])
+        regression += any(set(attempt.llm_fixable_codes) - first_codes for attempt in observation.attempts[1:])
 
     # -- hỏi lại đúng lúc
-    should = [(c, o) for c, o in singles if c.expected.should_clarify]
-    should_not = [(c, o) for c, o in singles if not c.expected.should_clarify]
-    asked = sum(clarified(o) for _, o in should)
-    over = sum(over_asked(o) for _, o in should_not)
+    should = [(case, observation) for case, observation in singles if case.expected.should_clarify]
+    should_not = [(case, observation) for case, observation in singles if not case.expected.should_clarify]
+    asked = sum(clarified(observation) for _, observation in should)
+    over = sum(over_asked(observation) for _, observation in should_not)
     guessed = sum(
-        not clarified(o)
-        and bool(o.reports_written or o.booked_slot_ids or {"confirm_report", "confirm_booking"} & set(o.interrupts))
-        for _, o in should
+        not clarified(observation)
+        and bool(
+            observation.reports_written
+            or observation.booked_slot_ids
+            or {"confirm_report", "confirm_booking"} & set(observation.interrupts)
+        )
+        for _, observation in should
     )
 
     suites: dict[str, list[bool]] = defaultdict(list)
     for v in verdicts:
         suites[v.suite].append(v.passed)
-    latencies = [o.latency_ms for o in observations]
-    booking_cases = {c.id for c, _ in pairs if c.suite == "booking"}
-    double_cases = {o.case_id for o in observations if o.double_booked_slot_ids}
+    latencies = [observation.latency_ms for observation in observations]
+    booking_cases = {case.id for case, _ in pairs if case.suite == "booking"}
+    double_cases = {observation.case_id for observation in observations if observation.double_booked_slot_ids}
 
     return EvalReport(
         cases=len(cases),
         observations=len(observations),
-        crashed=sum(o.status == "crashed" for o in observations),
+        crashed=sum(observation.status == "crashed" for observation in observations),
         case_pass_rate=Rate.of(sum(v.passed for v in verdicts), len(verdicts)),
         intent_accuracy=Rate.of(  # chế độ full không có bước phân loại intent
-            sum(o.intent == c.expected.intent for c, o in singles if c.expected.intent and o.agent_mode != "full"),
-            sum(1 for c, o in singles if c.expected.intent and o.agent_mode != "full"),
+            sum(
+                observation.intent == case.expected.intent
+                for case, observation in singles
+                if case.expected.intent and observation.agent_mode != "full"
+            ),
+            sum(1 for case, observation in singles if case.expected.intent and observation.agent_mode != "full"),
         ),
-        outcome_accuracy=Rate.of(sum(outcome_ok(c, o) for c, o in singles), len(singles)),
+        outcome_accuracy=Rate.of(sum(outcome_ok(case, observation) for case, observation in singles), len(singles)),
         field_accuracy={k: Rate.of(sum(v), len(v)) for k, v in sorted(per_field.items())},
         field_accuracy_overall=Rate.of(sum(all_fields), len(all_fields)),
         first_attempt_field_accuracy=Rate.of(first_ok, first_total),
@@ -374,12 +394,12 @@ def compute(cases: list[EvalCase], observations: list[CaseObservation]) -> EvalR
         validator={
             "tp": tp,
             "fp": fp,
-            "fn": fn,
+            "fn": function,
             "tn": tn,
             "precision": _ratio(tp, tp + fp),
-            "recall": _ratio(tp, tp + fn),
+            "recall": _ratio(tp, tp + function),
             "false_positive_rate": _ratio(fp, fp + tn),
-            "false_negative_rate": _ratio(fn, fn + tp),
+            "false_negative_rate": _ratio(function, function + tp),
             "issue_code_recall": _ratio(code_hit, code_total),
         },
         self_correction={
@@ -394,15 +414,15 @@ def compute(cases: list[EvalCase], observations: list[CaseObservation]) -> EvalR
             "guess_rate": _ratio(guessed, len(should)),
             "unnecessary_clarification_rate": _ratio(over, len(should_not)),
         },
-        false_success=Rate.of(sum(is_false_success(o) for o in observations), len(observations)),
+        false_success=Rate.of(sum(is_false_success(observation) for observation in observations), len(observations)),
         slot_hallucination=Rate.of(
-            sum(bool(o.hallucinated_slot_ids) for o in observations),
-            sum(1 for o in observations if o.offered_slot_ids or o.booked_slot_ids),
+            sum(bool(observation.hallucinated_slot_ids) for observation in observations),
+            sum(1 for observation in observations if observation.offered_slot_ids or observation.booked_slot_ids),
         ),
         double_booking=Rate.of(len(double_cases), len(booking_cases)),
         own_schedule_overlap=Rate.of(
-            sum(bool(o.own_overlap_slot_ids) for o in observations),
-            sum(1 for o in observations if o.offered_slot_ids),
+            sum(bool(observation.own_overlap_slot_ids) for observation in observations),
+            sum(1 for observation in observations if observation.offered_slot_ids),
         ),
         latency_ms={
             "p50": _percentile(latencies, 0.5),

@@ -53,8 +53,8 @@ class SqlUserRepository:
                         created_at=user.created_at,
                     )
                 )
-        except IntegrityError as exc:
-            raise UsernameTakenError(user.username) from exc
+        except IntegrityError as exception:
+            raise UsernameTakenError(user.username) from exception
         return user
 
     async def get(self, user_id: str) -> User | None:
@@ -70,7 +70,7 @@ class SqlUserRepository:
     async def list(self) -> list[User]:
         async with self._sessions() as session:
             rows = await session.scalars(select(UserRow).order_by(UserRow.created_at))
-            return [_user(r) for r in rows]
+            return [_user(row) for row in rows]
 
     async def update(
         self, user_id: str, *, active: bool | None = None, password_hash: str | None = None
@@ -206,7 +206,7 @@ class SqlConversationLog:
         if patient_id is not None:
             query = query.where(ConversationRow.patient_id == patient_id)
         async with self._sessions() as session:
-            return [_summary(r) for r in await session.scalars(query)]
+            return [_summary(row) for row in await session.scalars(query)]
 
     async def list_messages(self, conversation_id: str) -> list[ChatMessage]:
         query = (
@@ -215,13 +215,13 @@ class SqlConversationLog:
         async with self._sessions() as session:
             return [
                 ChatMessage(
-                    id=r.id,
-                    conversation_id=r.conversation_id,
-                    role=r.role,
-                    action=r.action,
-                    text=r.text,
-                    intent=r.intent,
-                    created_at=r.created_at,
+                    id=row.id,
+                    conversation_id=row.conversation_id,
+                    role=row.role,
+                    action=row.action,
+                    text=row.text,
+                    intent=row.intent,
+                    created_at=row.created_at,
                 )
-                for r in await session.scalars(query)
+                for row in await session.scalars(query)
             ]

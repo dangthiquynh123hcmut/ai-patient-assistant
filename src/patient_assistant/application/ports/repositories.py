@@ -29,7 +29,7 @@ class NewReport(BaseModel):
     idempotency_key: str
 
 
-class KnowledgeDoc(BaseModel):
+class KnowledgeDocument(BaseModel):
     doc_id: str
     title: str
     content: str
@@ -90,7 +90,7 @@ class AppointmentRepository(Protocol):
 
 
 class KnowledgeRepository(Protocol):
-    async def search(self, query: str, limit: int) -> list[KnowledgeDoc]: ...
+    async def search(self, query: str, limit: int) -> list[KnowledgeDocument]: ...
 
 
 class UsernameTakenError(Exception):

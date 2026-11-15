@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from patient_assistant.application.agent.deps import AgentDeps
+from patient_assistant.application.agent.dependencies import AgentDependencies
 from patient_assistant.application.agent.memory import is_reference, mentions_reference, resolve_reference
 from patient_assistant.application.agent.nodes.shared import (
     ask_user,
@@ -51,26 +51,28 @@ _ORDINAL_WORDS = ("cái", "số", "phương án", "lựa chọn", "option", "num
 
 
 class BookingNodes:
-    def __init__(self, deps: AgentDeps) -> None:
-        self.deps = deps
+    def __init__(self, dependencies: AgentDependencies) -> None:
+        self.dependencies = dependencies
 
     @property
     def _policy(self) -> BookingPolicy:
-        return self.deps.tools.booking_policy
+        return self.dependencies.tools.booking_policy
 
     async def _department_name(self, code: str | None) -> str | None:
-        departments, _ = await self.deps.tools.catalog()
-        dept = find_department(code, departments)
-        return dept.name if dept else None
+        departments, _ = await self.dependencies.tools.catalog()
+        department = find_department(code, departments)
+        return department.name if department else None
 
     # ------------------------------------------------------------------ trích xuất + validate
 
     async def _generate(self, state: AgentState, feedback: CorrectionFeedback | None) -> dict[str, Any]:
-        departments, doctors = await self.deps.tools.catalog()
+        departments, doctors = await self.dependencies.tools.catalog()
         try:
-            raw = await self.deps.llm.extract_booking(BookingPrompt(state.sources(), state.now, departments, feedback))
-        except LLMError as exc:
-            return {"outcome": Outcome(kind=OutcomeKind.ERROR, code=f"llm_{exc.code}")}
+            raw = await self.dependencies.llm.extract_booking(
+                BookingPrompt(state.sources(), state.now, departments, feedback)
+            )
+        except LLMError as exception:
+            return {"outcome": Outcome(kind=OutcomeKind.ERROR, code=f"llm_{exception.code}")}
         request, schema_issues = parse_booking(raw)
         from_plan = False
         tool_calls = state.tool_calls
@@ -111,7 +113,7 @@ class BookingNodes:
             and not referenced_unresolved
         ):
             # Khoa mặc định chỉ lấy từ kế hoạch theo dõi ở backend — code điền, không phải LLM (FR-09.11).
-            plan = await self.deps.tools.get_patient_plan(state.patient_id)
+            plan = await self.dependencies.tools.get_patient_plan(state.patient_id)
             tool_calls = tool_record(state, plan)
             if plan.ok:
                 request = request.model_copy(update={"department_code": plan.data["department_code"]})
@@ -139,22 +141,22 @@ class BookingNodes:
         return updates
 
     async def resolve_datetime(self, state: AgentState) -> dict[str, Any]:
-        req = state.booking_request
-        if req is None:
+        request = state.booking_request
+        if request is None:
             return {"resolved_window": None, "date_issues": []}
-        result = resolve(req.date_expression, req.time_expression, state.now, self._policy.day_parts)
+        result = resolve(request.date_expression, request.time_expression, state.now, self._policy.day_parts)
         return {"resolved_window": result.window, "date_issues": result.issues}
 
     async def validate(self, state: AgentState) -> dict[str, Any]:
-        req = state.booking_request
+        request = state.booking_request
         ref = state.memory_ref
-        doctor_id = ref.doctor_id if ref and req is not None and not req.doctor_name else None
-        if req is None:
+        doctor_id = ref.doctor_id if ref and request is not None and not request.doctor_name else None
+        if request is None:
             issues = state.issues
         else:
-            departments, doctors = await self.deps.tools.catalog()
+            departments, doctors = await self.dependencies.tools.catalog()
             issues = validate_booking(
-                req,
+                request,
                 DateResolution(state.resolved_window, state.date_issues),
                 BookingValidationContext(
                     sources=state.sources(),
@@ -167,24 +169,24 @@ class BookingNodes:
                     department_from_memory=state.department_from_memory,
                 ),
             )
-            if req.doctor_name and not issues:
-                doctor = find_doctor(req.doctor_name, req.department_code, doctors)
+            if request.doctor_name and not issues:
+                doctor = find_doctor(request.doctor_name, request.department_code, doctors)
                 doctor_id = doctor.id if doctor else None
         return {
             "issues": issues,
             "doctor_id": doctor_id,
-            "attempts": await record_attempt(self.deps, state, "booking", state.last_output, issues),
+            "attempts": await record_attempt(self.dependencies, state, "booking", state.last_output, issues),
         }
 
     # ------------------------------------------------------------------ slot
 
     async def search_slots(self, state: AgentState) -> dict[str, Any]:
-        req, window = state.booking_request, state.resolved_window
-        assert req is not None and req.department_code and window is not None
-        if state.search_rounds >= self.deps.limits.max_slot_search_rounds:
+        request, window = state.booking_request, state.resolved_window
+        assert request is not None and request.department_code and window is not None
+        if state.search_rounds >= self.dependencies.limits.max_slot_search_rounds:
             return {"outcome": Outcome(kind=OutcomeKind.HANDOFF, code="too_many_rounds")}
-        result = await self.deps.tools.get_available_slots(
-            state.patient_id, req.department_code, window, state.doctor_id, state.now
+        result = await self.dependencies.tools.get_available_slots(
+            state.patient_id, request.department_code, window, state.doctor_id, state.now
         )
         updates: dict[str, Any] = {
             "tool_calls": tool_record(state, result),
@@ -199,9 +201,11 @@ class BookingNodes:
         return updates
 
     async def alternatives(self, state: AgentState) -> dict[str, Any]:
-        req, window = state.booking_request, state.resolved_window
-        assert req is not None and req.department_code and window is not None
-        result = await self.deps.tools.get_alternative_slots(state.patient_id, req.department_code, window, state.now)
+        request, window = state.booking_request, state.resolved_window
+        assert request is not None and request.department_code and window is not None
+        result = await self.dependencies.tools.get_alternative_slots(
+            state.patient_id, request.department_code, window, state.now
+        )
         updates: dict[str, Any] = {"tool_calls": tool_record(state, result), "relaxed_search": True}
         if not result.ok:
             updates["outcome"] = tool_error_outcome(result, "tool_unavailable")
@@ -213,16 +217,18 @@ class BookingNodes:
 
     async def present_slots(self, state: AgentState) -> dict[str, Any]:
         # Danh sách slot mới (đã tìm lại) là câu hỏi mới; chỉ đếm khi hỏi lại đúng danh sách cũ.
-        question_key = "choose_slot:" + ",".join(o.slot.slot_id for o in state.offered_slots)
-        counters = next_ask(state, question_key, self.deps)
+        question_key = "choose_slot:" + ",".join(offer.slot.slot_id for offer in state.offered_slots)
+        counters = next_ask(state, question_key, self.dependencies)
         if counters is None:
             return {"outcome": Outcome(kind=OutcomeKind.HANDOFF, code="too_many_rounds")}
-        dept_name = await self._department_name(
+        department_name = await self._department_name(
             state.booking_request.department_code if state.booking_request else None
         )
-        departments, _ = await self.deps.tools.catalog()
-        options = with_same_day_hints(state.offered_slots, {d.code: d.name for d in departments})
-        message = slot_options_message(options, state.relaxed_search, dept_name)
+        departments, _ = await self.dependencies.tools.catalog()
+        options = with_same_day_hints(
+            state.offered_slots, {department.code: department.name for department in departments}
+        )
+        message = slot_options_message(options, state.relaxed_search, department_name)
         decision = ask_user(
             InterruptPayload(
                 kind="choose_slot",
@@ -237,7 +243,7 @@ class BookingNodes:
         elif decision.action == "other_time" or (
             decision.action == "reply" and _asks_other_time(decision.text or "", state)
         ):
-            if state.search_rounds >= self.deps.limits.max_slot_search_rounds:
+            if state.search_rounds >= self.dependencies.limits.max_slot_search_rounds:
                 updates["outcome"] = Outcome(kind=OutcomeKind.HANDOFF, code="too_many_rounds")
             else:
                 updates["decision"] = decision.model_copy(update={"action": "other_time"})
@@ -249,7 +255,7 @@ class BookingNodes:
         """Ghép lựa chọn với danh sách đã đưa ra. Kết quả luôn phải thuộc `offered_slots` (FR-09.4, FR-09.6)."""
         decision, options = state.decision, state.offered_slots
         assert decision is not None
-        offered = {o.option_no: o for o in options}
+        offered = {option.option_no: option for option in options}
         chosen: int | None = decision.option_no if decision.option_no in offered else None
         notice = None
         if chosen is None and decision.text:
@@ -259,7 +265,7 @@ class BookingNodes:
                 notice = f"Có nhiều lịch khớp ({', '.join(map(str, result.candidates))}), bạn chọn giúp mình số cụ thể."
             elif chosen is None:
                 try:
-                    guess = await self.deps.llm.choose_slot(decision.text, options)
+                    guess = await self.dependencies.llm.choose_slot(decision.text, options)
                 except LLMError:
                     guess = None
                 chosen = guess if guess in offered else None
@@ -270,25 +276,25 @@ class BookingNodes:
     # ------------------------------------------------------------------ xác nhận + ghi
 
     def _selected(self, state: AgentState) -> Slot | None:
-        return next((o.slot for o in state.offered_slots if o.slot.slot_id == state.selected_slot_id), None)
+        return next((offer.slot for offer in state.offered_slots if offer.slot.slot_id == state.selected_slot_id), None)
 
     async def present_booking(self, state: AgentState) -> dict[str, Any]:
-        slot, req = self._selected(state), state.booking_request
-        assert slot is not None and req is not None
-        counters = next_ask(state, f"confirm_booking:{slot.slot_id}", self.deps)
+        slot, request = self._selected(state), state.booking_request
+        assert slot is not None and request is not None
+        counters = next_ask(state, f"confirm_booking:{slot.slot_id}", self.dependencies)
         if counters is None:
             return {"outcome": Outcome(kind=OutcomeKind.HANDOFF, code="too_many_rounds")}
-        departments, _ = await self.deps.tools.catalog()
-        dept = find_department(req.department_code, departments)
-        message = booking_confirm_message(slot, dept.name if dept else None)
+        departments, _ = await self.dependencies.tools.catalog()
+        department = find_department(request.department_code, departments)
+        message = booking_confirm_message(slot, department.name if department else None)
         decision = ask_user(
             InterruptPayload(
                 kind="confirm_booking",
                 message=f"{state.notice} {message}" if state.notice else message,
                 explanations=booking_explanations(
-                    req,
+                    request,
                     state.resolved_window,
-                    dept,
+                    department,
                     state.department_from_plan,
                     slot,
                     memory_ref=state.memory_ref,
@@ -313,12 +319,14 @@ class BookingNodes:
 
     async def create_booking(self, state: AgentState) -> dict[str, Any]:
         slot = self._selected(state)
-        req = state.booking_request
+        request = state.booking_request
         # Chốt chặn: validate đạt, slot thuộc danh sách đã đưa ra, người dùng xác nhận rõ.
-        if slot is None or req is None or state.issues or confirmation_of(state) != ConfirmIntent.CONFIRM:
+        if slot is None or request is None or state.issues or confirmation_of(state) != ConfirmIntent.CONFIRM:
             return {"outcome": Outcome(kind=OutcomeKind.ERROR, code="guard_violation")}
         key = idempotency_key("booking", state.conversation_id, state.patient_id, slot.slot_id)
-        result = await self.deps.tools.create_appointment(state.patient_id, slot.slot_id, req.reason, key, state.now)
+        result = await self.dependencies.tools.create_appointment(
+            state.patient_id, slot.slot_id, request.reason, key, state.now
+        )
         return {"tool_calls": tool_record(state, result), "write_result": result.model_dump(mode="json")}
 
     async def verify_booking(self, state: AgentState) -> dict[str, Any]:
@@ -326,7 +334,7 @@ class BookingNodes:
         error = written.get("error") or {}
         if written.get("status") != "ok":
             if error.get("code") == ToolErrorCode.CONFLICT.value:
-                if state.conflict_retries >= self.deps.limits.max_conflict_retries:
+                if state.conflict_retries >= self.dependencies.limits.max_conflict_retries:
                     return {"outcome": Outcome(kind=OutcomeKind.HANDOFF, code="conflict")}
                 # Slot bị người khác đặt, trùng lịch của chính bệnh nhân hoặc đã quá sát giờ: giữ nguyên yêu cầu
                 # (khoa, ngày, giờ, lý do) và chỉ tìm lại slot — không hỏi lại từ đầu.
@@ -347,13 +355,13 @@ class BookingNodes:
                 )
             }
         appointment_id = (written.get("data") or {}).get("id")
-        back = await self.deps.tools.read_back_appointment(state.patient_id, appointment_id or "")
+        back = await self.dependencies.tools.read_back_appointment(state.patient_id, appointment_id or "")
         tool_calls = tool_record(state, back)
         expected = self._selected(state)
         if not back.ok or expected is None:
             return {"tool_calls": tool_calls, "outcome": Outcome(kind=OutcomeKind.ERROR, code="verify_failed")}
-        appt = Appointment.model_validate(back.data)
-        if appt.slot.slot_id != expected.slot_id or appt.slot.start_at != expected.start_at:
+        appointment = Appointment.model_validate(back.data)
+        if appointment.slot.slot_id != expected.slot_id or appointment.slot.start_at != expected.start_at:
             return {"tool_calls": tool_calls, "outcome": Outcome(kind=OutcomeKind.ERROR, code="verify_failed")}
         return {
             "tool_calls": tool_calls,
@@ -379,6 +387,6 @@ def _asks_other_time(text: str, state: AgentState) -> bool:
 
 def _numbered(slots: list[dict[str, Any]]) -> list[SlotOption]:
     return [
-        SlotOption(option_no=i, slot=Slot.model_validate(s), same_day=s.get("same_day_appointment"))
-        for i, s in enumerate(slots, start=1)
+        SlotOption(option_no=i, slot=Slot.model_validate(slot_data), same_day=slot_data.get("same_day_appointment"))
+        for i, slot_data in enumerate(slots, start=1)
     ]

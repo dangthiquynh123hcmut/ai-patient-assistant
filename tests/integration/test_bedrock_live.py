@@ -24,7 +24,9 @@ async def test_loose_report_is_understood_and_validated(bedrock_app) -> None:  #
     result = await bedrock_app.chat().send_message(
         "live-1", PATIENT, "báo cáo tuần này: gối đau chừng 4 trên 10, tập được ba buổi, đỡ hơn tuần trước"
     )
-    fields = {e.field: e.value for e in waiting(result, "confirm_report").interrupt.explanations}
+    fields = {
+        explanation.field: explanation.value for explanation in waiting(result, "confirm_report").interrupt.explanations
+    }
     assert (fields["pain_level"], fields["exercise_days"]) == (4, 3)
 
 

@@ -9,7 +9,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from patient_assistant.application.ports.repositories import KnowledgeDoc, NewReport, SlotTakenError
+from patient_assistant.application.ports.repositories import KnowledgeDocument, NewReport, SlotTakenError
 from patient_assistant.domain.booking.models import (
     Appointment,
     AppointmentStatus,
@@ -26,7 +26,7 @@ from patient_assistant.infrastructure.persistence.sql.models import (
     AppointmentRow,
     DepartmentRow,
     DoctorRow,
-    KnowledgeDocRow,
+    KnowledgeDocumentRow,
     PatientPlanRow,
     PatientRow,
     ReportRow,
@@ -45,7 +45,7 @@ def _report(row: ReportRow) -> Report:
         exercise_days=row.exercise_days,
         symptom_change=SymptomChange(row.symptom_change) if row.symptom_change else None,
         triggering_activity=row.triggering_activity,
-        evidence=[Evidence.model_validate(e) for e in row.evidence],
+        evidence=[Evidence.model_validate(evidence_item) for evidence_item in row.evidence],
         idempotency_key=row.idempotency_key,
         created_at=row.created_at,
     )
@@ -59,7 +59,7 @@ class SqlReportRepository:
         row = ReportRow(
             id=str(uuid.uuid4()),
             **report.model_dump(mode="json", exclude={"evidence"}),
-            evidence=[e.model_dump() for e in report.evidence],
+            evidence=[evidence_item.model_dump() for evidence_item in report.evidence],
         )
         async with self._sessions.begin() as session:
             session.add(row)
@@ -83,7 +83,7 @@ class SqlReportRepository:
                 .order_by(ReportRow.created_at.desc())
                 .limit(limit)
             )
-            return [_report(r) for r in rows]
+            return [_report(row) for row in rows]
 
 
 class SqlCatalogRepository:
@@ -93,12 +93,12 @@ class SqlCatalogRepository:
     async def list_departments(self) -> list[Department]:
         async with self._sessions() as session:
             rows = await session.scalars(select(DepartmentRow).order_by(DepartmentRow.code))
-            return [Department(code=r.code, name=r.name, aliases=tuple(r.aliases)) for r in rows]
+            return [Department(code=row.code, name=row.name, aliases=tuple(row.aliases)) for row in rows]
 
     async def list_doctors(self) -> list[Doctor]:
         async with self._sessions() as session:
             rows = await session.scalars(select(DoctorRow).order_by(DoctorRow.id))
-            return [Doctor(id=r.id, name=r.name, department_code=r.department_code) for r in rows]
+            return [Doctor(id=row.id, name=row.name, department_code=row.department_code) for row in rows]
 
 
 def _profile(row: PatientRow) -> PatientProfile:
@@ -117,7 +117,7 @@ class SqlPatientRepository:
     async def list_profiles(self) -> list[PatientProfile]:
         async with self._sessions() as session:
             rows = await session.scalars(select(PatientRow).order_by(PatientRow.id))
-            return [_profile(r) for r in rows]
+            return [_profile(row) for row in rows]
 
     async def add(self, profile: PatientProfile) -> None:
         async with self._sessions.begin() as session:
@@ -147,7 +147,7 @@ class SqlPlanRepository:
             )
 
 
-async def _slot(session: AsyncSession, row: SlotRow, tz: tzinfo) -> Slot:
+async def _slot(session: AsyncSession, row: SlotRow, timezone: tzinfo) -> Slot:
     """DB lưu UTC; trả về theo múi giờ hiển thị để nhãn slot đúng giờ địa phương."""
     doctor = await session.get(DoctorRow, row.doctor_id)
     return Slot(
@@ -155,15 +155,15 @@ async def _slot(session: AsyncSession, row: SlotRow, tz: tzinfo) -> Slot:
         department_code=row.department_code,
         doctor_id=row.doctor_id,
         doctor_name=doctor.name if doctor else row.doctor_id,
-        start_at=row.start_at.astimezone(tz),
-        end_at=row.end_at.astimezone(tz),
+        start_at=row.start_at.astimezone(timezone),
+        end_at=row.end_at.astimezone(timezone),
     )
 
 
 class SqlSlotRepository:
-    def __init__(self, sessions: Sessions, tz: tzinfo = UTC) -> None:
+    def __init__(self, sessions: Sessions, timezone: tzinfo = UTC) -> None:
         self._sessions = sessions
-        self._tz = tz
+        self._timezone = timezone
 
     async def find_available(
         self, department_code: str, start: datetime, end: datetime, doctor_id: str | None, limit: int
@@ -183,18 +183,18 @@ class SqlSlotRepository:
         if doctor_id:
             stmt = stmt.where(SlotRow.doctor_id == doctor_id)
         async with self._sessions() as session:
-            return [await _slot(session, r, self._tz) for r in await session.scalars(stmt)]
+            return [await _slot(session, row, self._timezone) for row in await session.scalars(stmt)]
 
     async def get(self, slot_id: str) -> Slot | None:
         async with self._sessions() as session:
             row = await session.get(SlotRow, slot_id)
-            return await _slot(session, row, self._tz) if row else None
+            return await _slot(session, row, self._timezone) if row else None
 
 
 class SqlAppointmentRepository:
-    def __init__(self, sessions: Sessions, tz: tzinfo = UTC) -> None:
+    def __init__(self, sessions: Sessions, timezone: tzinfo = UTC) -> None:
         self._sessions = sessions
-        self._tz = tz
+        self._timezone = timezone
 
     async def _to_domain(self, session: AsyncSession, row: AppointmentRow) -> Appointment:
         slot_row = await session.get(SlotRow, row.slot_id)
@@ -202,7 +202,7 @@ class SqlAppointmentRepository:
         return Appointment(
             id=row.id,
             patient_id=row.patient_id,
-            slot=await _slot(session, slot_row, self._tz),
+            slot=await _slot(session, slot_row, self._timezone),
             status=AppointmentStatus(row.status),
             reason=row.reason,
             idempotency_key=row.idempotency_key,
@@ -221,12 +221,12 @@ class SqlAppointmentRepository:
         try:
             async with self._sessions.begin() as session:
                 session.add(row)
-        except IntegrityError as exc:
+        except IntegrityError as exception:
             # Retry cùng khóa (lỗi mạng) -> trả bản đã có; còn lại là slot đã bị chiếm.
             existing = await self.get_by_idempotency_key(idempotency_key)
             if existing:
                 return existing
-            raise SlotTakenError(slot.slot_id) from exc
+            raise SlotTakenError(slot.slot_id) from exception
         async with self._sessions() as session:
             return await self._to_domain(session, row)
 
@@ -243,7 +243,7 @@ class SqlAppointmentRepository:
     async def list_for_patient(self, patient_id: str) -> list[Appointment]:
         async with self._sessions() as session:
             rows = await session.scalars(select(AppointmentRow).where(AppointmentRow.patient_id == patient_id))
-            return [await self._to_domain(session, r) for r in rows]
+            return [await self._to_domain(session, row) for row in rows]
 
     async def cancel(self, appointment_id: str) -> Appointment | None:
         async with self._sessions.begin() as session:
@@ -271,11 +271,11 @@ class SqlAppointmentRepository:
                 old.status = AppointmentStatus.CANCELLED.value
                 await session.flush()  # hủy trước để slot cũ (nếu trùng) không vướng index lịch hiệu lực
                 session.add(new)
-        except IntegrityError as exc:
+        except IntegrityError as exception:
             existing = await self.get_by_idempotency_key(idempotency_key)
             if existing:
                 return existing
-            raise SlotTakenError(slot.slot_id) from exc
+            raise SlotTakenError(slot.slot_id) from exception
         async with self._sessions() as session:
             return await self._to_domain(session, new)
 
@@ -286,12 +286,17 @@ class SqlKnowledgeRepository:
     def __init__(self, sessions: Sessions) -> None:
         self._sessions = sessions
 
-    async def search(self, query: str, limit: int) -> list[KnowledgeDoc]:
+    async def search(self, query: str, limit: int) -> list[KnowledgeDocument]:
         async with self._sessions() as session:
-            docs = [
-                KnowledgeDoc(doc_id=r.doc_id, title=r.title, content=r.content)
-                for r in await session.scalars(select(KnowledgeDocRow))
+            documents = [
+                KnowledgeDocument(doc_id=row.doc_id, title=row.title, content=row.content)
+                for row in await session.scalars(select(KnowledgeDocumentRow))
             ]
-        q = set(tokens(query))
-        scored = [(len(q & set(tokens(f"{d.title} {d.content}"))), d) for d in docs]
-        return [d for score, d in sorted(scored, key=lambda x: -x[0]) if score >= 2][:limit]
+        query_tokens = set(tokens(query))
+        scored = [
+            (len(query_tokens & set(tokens(f"{document.title} {document.content}"))), document)
+            for document in documents
+        ]
+        return [document for score, document in sorted(scored, key=lambda scored_item: -scored_item[0]) if score >= 2][
+            :limit
+        ]

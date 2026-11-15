@@ -33,27 +33,27 @@ async def current_user(
     return user
 
 
-U = Annotated[User, Depends(current_user)]
+AuthenticatedUser = Annotated[User, Depends(current_user)]
 
 
-def _patient(user: U) -> User:
+def _patient(user: AuthenticatedUser) -> User:
     if not user.can_chat:
         raise HTTPException(403, "Chức năng này chỉ dành cho tài khoản bệnh nhân")
     return user
 
 
-def _staff(user: U) -> User:
+def _staff(user: AuthenticatedUser) -> User:
     if not user.can_view_conversations:
         raise HTTPException(403, "Chức năng này chỉ dành cho nhân viên y tế")
     return user
 
 
-def _admin(user: U) -> User:
+def _admin(user: AuthenticatedUser) -> User:
     if not user.can_manage_users:
         raise HTTPException(403, "Chức năng này chỉ dành cho quản trị viên")
     return user
 
 
-P = Annotated[User, Depends(_patient)]
-S = Annotated[User, Depends(_staff)]
-A = Annotated[User, Depends(_admin)]
+PatientUser = Annotated[User, Depends(_patient)]
+StaffUser = Annotated[User, Depends(_staff)]
+AdminUser = Annotated[User, Depends(_admin)]

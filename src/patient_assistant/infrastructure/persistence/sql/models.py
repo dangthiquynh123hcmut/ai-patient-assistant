@@ -107,7 +107,7 @@ class ReportRow(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now)
 
 
-class KnowledgeDocRow(Base):
+class KnowledgeDocumentRow(Base):
     __tablename__ = "knowledge_docs"
     doc_id: Mapped[str] = mapped_column(String(32), primary_key=True)
     title: Mapped[str] = mapped_column(String(256))

@@ -79,7 +79,7 @@ class ConversationService:
         return await self._chat.pending_question(conversation_id)
 
     async def _add_result(self, conversation_id: str, result: TurnResult) -> None:
-        intent = next((s.details.get("intent") for s in result.steps if s.node == "classify"), None)
+        intent = next((step.details.get("intent") for step in result.steps if step.node == "classify"), None)
         if result.interrupt is not None:
             await self._add(conversation_id, "assistant", result.interrupt.kind, result.interrupt.message, intent)
         elif result.response is not None:

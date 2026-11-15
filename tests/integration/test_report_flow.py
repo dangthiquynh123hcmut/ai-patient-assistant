@@ -28,7 +28,7 @@ async def _history(app: Any) -> list[dict[str, Any]]:
 async def test_happy_path_requires_confirmation_then_saves(make_app: Any) -> None:
     app = await _good_app(make_app)
     first = waiting(await app.chat().send_message("t1", PATIENT, GOOD), "confirm_report")
-    fields = {e.field: e for e in first.interrupt.explanations}
+    fields = {explanation.field: explanation for explanation in first.interrupt.explanations}
     assert fields["pain_level"].value == 5 and fields["pain_level"].evidence == "Tuần này tôi đau mức 5 trên 10"
     assert fields["pain_level"].origin.value == "user_said"
     assert fields["reporting_period"].origin.value == "system_default"
@@ -49,7 +49,9 @@ async def test_missing_field_asks_user_then_continues(make_app: Any) -> None:
     confirm = waiting(
         await app.chat().resume("t2", PATIENT, UserDecision(action="reply", text="tập được 2 ngày")), "confirm_report"
     )
-    assert {e.field: e.value for e in confirm.interrupt.explanations}["exercise_days"] == 2
+    assert {explanation.field: explanation.value for explanation in confirm.interrupt.explanations}[
+        "exercise_days"
+    ] == 2
     done(await app.chat().resume("t2", PATIENT, UserDecision(action="reply", text="xác nhận")), "report_saved")
 
 
@@ -67,7 +69,7 @@ async def test_out_of_range_value_is_asked_not_silently_fixed(make_app: Any) -> 
     confirm = waiting(
         await app.chat().resume("t3", PATIENT, UserDecision(action="reply", text="à nhầm, đau mức 8")), "confirm_report"
     )
-    assert {e.field: e.value for e in confirm.interrupt.explanations}["pain_level"] == 8
+    assert {explanation.field: explanation.value for explanation in confirm.interrupt.explanations}["pain_level"] == 8
 
 
 def _wrong_then_right() -> list[dict[str, Any]]:
@@ -90,7 +92,9 @@ async def test_self_correction_fixes_llm_error_and_is_recorded(make_app: Any) ->
     llm = ScriptedLLM(reports=_wrong_then_right())
     app = await make_app(llm=llm)
     confirm = waiting(await app.chat().send_message("t4", PATIENT, GOOD), "confirm_report")
-    assert {e.field: e.value for e in confirm.interrupt.explanations}["exercise_days"] == 4
+    assert {explanation.field: explanation.value for explanation in confirm.interrupt.explanations}[
+        "exercise_days"
+    ] == 4
     # Lần sửa nhận đúng lỗi cụ thể từ validator (FR-06.1).
     feedback = llm.report_prompts[1].feedback
     assert feedback and [i.code for i in feedback.issues] == ["value_evidence_mismatch"]
@@ -98,7 +102,7 @@ async def test_self_correction_fixes_llm_error_and_is_recorded(make_app: Any) ->
     done(await app.chat().resume("t4", PATIENT, UserDecision(action="confirm")), "report_saved")
     snapshot = await app.chat()._graph.aget_state({"configurable": {"thread_id": "t4"}})
     attempts = snapshot.values["attempts"]
-    assert [(a.attempt_no, a.passed) for a in attempts] == [(0, False), (1, True)]
+    assert [(attempt.attempt_no, attempt.passed) for attempt in attempts] == [(0, False), (1, True)]
 
 
 async def test_correction_limit_hands_off_and_never_saves(make_app: Any) -> None:
@@ -180,7 +184,7 @@ async def test_safety_and_other_intents(make_app: Any) -> None:
     assert "Không có gì" in thanks.response.text
     unknown = waiting(await app.chat().send_message("t14", PATIENT, "abc xyz"), "clarify")
     assert "abc xyz" in unknown.interrupt.message  # hỏi lại có nhắc đúng câu người dùng
-    assert "Xem thông tin của tôi" in [c.label for c in unknown.interrupt.choices]
+    assert "Xem thông tin của tôi" in [choice.label for choice in unknown.interrupt.choices]
     done(await app.chat().resume("t14", PATIENT, UserDecision(action="reply", text="xem các báo cáo trước")), "history")
 
 

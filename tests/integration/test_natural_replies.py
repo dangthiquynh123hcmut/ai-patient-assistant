@@ -32,7 +32,7 @@ async def test_department_not_offered_is_named_and_user_asked_to_choose_again(ma
 
     # "t2" là thứ Hai.
     options = waiting(await app.chat().resume("n1", NO_PLAN, _reply("phục hồi chức năng t2")), "choose_slot")
-    assert all(o.slot.start_at.date() == date(2026, 11, 2) for o in options.interrupt.options)
+    assert all(option.slot.start_at.date() == date(2026, 11, 2) for option in options.interrupt.options)
 
 
 async def test_unknown_department_overrides_plan_default(make_app: Any) -> None:
@@ -106,7 +106,7 @@ async def test_partial_name_chosen_by_llm_passes_grounding(make_app: Any) -> Non
     options = waiting(
         await app.chat().send_message("n11", NO_PLAN, "đặt lịch khám nội tổng thứ ba tuần sau"), "choose_slot"
     )
-    assert {o.slot.department_code for o in options.interrupt.options} == {"NOI"}
+    assert {option.slot.department_code for option in options.interrupt.options} == {"NOI"}
     assert len(llm.booking_prompts) == 1  # không bị bắt sửa vì "nội tổng" không khớp nguyên văn tên khoa
 
 
@@ -116,4 +116,4 @@ async def test_name_matching_several_departments_asks_with_buttons(make_app: Any
     waiting(await app.chat().send_message("n12", NO_PLAN, "tôi muốn đặt lịch khám"), "clarify")
     ask = waiting(await app.chat().resume("n12", NO_PLAN, _reply("nội")), "clarify")
     assert "“nội” có thể là khoa Nội tổng quát hoặc Nội thần kinh" in ask.interrupt.message
-    assert [c.label for c in ask.interrupt.choices] == ["Nội tổng quát", "Nội thần kinh"]
+    assert [choice.label for choice in ask.interrupt.choices] == ["Nội tổng quát", "Nội thần kinh"]

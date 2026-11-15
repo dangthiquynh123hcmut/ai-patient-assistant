@@ -42,27 +42,27 @@ def parse_report(raw: dict[str, Any]) -> tuple[ReportExtraction | None, list[Val
     """Lớp 1 — schema. Chuyển lỗi pydantic thành issue có trường và gợi ý sửa."""
     try:
         return ReportExtraction.model_validate(raw), []
-    except ValidationError as exc:
+    except ValidationError as exception:
         return None, [
             ValidationIssue(
-                field=str(err["loc"][0]) if err["loc"] else None,
+                field=str(error["loc"][0]) if error["loc"] else None,
                 layer=Layer.SCHEMA,
                 code="invalid_schema",
-                message=err["msg"],
+                message=error["msg"],
                 suggestion="Trả đúng kiểu dữ liệu theo schema; dùng null nếu không có thông tin.",
                 resolution=Resolution.LLM_FIXABLE,
             )
-            for err in exc.errors()
+            for error in exception.errors()
         ]
 
 
-def _grounding_issues(draft: ReportExtraction, ctx: ReportValidationContext) -> list[ValidationIssue]:
+def _grounding_issues(draft: ReportExtraction, context: ReportValidationContext) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     for name in REPORT_FIELDS:
         value = getattr(draft, name)
         if value is None:
             continue
-        if name in ctx.edited_fields:
+        if name in context.edited_fields:
             # Người dùng sửa trực tiếp: không cần trích dẫn, nhưng vẫn phải đúng phạm vi.
             if name in NUMERIC_BOUNDS and (
                 out := range_issue(name, int(value), NUMERIC_BOUNDS[name], Resolution.ASK_USER)
@@ -82,7 +82,7 @@ def _grounding_issues(draft: ReportExtraction, ctx: ReportValidationContext) -> 
                 )
             )
             continue
-        if not quote_in_sources(quote, ctx.sources):
+        if not quote_in_sources(quote, context.sources):
             issues.append(
                 ValidationIssue(
                     field=name,
@@ -94,7 +94,7 @@ def _grounding_issues(draft: ReportExtraction, ctx: ReportValidationContext) -> 
                 )
             )
             continue
-        flags = overlapping_flags(quote, ctx.stt_flags)
+        flags = overlapping_flags(quote, context.stt_flags)
         if flags:
             issues.append(
                 ValidationIssue(
@@ -126,12 +126,12 @@ def _grounding_issues(draft: ReportExtraction, ctx: ReportValidationContext) -> 
     return issues
 
 
-def _consistency_issues(draft: ReportExtraction, ctx: ReportValidationContext) -> list[ValidationIssue]:
+def _consistency_issues(draft: ReportExtraction, context: ReportValidationContext) -> list[ValidationIssue]:
     """Lời nói gần nhất thắng: người dùng đính chính ở câu trả lời sau thì không coi là mâu thuẫn nữa."""
     issues: list[ValidationIssue] = []
-    latest = ctx.sources[-1] if ctx.sources else ""
+    latest = context.sources[-1] if context.sources else ""
     if (
-        "exercise_days" not in ctx.edited_fields
+        "exercise_days" not in context.edited_fields
         and mentions_no_exercise(latest)
         and (draft.exercise_days or mentions_positive_exercise(latest))
     ):
@@ -144,8 +144,8 @@ def _consistency_issues(draft: ReportExtraction, ctx: ReportValidationContext) -
                 resolution=Resolution.ASK_USER,
             )
         )
-    direction = latest_direction(ctx.sources)
-    if "symptom_change" not in ctx.edited_fields and draft.symptom_change is not None and direction:
+    direction = latest_direction(context.sources)
+    if "symptom_change" not in context.edited_fields and draft.symptom_change is not None and direction:
         worse = draft.symptom_change in (SymptomChange.WORSE, SymptomChange.WORSE_DURING_ACTIVITY)
         expected_worse = direction == "worse"
         if worse != expected_worse or (direction == "better" and draft.symptom_change != SymptomChange.BETTER):
@@ -160,7 +160,11 @@ def _consistency_issues(draft: ReportExtraction, ctx: ReportValidationContext) -
                     resolution=Resolution.LLM_FIXABLE,
                 )
             )
-    stale = [f for f in draft.missing_fields if f in REPORT_FIELDS and getattr(draft, f) is not None]
+    stale = [
+        field_name
+        for field_name in draft.missing_fields
+        if field_name in REPORT_FIELDS and getattr(draft, field_name) is not None
+    ]
     if stale:
         issues.append(
             ValidationIssue(
@@ -174,7 +178,7 @@ def _consistency_issues(draft: ReportExtraction, ctx: ReportValidationContext) -
     return issues
 
 
-def validate_report(draft: ReportExtraction, ctx: ReportValidationContext) -> list[ValidationIssue]:
+def validate_report(draft: ReportExtraction, context: ReportValidationContext) -> list[ValidationIssue]:
     """Lớp 2–4 (business, grounding, consistency). Lớp 1 là `parse_report`; lớp 6 ở `domain.safety`."""
     issues: list[ValidationIssue] = []
     for name in REQUIRED_FIELDS:
@@ -188,9 +192,9 @@ def validate_report(draft: ReportExtraction, ctx: ReportValidationContext) -> li
                     resolution=Resolution.ASK_USER,
                 )
             )
-    period = period_issue(draft.reporting_period, ctx.now)
+    period = period_issue(draft.reporting_period, context.now)
     if period:
         issues.append(period)
-    issues += _grounding_issues(draft, ctx)
-    issues += _consistency_issues(draft, ctx)
+    issues += _grounding_issues(draft, context)
+    issues += _consistency_issues(draft, context)
     return issues

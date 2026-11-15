@@ -17,30 +17,30 @@ def quote_in_sources(quote: str, sources: list[str], threshold: float = DEFAULT_
     Gần đúng = có một cửa sổ token trong nguồn, dài xấp xỉ quote, đạt tỉ lệ giống >= threshold.
     Cho phép sai khác nhỏ về dấu câu / chính tả mà vẫn chặn được trích dẫn bịa.
     """
-    q = normalize(quote)
-    if not q:
+    normalized_quote = normalize(quote)
+    if not normalized_quote:
         return False
-    q_tokens = q.split(" ")
+    q_tokens = normalized_quote.split(" ")
     for source in sources:
-        s = normalize(source)
-        if f" {q} " in f" {s} ":
+        normalized_source = normalize(source)
+        if f" {normalized_quote} " in f" {normalized_source} ":
             return True
-        s_tokens = s.split(" ")
-        n = len(q_tokens)
-        for size in (n - 1, n, n + 1):
+        s_tokens = normalized_source.split(" ")
+        token_count = len(q_tokens)
+        for size in (token_count - 1, token_count, token_count + 1):
             if size <= 0 or size > len(s_tokens):
                 continue
             for start in range(len(s_tokens) - size + 1):
                 window = " ".join(s_tokens[start : start + size])
                 # Gần đúng về chữ nhưng phải giữ nguyên các con số: "tập 5 ngày" không khớp "tập 4 ngày".
-                if SequenceMatcher(None, q, window).ratio() >= threshold and sorted(extract_numbers(q)) == sorted(
-                    extract_numbers(window)
-                ):
+                if SequenceMatcher(None, normalized_quote, window).ratio() >= threshold and sorted(
+                    extract_numbers(normalized_quote)
+                ) == sorted(extract_numbers(window)):
                     return True
     return False
 
 
 def overlapping_flags(quote: str, flags: list[SttFlag]) -> list[SttFlag]:
     """Các cờ STT có từ nằm trong trích dẫn — trường dùng trích dẫn này cần hỏi lại."""
-    q = f" {normalize(quote)} "
-    return [f for f in flags if f" {normalize(f.text)} " in q]
+    normalized_quote = f" {normalize(quote)} "
+    return [flag for flag in flags if f" {normalize(flag.text)} " in normalized_quote]

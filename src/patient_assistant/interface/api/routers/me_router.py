@@ -12,59 +12,58 @@ from patient_assistant.application.tools.toolbox import Toolbox
 from patient_assistant.config import Settings
 from patient_assistant.container import Container
 from patient_assistant.domain.account import ChatMessage, ConversationSummary
-from patient_assistant.interface.api.deps import P, U
+from patient_assistant.interface.api.dependencies import AuthenticatedUser, PatientUser
 
 router = APIRouter(prefix="/v1", tags=["me"])
 
-ToolboxDep = Annotated[Toolbox, Depends(Provide[Container.toolbox])]
-ClockDep = Annotated[Clock, Depends(Provide[Container.clock])]
-LogDep = Annotated[ConversationLogRepository, Depends(Provide[Container.log])]
+ToolboxDependency = Annotated[Toolbox, Depends(Provide[Container.toolbox])]
+ClockDependency = Annotated[Clock, Depends(Provide[Container.clock])]
+LogDependency = Annotated[ConversationLogRepository, Depends(Provide[Container.log])]
 
 
 @router.get("/meta")
 @inject
 async def meta(
-    user: U,
-    toolbox: ToolboxDep,
-    clock: ClockDep,
+    user: AuthenticatedUser,
+    toolbox: ToolboxDependency,
+    clock: ClockDependency,
     settings: Annotated[Settings, Depends(Provide[Container.settings])],
     auth: Annotated[AuthService, Depends(Provide[Container.auth])],
     patient_labels: Annotated[dict[str, str], Depends(Provide[Container.patient_labels])],
 ) -> dict[str, Any]:
     """Cấu hình đang chạy và dữ liệu giả lập — để UI hiển thị gợi ý."""
     departments, doctors = await toolbox.catalog()
-    s = settings
     return {
         "user": user.model_dump(mode="json"),
-        "llm_model": s.llm_model_id,
-        "stt_enabled": s.stt_enabled,
-        "stt_model": s.stt_model if s.stt_enabled else None,
-        "stt_language": s.stt_language,
+        "llm_model": settings.llm_model_id,
+        "stt_enabled": settings.stt_enabled,
+        "stt_model": settings.stt_model if settings.stt_enabled else None,
+        "stt_language": settings.stt_language,
         "now": clock.now().isoformat(),
         "patients": [
             {
-                "id": p.id,
-                "label": patient_labels.get(p.id, p.display_name),
-                "display_name": p.display_name,
-                "date_of_birth": p.date_of_birth.isoformat() if p.date_of_birth else None,
-                "phone": p.phone,
+                "id": patient.id,
+                "label": patient_labels.get(patient.id, patient.display_name),
+                "display_name": patient.display_name,
+                "date_of_birth": patient.date_of_birth.isoformat() if patient.date_of_birth else None,
+                "phone": patient.phone,
             }
-            for p in (await auth.list_patients() if user.can_view_conversations else [])
+            for patient in (await auth.list_patients() if user.can_view_conversations else [])
         ],
-        "departments": [d.model_dump() for d in departments],
-        "doctors": [d.model_dump() for d in doctors],
+        "departments": [department.model_dump() for department in departments],
+        "doctors": [doctor.model_dump() for doctor in doctors],
         "limits": {
-            "max_corrections": s.max_corrections,
-            "max_clarify_rounds": s.max_clarify_rounds,
-            "max_questions": s.max_questions,
-            "max_slot_search_rounds": s.max_slot_search_rounds,
+            "max_corrections": settings.max_corrections,
+            "max_clarify_rounds": settings.max_clarify_rounds,
+            "max_questions": settings.max_questions,
+            "max_slot_search_rounds": settings.max_slot_search_rounds,
         },
     }
 
 
 @router.get("/me/appointments")
 @inject
-async def my_appointments(toolbox: ToolboxDep, clock: ClockDep, user: P) -> Any:
+async def my_appointments(toolbox: ToolboxDependency, clock: ClockDependency, user: PatientUser) -> Any:
     assert user.patient_id
     result = await toolbox.list_my_appointments(user.patient_id, clock.now())
     if not result.ok:
@@ -74,7 +73,7 @@ async def my_appointments(toolbox: ToolboxDep, clock: ClockDep, user: P) -> Any:
 
 @router.get("/me/reports")
 @inject
-async def my_reports(toolbox: ToolboxDep, user: P) -> Any:
+async def my_reports(toolbox: ToolboxDependency, user: PatientUser) -> Any:
     assert user.patient_id
     result = await toolbox.get_report_history(user.patient_id, limit=20)
     if not result.ok:
@@ -84,13 +83,13 @@ async def my_reports(toolbox: ToolboxDep, user: P) -> Any:
 
 @router.get("/me/conversations")
 @inject
-async def my_conversations(log: LogDep, user: P) -> list[ConversationSummary]:
+async def my_conversations(log: LogDependency, user: PatientUser) -> list[ConversationSummary]:
     return await log.list_conversations(user.patient_id, 50)
 
 
 @router.get("/me/conversations/{conversation_id}")
 @inject
-async def my_conversation(conversation_id: str, log: LogDep, user: P) -> list[ChatMessage]:
+async def my_conversation(conversation_id: str, log: LogDependency, user: PatientUser) -> list[ChatMessage]:
     if await log.owner(conversation_id) != user.patient_id:
         raise HTTPException(404, "Không có hội thoại này")
     messages: list[ChatMessage] = await log.list_messages(conversation_id)

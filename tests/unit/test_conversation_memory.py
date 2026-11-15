@@ -16,8 +16,8 @@ from patient_assistant.application.agent.memory import (
 from patient_assistant.domain.booking.models import Department, Doctor
 from patient_assistant.domain.conversation import Intent
 
-TZ = ZoneInfo("Asia/Ho_Chi_Minh")
-DEPTS = [Department(code="PHCN", name="Phục hồi chức năng"), Department(code="TM", name="Tim mạch")]
+TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
+DEPARTMENTS = [Department(code="PHCN", name="Phục hồi chức năng"), Department(code="TM", name="Tim mạch")]
 DOCTORS = [
     Doctor(id="doc-an", name="BS. Trần Văn An", department_code="PHCN"),
     Doctor(id="doc-binh", name="BS. Lê Thị Bình", department_code="PHCN"),
@@ -25,20 +25,22 @@ DOCTORS = [
 ]
 
 
-def _booked(appt_id: str, dept: str, doctor: Doctor, hour: int = 9) -> TurnNote:
-    start = datetime(2026, 11, 3, hour, 0, tzinfo=TZ)
+def _booked(appointment_id: str, department: str, doctor: Doctor, hour: int = 9) -> TurnNote:
+    start = datetime(2026, 11, 3, hour, 0, tzinfo=TIMEZONE)
     data = {
-        "id": appt_id,
+        "id": appointment_id,
         "slot": {
             "slot_id": "s",
-            "department_code": dept,
+            "department_code": department,
             "doctor_id": doctor.id,
             "doctor_name": doctor.name,
             "start_at": start.isoformat(),
             "end_at": start.isoformat(),
         },
     }
-    return note_for_turn("đặt lịch", Intent.BOOK_APPOINTMENT, "appointment_booked", data, [appt_id], DEPTS, DOCTORS)
+    return note_for_turn(
+        "đặt lịch", Intent.BOOK_APPOINTMENT, "appointment_booked", data, [appointment_id], DEPARTMENTS, DOCTORS
+    )
 
 
 def test_booked_turn_is_summarised_from_backend_data() -> None:
@@ -51,7 +53,7 @@ def test_doctors_and_departments_mentioned_are_recognised() -> None:
     assert doctors_mentioned("bác sĩ An khám thứ mấy", DOCTORS) == ["doc-an"]
     assert doctors_mentioned("BS Trần Văn An", DOCTORS) == ["doc-an"]
     assert doctors_mentioned("bác sĩ nào cũng được", DOCTORS) == []
-    note = note_for_turn("khoa tim mạch có ai", None, "answer", None, [], DEPTS, DOCTORS)
+    note = note_for_turn("khoa tim mạch có ai", None, "answer", None, [], DEPARTMENTS, DOCTORS)
     assert note.department_codes == ["TM"]
 
 
@@ -68,16 +70,16 @@ def test_same_as_before_needs_exactly_one_distinct_booking() -> None:
 
 
 def test_doctor_reference_uses_most_recent_turn_naming_one_doctor() -> None:
-    asked = note_for_turn("bác sĩ Bình khám thứ mấy", None, "answer", None, [], DEPTS, DOCTORS)
+    asked = note_for_turn("bác sĩ Bình khám thứ mấy", None, "answer", None, [], DEPARTMENTS, DOCTORS)
     ref = resolve_reference("đặt với bác sĩ đó", [_booked("LH-1", "PHCN", DOCTORS[0]), asked], DOCTORS)
     assert ref and ref.doctor_id == "doc-binh" and ref.department_code == "PHCN"
 
-    both = note_for_turn("bác sĩ An hay bác sĩ Bình", None, "answer", None, [], DEPTS, DOCTORS)
+    both = note_for_turn("bác sĩ An hay bác sĩ Bình", None, "answer", None, [], DEPARTMENTS, DOCTORS)
     assert resolve_reference("đặt với bác sĩ đó", [both], DOCTORS) is None
 
 
 def test_department_reference_and_no_reference() -> None:
-    asked = note_for_turn("khoa tim mạch làm thứ bảy không", None, "answer", None, [], DEPTS, DOCTORS)
+    asked = note_for_turn("khoa tim mạch làm thứ bảy không", None, "answer", None, [], DEPARTMENTS, DOCTORS)
     ref = resolve_reference("vậy đặt khoa đó cho tôi", [asked], DOCTORS)
     assert ref and ref.department_code == "TM" and ref.doctor_id is None
     assert resolve_reference("đặt lịch thứ ba", [asked], DOCTORS) is None
@@ -100,5 +102,5 @@ def test_memory_is_bounded_and_rendered_oldest_first() -> None:
 
 
 def test_long_user_text_is_truncated() -> None:
-    note = note_for_turn("a" * 1000, None, "chat", None, [], DEPTS, DOCTORS)
+    note = note_for_turn("a" * 1000, None, "chat", None, [], DEPARTMENTS, DOCTORS)
     assert len(note.said) <= 200

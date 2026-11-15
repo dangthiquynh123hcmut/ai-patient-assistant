@@ -5,11 +5,11 @@ from zoneinfo import ZoneInfo
 
 
 class SystemClock:
-    def __init__(self, tz: str) -> None:
-        self._tz = ZoneInfo(tz)
+    def __init__(self, timezone: str) -> None:
+        self._timezone = ZoneInfo(timezone)
 
     def now(self) -> datetime:
-        return datetime.now(self._tz)
+        return datetime.now(self._timezone)
 
 
 class FixedClock:

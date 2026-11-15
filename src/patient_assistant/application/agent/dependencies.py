@@ -26,7 +26,7 @@ class AgentLimits:
 
 
 @dataclass(frozen=True)
-class AgentDeps:
+class AgentDependencies:
     """Mọi thứ node cần, tiêm từ composition root. Node không tự tạo client/repository."""
 
     llm: LLMPort

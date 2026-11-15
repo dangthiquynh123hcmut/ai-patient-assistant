@@ -75,12 +75,12 @@ def clarify_question(issues: list[ValidationIssue], departments: list[Department
         if issue.resolution != Resolution.ASK_USER:
             continue
         if issue.code == "missing_field" and issue.field == "department_code":
-            names = ", ".join(d.name for d in departments or [])
+            names = ", ".join(department.name for department in departments or [])
             line = f"Bạn muốn khám khoa nào? Các khoa hiện có: {names}."
         elif issue.code == "department_ambiguous":
             line = f"{issue.message} Bạn muốn khám khoa nào?"
         elif issue.code == "department_not_offered":
-            names = ", ".join(d.name for d in departments or [])
+            names = ", ".join(department.name for department in departments or [])
             line = f"{issue.message} Các khoa hiện có: {names}. Bạn cân nhắc chọn lại một khoa trong danh sách nhé."
         elif issue.code == "missing_field":
             line = _MISSING_QUESTIONS.get(
@@ -108,9 +108,12 @@ def clarify_question(issues: list[ValidationIssue], departments: list[Department
 def doctors_text(departments: list[Department], doctors: list[Doctor], only: Department | None = None) -> str:
     """Danh sách khoa và bác sĩ lấy từ danh mục ở backend — code soạn, không qua LLM nên không bịa tên."""
     lines = ["Bác sĩ của khoa " + only.name + ":" if only else "Các khoa và bác sĩ của phòng khám:"]
-    for dept in [only] if only else departments:
-        names = ", ".join(d.name for d in doctors if d.department_code == dept.code) or "chưa có bác sĩ"
-        lines.append(f"- {names}" if only else f"- {dept.name}: {names}")
+    for department in [only] if only else departments:
+        names = (
+            ", ".join(doctor.name for doctor in doctors if doctor.department_code == department.code)
+            or "chưa có bác sĩ"
+        )
+        lines.append(f"- {names}" if only else f"- {department.name}: {names}")
     lines.append("Bạn muốn đặt lịch với khoa hoặc bác sĩ nào thì cứ nhắn mình nhé.")
     return "\n".join(lines)
 
@@ -128,13 +131,17 @@ INTENT_CHOICES: dict[Intent, tuple[str, str]] = {
 
 def intent_choices(ranked: list[Intent]) -> list[Choice]:
     """Các intent đoán được xếp trước, rồi tới các lựa chọn còn lại."""
-    order = [*ranked, *(i for i in INTENT_CHOICES if i not in ranked)]
-    return [Choice(label=INTENT_CHOICES[i][0], text=INTENT_CHOICES[i][1]) for i in order if i in INTENT_CHOICES]
+    order = [*ranked, *(intent for intent in INTENT_CHOICES if intent not in ranked)]
+    return [
+        Choice(label=INTENT_CHOICES[intent][0], text=INTENT_CHOICES[intent][1])
+        for intent in order
+        if intent in INTENT_CHOICES
+    ]
 
 
 def intent_question(user_text: str, ranked: list[Intent]) -> str:
     if ranked:
-        guesses = " hoặc ".join(INTENT_LABELS[i] for i in ranked[:2])
+        guesses = " hoặc ".join(INTENT_LABELS[intent] for intent in ranked[:2])
         return (
             f"Mình chưa chắc ý bạn trong câu “{user_text}”. Có phải bạn muốn {guesses}? "
             "Bấm một lựa chọn bên dưới, hoặc nói rõ hơn — ví dụ hỏi về bài tập, chăm sóc sau tập."
@@ -184,7 +191,7 @@ def report_explanations(
     out: list[FieldExplanation] = []
     for name in REPORT_FIELDS:
         value: Any = getattr(draft, name)
-        field_issues = [i for i in issues if i.field == name]
+        field_issues = [issue for issue in issues if issue.field == name]
         quote = None if name in edited else evidence_for(draft.evidence, name)  # giá trị sửa tay không còn trích dẫn
         origin = Origin.USER_EDIT if name in edited else Origin.USER_SAID
         if name == "reporting_period" and value is None:
@@ -253,12 +260,12 @@ def _plain(value: Any) -> Any:
 
 
 def describe_window_rules(window: DateWindow) -> str:
-    parts = [_DATE_RULES[r] for r in window.rules if r in _DATE_RULES]
+    parts = [_DATE_RULES[rule] for rule in window.rules if rule in _DATE_RULES]
     return "Quy đổi theo luật: " + ", ".join(parts) + "." if parts else ""
 
 
 def booking_explanations(
-    req: BookingRequest,
+    request: BookingRequest,
     window: DateWindow | None,
     department: Department | None,
     from_plan: bool,
@@ -267,25 +274,29 @@ def booking_explanations(
     department_from_memory: bool = False,
 ) -> list[FieldExplanation]:
     if department_from_memory and memory_ref:
-        dept_origin, dept_evidence, dept_why = Origin.BACKEND, memory_ref.phrase, memory_ref.explanation
+        department_origin, department_evidence, department_why = (
+            Origin.BACKEND,
+            memory_ref.phrase,
+            memory_ref.explanation,
+        )
     elif from_plan:
-        dept_origin, dept_evidence = Origin.BACKEND, None
-        dept_why = "Bạn không nêu khoa; lấy theo kế hoạch theo dõi hiện tại của bạn."
+        department_origin, department_evidence = Origin.BACKEND, None
+        department_why = "Bạn không nêu khoa; lấy theo kế hoạch theo dõi hiện tại của bạn."
     else:
-        dept_origin, dept_evidence = Origin.USER_SAID, department.name if department else None
-        dept_why = "Khoa do bạn nêu, có trong danh mục."
+        department_origin, department_evidence = Origin.USER_SAID, department.name if department else None
+        department_why = "Khoa do bạn nêu, có trong danh mục."
     out = [
         FieldExplanation(
             field="department_code",
             label=LABELS["department_code"],
-            value=department.name if department else req.department_code,
-            evidence=dept_evidence,
-            origin=dept_origin,
+            value=department.name if department else request.department_code,
+            evidence=department_evidence,
+            origin=department_origin,
             validation="passed",
-            explanation=dept_why,
+            explanation=department_why,
         )
     ]
-    if memory_ref and memory_ref.doctor_id and not req.doctor_name:
+    if memory_ref and memory_ref.doctor_id and not request.doctor_name:
         out.append(
             FieldExplanation(
                 field="doctor_name",
@@ -303,7 +314,7 @@ def booking_explanations(
                 field="date_expression",
                 label=LABELS["date_expression"],
                 value=window.describe(),
-                evidence=" ".join(x for x in (req.date_expression, req.time_expression) if x) or None,
+                evidence=" ".join(text for text in (request.date_expression, request.time_expression) if text) or None,
                 origin=Origin.USER_SAID,
                 validation="passed",
                 explanation=describe_window_rules(window),
@@ -321,13 +332,13 @@ def booking_explanations(
                 explanation=f"Slot do hệ thống lịch trả về (mã {slot.slot_id}); bạn đã chọn slot này.",
             )
         )
-    if req.reason:
+    if request.reason:
         out.append(
             FieldExplanation(
                 field="reason",
                 label=LABELS["reason"],
-                value=req.reason,
-                evidence=req.reason,
+                value=request.reason,
+                evidence=request.reason,
                 origin=Origin.USER_SAID,
                 validation="passed",
                 explanation="Ghi chú nguyên văn, không dùng để chẩn đoán.",
@@ -339,13 +350,16 @@ def booking_explanations(
 def with_same_day_hints(options: list[SlotOption], department_names: dict[str, str]) -> list[SlotOption]:
     """Gắn câu gợi ý cho slot cùng ngày với lịch đã có. Căn cứ là lịch hẹn backend trả về, không do LLM suy ra."""
     out = []
-    for o in options:
-        if o.same_day is None:
-            out.append(o)
+    for option in options:
+        if option.same_day is None:
+            out.append(option)
             continue
-        dept = department_names.get(o.same_day.department_code, o.same_day.department_code)
-        hint = f"cùng ngày với lịch khám {dept} lúc {o.same_day.start_at:%H:%M} của bạn — đi một lần khám được cả hai"
-        out.append(o.model_copy(update={"hint": hint}))
+        department = department_names.get(option.same_day.department_code, option.same_day.department_code)
+        hint = (
+            f"cùng ngày với lịch khám {department} lúc {option.same_day.start_at:%H:%M} của bạn"
+            " — đi một lần khám được cả hai"
+        )
+        out.append(option.model_copy(update={"hint": hint}))
     return out
 
 
@@ -357,7 +371,9 @@ def slot_options_message(options: list[SlotOption], relaxed: bool, department_na
         else "Các lịch còn trống:"
     )
     lines = [
-        f"{o.option_no}. {o.slot.label(department_name)}" + (f" (gợi ý: {o.hint})" if o.hint else "") for o in options
+        f"{option.option_no}. {option.slot.label(department_name)}"
+        + (f" (gợi ý: {option.hint})" if option.hint else "")
+        for option in options
     ]
     tail = "Bạn chọn số mấy? Bạn cũng có thể nói “giờ khác” hoặc “hủy”."
     return "\n".join([head, *lines, tail])
@@ -433,8 +449,9 @@ def final_text(outcome: Outcome, safety: SafetyKind, pending: list[Intent]) -> s
         text = (
             "Các báo cáo gần đây:\n"
             + "\n".join(
-                f"- {r['reporting_period']}: đau {r['pain_level']}/10, tập {r['exercise_days']} ngày (mã {r['id']})"
-                for r in data
+                f"- {report['reporting_period']}: đau {report['pain_level']}/10, "
+                f"tập {report['exercise_days']} ngày (mã {report['id']})"
+                for report in data
             )
             if data
             else "Bạn chưa có báo cáo nào."
@@ -442,7 +459,9 @@ def final_text(outcome: Outcome, safety: SafetyKind, pending: list[Intent]) -> s
     elif kind == OutcomeKind.APPOINTMENTS:
         text = (
             "Lịch hẹn sắp tới:\n"
-            + "\n".join(f"- {Slot.model_validate(a['slot']).label()} (mã {a['id']})" for a in data)
+            + "\n".join(
+                f"- {Slot.model_validate(appointment['slot']).label()} (mã {appointment['id']})" for appointment in data
+            )
             if data
             else "Bạn chưa có lịch hẹn nào sắp tới."
         )
@@ -464,7 +483,7 @@ def final_text(outcome: Outcome, safety: SafetyKind, pending: list[Intent]) -> s
     else:
         text = _error_text(outcome)
     if pending:
-        todo = ", ".join(INTENT_LABELS.get(i, i.value) for i in pending)
+        todo = ", ".join(INTENT_LABELS.get(intent, intent.value) for intent in pending)
         text += f"\n\nBạn cũng nhắc tới việc {todo} — nhắn tiếp để mình làm nhé."
     return text
 
@@ -476,7 +495,7 @@ def pain_trend(reports: list[dict[str, Any]]) -> str | None:
     """Mô tả xu hướng mức đau từ các báo cáo (cũ -> mới). Chỉ mô tả số liệu, không diễn giải y khoa."""
     if len(reports) < 2:
         return None
-    ordered = sorted(reports, key=lambda r: r["reporting_period"])
+    ordered = sorted(reports, key=lambda report: report["reporting_period"])
     first, last = ordered[0]["pain_level"], ordered[-1]["pain_level"]
     direction = "down" if last < first else "up" if last > first else "flat"
     return (
@@ -507,7 +526,7 @@ def patient_info_text(data: dict[str, Any], own_only: bool = False) -> str:
         lines.append("- Chưa có kế hoạch theo dõi.")
     reports = data.get("recent_reports") or []
     if reports:
-        latest = max(reports, key=lambda r: r["reporting_period"])
+        latest = max(reports, key=lambda report: report["reporting_period"])
         lines.append(
             f"- Báo cáo gần nhất {latest['reporting_period']}: đau {latest['pain_level']}/10, "
             f"tập {latest['exercise_days']} ngày."
@@ -521,7 +540,10 @@ def patient_info_text(data: dict[str, Any], own_only: bool = False) -> str:
     if upcoming:
         lines.append(
             "- Lịch hẹn sắp tới: "
-            + "; ".join(f"{Slot.model_validate(a['slot']).label()} (mã {a['id']})" for a in upcoming)
+            + "; ".join(
+                f"{Slot.model_validate(appointment['slot']).label()} (mã {appointment['id']})"
+                for appointment in upcoming
+            )
         )
     else:
         lines.append("- Chưa có lịch hẹn sắp tới.")
@@ -529,5 +551,5 @@ def patient_info_text(data: dict[str, Any], own_only: bool = False) -> str:
     return "\n".join(lines)
 
 
-def weekday_name(dt: datetime) -> str:
-    return WEEKDAY_NAMES[dt.weekday()]
+def weekday_name(date_time: datetime) -> str:
+    return WEEKDAY_NAMES[date_time.weekday()]

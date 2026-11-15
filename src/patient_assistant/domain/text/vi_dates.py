@@ -96,26 +96,26 @@ def expand_weekday_abbrev(text: str) -> str:
 
 
 def _weekday_mentioned(text: str) -> int | None:
-    m = _WEEKDAY_PATTERN.search(text)
-    if not m:
+    match = _WEEKDAY_PATTERN.search(text)
+    if not match:
         return None
-    return int(m.group(1)) - 2 if m.group(1) else 6
+    return int(match.group(1)) - 2 if match.group(1) else 6
 
 
 def _explicit_date(text: str, today: date) -> tuple[date | None, ValidationIssue | None]:
     for pattern in (_DMY_WORDS, _DMY_SLASH):
-        m = pattern.search(text)
-        if m:
-            day, month = int(m.group(1)), int(m.group(2))
-            year = int(m.group(3)) if m.group(3) else today.year
+        match = pattern.search(text)
+        if match:
+            day, month = int(match.group(1)), int(match.group(2))
+            year = int(match.group(3)) if match.group(3) else today.year
             try:
                 return date(year, month, day), None
             except ValueError:
                 return None, _issue("date_expression", "invalid_date", f"Ngày {day}/{month} không tồn tại.")
-    m = _DAY_ONLY.search(text)
-    if m:
+    match = _DAY_ONLY.search(text)
+    if match:
         try:
-            return today.replace(day=int(m.group(1))), None
+            return today.replace(day=int(match.group(1))), None
         except ValueError:
             return None, _issue("date_expression", "invalid_date", "Ngày được nêu không tồn tại trong tháng này.")
     return None, None
@@ -138,9 +138,9 @@ def _resolve_date(raw: str, today: date) -> tuple[DateWindow | None, list[Valida
     # Bỏ cụm tương đối đã nhận trước khi đổi chữ số: "ngày mốt" không được đọc thành "ngày 1".
     text = digitize(f" {norm} ".replace(f" {hit} ", " ") if relative and hit else norm)
     weekday = _weekday_mentioned(text)
-    explicit, err = _explicit_date(text, today)
-    if err:
-        return None, [err]
+    explicit, error = _explicit_date(text, today)
+    if error:
+        return None, [error]
 
     if explicit:
         if weekday is not None and explicit.weekday() != weekday:
@@ -216,17 +216,17 @@ def _resolve_time(raw: str, parts: DayParts) -> tuple[tuple[time, time] | None, 
 
     hour: int | None = None
     minute = 0
-    m = _CLOCK.search(text)
-    if m:
-        hour, minute = int(m.group(1)), int(m.group(2))
+    match = _CLOCK.search(text)
+    if match:
+        hour, minute = int(match.group(1)), int(match.group(2))
     else:
-        m = _HOUR_MIN.search(text)
-        if m:
-            hour = int(m.group(1))
-            if m.group(2) == "rưỡi":
+        match = _HOUR_MIN.search(text)
+        if match:
+            hour = int(match.group(1))
+            if match.group(2) == "rưỡi":
                 minute = 30
-            elif m.group(2):
-                minute = int(m.group(2))
+            elif match.group(2):
+                minute = int(match.group(2))
 
     if hour is None:
         if part == "morning":

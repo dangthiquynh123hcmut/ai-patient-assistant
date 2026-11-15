@@ -29,7 +29,7 @@ from patient_assistant.application.ports.llm import (
     LLMError,
     LLMPort,
     ReportPrompt,
-    ToolSpec,
+    ToolSpecification,
 )
 from patient_assistant.application.use_cases.chat import TurnResult
 from patient_assistant.config import Settings
@@ -114,7 +114,7 @@ class ScriptedLLM:
         return await self._inner.choose_slot(reply, options)
 
     async def answer_question(
-        self, question: str, tools: list[ToolSpec], max_tool_calls: int, memory: str | None = None
+        self, question: str, tools: list[ToolSpecification], max_tool_calls: int, memory: str | None = None
     ) -> GroundedAnswer:
         return await self._inner.answer_question(question, tools, max_tool_calls, memory)
 
@@ -126,24 +126,26 @@ class ScriptedLLM:
         task: Literal["booking", "assistant"],
         context: str,
         history: list[AgentMessage],
-        tools: list[ToolSpec],
+        tools: list[ToolSpecification],
         max_tool_calls: int,
     ) -> AgentReply:
-        return await self._inner.run_agent(task, context, history, [self._inject(t) for t in tools], max_tool_calls)
+        return await self._inner.run_agent(
+            task, context, history, [self._inject(tool) for tool in tools], max_tool_calls
+        )
 
-    def _inject(self, spec: ToolSpec) -> ToolSpec:
+    def _inject(self, specification: ToolSpecification) -> ToolSpecification:
         """Chế độ agent không gọi `extract_report`: lỗi tiêm sẵn thay vào tham số LLM gửi cho `propose_report`.
         Tham số sai kiểu (vd. pain_level="năm") làm handler ném ValidationError -> agent nhận lỗi tool như thật."""
-        if spec.name != "propose_report":
-            return spec
-        original = spec.handler
+        if specification.name != "propose_report":
+            return specification
+        original = specification.handler
 
-        async def handler(inp: BaseModel) -> dict[str, Any]:
+        async def handler(input_data: BaseModel) -> dict[str, Any]:
             if self._reports:
-                inp = spec.input_model.model_validate(self._reports.pop(0))
-            return await original(inp)
+                input_data = specification.input_model.model_validate(self._reports.pop(0))
+            return await original(input_data)
 
-        return replace(spec, handler=handler)
+        return replace(specification, handler=handler)
 
 
 class UnavailableLLM:
@@ -160,41 +162,45 @@ async def _raise_unavailable(*_: Any, **__: Any) -> Any:
 # ---------------------------------------------------------------- chạy case
 
 
-async def _prebook(repos: dict[str, Any], spec: dict[str, str], now: datetime) -> None:
+async def _prebook(repositories: dict[str, Any], specification: dict[str, str], now: datetime) -> None:
     """Chiếm trước mọi slot của một khoa trong một ngày (tới giờ `until`) để buộc agent nới điều kiện."""
-    day = datetime.fromisoformat(spec["date"]).date()
-    until = dtime.fromisoformat(spec.get("until", "23:59"))
+    day = datetime.fromisoformat(specification["date"]).date()
+    until = dtime.fromisoformat(specification.get("until", "23:59"))
     start = datetime.combine(day, dtime(0, 0), now.tzinfo)
     end = datetime.combine(day, until, now.tzinfo)
-    for i, slot in enumerate(await repos["slots"].find_available(spec["department"], start, end, None, 1000)):
-        await repos["appointments"].book("prebook-patient", slot, None, f"prebook-{i}")
+    for i, slot in enumerate(
+        await repositories["slots"].find_available(specification["department"], start, end, None, 1000)
+    ):
+        await repositories["appointments"].book("prebook-patient", slot, None, f"prebook-{i}")
 
 
-async def _setup_appointments(repos: dict[str, Any], case: EvalCase) -> None:
+async def _setup_appointments(repositories: dict[str, Any], case: EvalCase) -> None:
     for i, slot_id in enumerate(case.setup.appointments):
-        slot = await repos["slots"].get(slot_id)
+        slot = await repositories["slots"].get(slot_id)
         if slot is None:
             raise ValueError(f"{case.id}: setup.appointments có slot không tồn tại: {slot_id}")
-        await repos["appointments"].book(case.patient_id, slot, None, f"setup-{case.id}-{i}")
+        await repositories["appointments"].book(case.patient_id, slot, None, f"setup-{case.id}-{i}")
 
 
-async def _book_own_clash(container: Container, repos: dict[str, Any], patient: str, slot_id: str, key: str) -> None:
+async def _book_own_clash(
+    container: Container, repositories: dict[str, Any], patient: str, slot_id: str, key: str
+) -> None:
     """Bệnh nhân tự đặt một lịch khoa khác cùng giờ với slot đang chờ xác nhận (giả lập tab khác)."""
-    chosen = await repos["slots"].get(slot_id)
+    chosen = await repositories["slots"].get(slot_id)
     if chosen is None:
         return
     departments, _ = await container.toolbox().catalog()
-    for dept in departments:
-        if dept.code == chosen.department_code:
+    for department in departments:
+        if department.code == chosen.department_code:
             continue
-        found = await repos["slots"].find_available(dept.code, chosen.start_at, chosen.start_at, None, 1)
+        found = await repositories["slots"].find_available(department.code, chosen.start_at, chosen.start_at, None, 1)
         if found:
-            await repos["appointments"].book(patient, found[0], None, key)
+            await repositories["appointments"].book(patient, found[0], None, key)
             return
 
 
 def _overlaps(slot: Slot, others: list[Slot]) -> bool:
-    return any(o.start_at < slot.end_at and slot.start_at < o.end_at for o in others)
+    return any(other.start_at < slot.end_at and slot.start_at < other.end_at for other in others)
 
 
 class _Db:
@@ -251,7 +257,9 @@ def _fields(state: AgentState) -> dict[str, Any]:
             out |= state.resolved_window.model_dump(mode="json", exclude={"rules"})
         # Chế độ agent không có khoa/khoảng ngày trích xuất: lấy từ slot đã xác nhận (metric so slot_date với
         # date_from/date_to của case).
-        chosen = next((o.slot for o in state.offered_slots if o.slot.slot_id == state.selected_slot_id), None)
+        chosen = next(
+            (option.slot for option in state.offered_slots if option.slot.slot_id == state.selected_slot_id), None
+        )
         if chosen is not None and state.resolved_window is None:
             out["department_code"] = out["department_code"] or chosen.department_code
             out["slot_date"] = chosen.start_at.astimezone(state.now.tzinfo).date().isoformat()
@@ -292,38 +300,38 @@ class CaseRunner:
         async with AsyncExitStack() as stack:
             storage = await open_storage(stack, settings, clock, schema=schema, with_history=False)
             await seed_demo_users(storage.sessions, settings.seed_password, case.now)
-            repos = storage.repos
+            repositories = storage.repositories
             if case.faults.save_unavailable:
-                repos["reports"].add = _raise_unavailable
+                repositories["reports"].add = _raise_unavailable
             if case.faults.booking_unavailable:
-                repos["appointments"].book = _raise_unavailable
+                repositories["appointments"].book = _raise_unavailable
             llm: LLMPort = (
                 UnavailableLLM() if case.faults.llm_unavailable else ScriptedLLM(self._llm_factory(), case.llm_script)
             )
-            container = assemble(settings, repos, llm, UnavailableSTT(), clock, storage.checkpointer)
-            yield container, repos, _Db(storage.sessions)
+            container = assemble(settings, repositories, llm, UnavailableSTT(), clock, storage.checkpointer)
+            yield container, repositories, _Db(storage.sessions)
 
     async def run(self, case: EvalCase) -> list[CaseObservation]:
-        async with self._container(case) as (container, repos, db):
+        async with self._container(case) as (container, repositories, db):
             if case.faults.prebook_window:
-                await _prebook(repos, case.faults.prebook_window, case.now)
-            await _setup_appointments(repos, case)
+                await _prebook(repositories, case.faults.prebook_window, case.now)
+            await _setup_appointments(repositories, case)
             sessions = case.concurrency.sessions if case.concurrency else 1
             barrier = asyncio.Barrier(sessions) if sessions > 1 else None
             observations = await asyncio.gather(
-                *[self._drive(case, container, repos, db, i, barrier) for i in range(sessions)]
+                *[self._drive(case, container, repositories, db, i, barrier) for i in range(sessions)]
             )
             # Kiểm tra toàn cục sau khi mọi phiên kết thúc.
             doubled = await db.double_booked_slot_ids()
-            for obs in observations:
-                obs.double_booked_slot_ids = doubled
+            for observation in observations:
+                observation.double_booked_slot_ids = doubled
             return list(observations)
 
     async def _drive(
         self,
         case: EvalCase,
         container: Container,
-        repos: dict[str, Any],
+        repositories: dict[str, Any],
         db: _Db,
         session: int,
         barrier: asyncio.Barrier | None,
@@ -331,7 +339,7 @@ class CaseRunner:
         conversation_id = f"{case.id}-{session}"
         patient = case.patient_id if barrier is None else f"{case.patient_id}-{session}"
         mode = case.agent_mode or self._settings.effective_agent_mode
-        obs = CaseObservation(
+        observation = CaseObservation(
             case_id=case.id,
             suite=case.suite,
             category=case.category,
@@ -360,16 +368,16 @@ class CaseRunner:
                     break
                 if not turn_replies:
                     if scored and "?" in question:
-                        obs.interrupts.append("chat_question_open")
-                        obs.interrupt_messages.append(question)
-                        obs.ended_with_question = True
+                        observation.interrupts.append("chat_question_open")
+                        observation.interrupt_messages.append(question)
+                        observation.ended_with_question = True
                     break
                 reply = turn_replies.pop(0)
                 if scored:
                     # Kịch bản trả lời bằng "choose" = agent liệt kê slot cho chọn (tương đương thẻ choose_slot của
                     # workflow), không phải hỏi lại.
-                    obs.interrupts.append("chat_choose_slot" if reply.action == "choose" else "chat_question")
-                    obs.interrupt_messages.append(question)
+                    observation.interrupts.append("chat_choose_slot" if reply.action == "choose" else "chat_question")
+                    observation.interrupt_messages.append(question)
                 result = await container.chat().send_message(conversation_id, patient, _reply_text(reply), "text", [])
             if not scored:
                 existing.update(await db.booked_slot_ids(patient))
@@ -380,25 +388,31 @@ class CaseRunner:
             while result.status == "waiting_user" and result.interrupt is not None:
                 payload = result.interrupt
                 if scored:
-                    obs.interrupts.append(payload.kind)
-                    obs.interrupt_messages.append(payload.message)
+                    observation.interrupts.append(payload.kind)
+                    observation.interrupt_messages.append(payload.message)
                 if payload.kind == "choose_slot":
-                    ids = [o.slot.slot_id for o in payload.options]
+                    ids = [option.slot.slot_id for option in payload.options]
                     offered.extend(ids)
                     if scored:
-                        mine = [s for s in [await repos["slots"].get(i) for i in sorted(existing)] if s]
-                        obs.own_overlap_slot_ids += [o.slot.slot_id for o in payload.options if _overlaps(o.slot, mine)]
-                        if not obs.first_offered_slot_ids:
-                            obs.first_offered_slot_ids = ids
-                            obs.first_offers = [
+                        mine = [
+                            slot
+                            for slot in [await repositories["slots"].get(slot_id) for slot_id in sorted(existing)]
+                            if slot
+                        ]
+                        observation.own_overlap_slot_ids += [
+                            option.slot.slot_id for option in payload.options if _overlaps(option.slot, mine)
+                        ]
+                        if not observation.first_offered_slot_ids:
+                            observation.first_offered_slot_ids = ids
+                            observation.first_offers = [
                                 {
-                                    "slot_id": o.slot.slot_id,
-                                    "start_at": o.slot.start_at.isoformat(),
-                                    "doctor_id": o.slot.doctor_id,
-                                    "department_code": o.slot.department_code,
-                                    "hint": o.hint,
+                                    "slot_id": option.slot.slot_id,
+                                    "start_at": option.slot.start_at.isoformat(),
+                                    "doctor_id": option.slot.doctor_id,
+                                    "department_code": option.slot.department_code,
+                                    "hint": option.hint,
                                 }
-                                for o in payload.options
+                                for option in payload.options
                             ]
                 if payload.kind == "confirm_booking":
                     # Chế độ agent không có thẻ chọn slot: slot hiện trên thẻ xác nhận là slot đã đưa cho người dùng.
@@ -408,12 +422,16 @@ class CaseRunner:
                         slot = proposal.slot
                         offered.append(slot.slot_id)
                         if scored:
-                            mine = [s for s in [await repos["slots"].get(i) for i in sorted(existing)] if s]
+                            mine = [
+                                slot
+                                for slot in [await repositories["slots"].get(slot_id) for slot_id in sorted(existing)]
+                                if slot
+                            ]
                             if _overlaps(slot, mine):
-                                obs.own_overlap_slot_ids.append(slot.slot_id)
-                            if not obs.first_offered_slot_ids:  # chế độ agent: đề xuất đầu tiên = slot trên thẻ
-                                obs.first_offered_slot_ids = [slot.slot_id]
-                                obs.first_offers = [
+                                observation.own_overlap_slot_ids.append(slot.slot_id)
+                            if not observation.first_offered_slot_ids:  # chế độ agent: đề xuất đầu tiên = slot trên thẻ
+                                observation.first_offered_slot_ids = [slot.slot_id]
+                                observation.first_offers = [
                                     {
                                         "slot_id": slot.slot_id,
                                         "start_at": slot.start_at.isoformat(),
@@ -436,7 +454,7 @@ class CaseRunner:
                             "intruder-patient", selected, None, f"intruder-{conversation_id}", case.now
                         )
                     if case.faults.own_clash_after_choice and selected:
-                        await _book_own_clash(container, repos, patient, selected, f"clash-{conversation_id}")
+                        await _book_own_clash(container, repositories, patient, selected, f"clash-{conversation_id}")
                         existing.update(await db.booked_slot_ids(patient))
                     stolen = True
                 reply = turn_replies.pop(0)
@@ -450,49 +468,52 @@ class CaseRunner:
             reports_before = len(await db.reports(patient))
             cancelled_before = await db.cancelled_count(patient)
             result = await converse(case.message, replies, scored=True)
-            obs.status = "done" if result.status == "done" else "waiting"
+            observation.status = "done" if result.status == "done" else "waiting"
             if result.response is not None:
-                obs.outcome = result.response.kind.value
-                obs.response_text = result.response.text
-            obs.replies_left = len(replies)
+                observation.outcome = result.response.kind.value
+                observation.response_text = result.response.text
+            observation.replies_left = len(replies)
             state = await container.chat().inspect_state(conversation_id)
             if state is not None:
-                obs.intent = state.intent.value if state.intent else None
-                obs.outcome_code = state.outcome.code if state.outcome else None
-                obs.final_fields = _fields(state)
-                obs.attempts = [
+                observation.intent = state.intent.value if state.intent else None
+                observation.outcome_code = state.outcome.code if state.outcome else None
+                observation.final_fields = _fields(state)
+                observation.attempts = [
                     AttemptView(
-                        attempt_no=a.attempt_no,
-                        issue_codes=a.issue_codes,
-                        llm_fixable_codes=a.llm_fixable_codes,
-                        passed=a.passed,
-                        output=a.output,
+                        attempt_no=attempt.attempt_no,
+                        issue_codes=attempt.issue_codes,
+                        llm_fixable_codes=attempt.llm_fixable_codes,
+                        passed=attempt.passed,
+                        output=attempt.output,
                     )
-                    for a in state.attempts
+                    for attempt in state.attempts
                 ]
-                obs.tool_calls = [t.tool for t in state.tool_calls]
-        except Exception as exc:  # noqa: BLE001 - một case lỗi không được làm hỏng cả lượt eval
-            obs.status = "crashed"
-            obs.error = f"{type(exc).__name__}: {exc}"
+                observation.tool_calls = [tool_call.tool for tool_call in state.tool_calls]
+        except Exception as exception:  # noqa: BLE001 - một case lỗi không được làm hỏng cả lượt eval
+            observation.status = "crashed"
+            observation.error = f"{type(exception).__name__}: {exception}"
             reports_before = 0
             cancelled_before = 0
-        obs.latency_ms = int((time.perf_counter() - started) * 1000)
+        observation.latency_ms = int((time.perf_counter() - started) * 1000)
 
         # Chỉ tính lịch hẹn do tin nhắn chính tạo ra.
-        obs.booked_slot_ids = [s for s in await db.booked_slot_ids(patient) if s not in existing]
-        obs.cancelled_count = await db.cancelled_count(patient) - cancelled_before
-        obs.offered_slot_ids = sorted(set(offered))
+        observation.booked_slot_ids = [
+            slot_id for slot_id in await db.booked_slot_ids(patient) if slot_id not in existing
+        ]
+        observation.cancelled_count = await db.cancelled_count(patient) - cancelled_before
+        observation.offered_slot_ids = sorted(set(offered))
         known = await db.slot_ids()
-        obs.hallucinated_slot_ids = sorted(
-            {s for s in offered if s not in known} | {s for s in obs.booked_slot_ids if s not in offered}
+        observation.hallucinated_slot_ids = sorted(
+            {slot_id for slot_id in offered if slot_id not in known}
+            | {slot_id for slot_id in observation.booked_slot_ids if slot_id not in offered}
         )
-        obs.own_overlap_slot_ids = sorted(set(obs.own_overlap_slot_ids))
+        observation.own_overlap_slot_ids = sorted(set(observation.own_overlap_slot_ids))
         reports = await db.reports(patient)
-        obs.reports_written = len(reports) - reports_before
-        obs.saved_report = (
-            reports[-1].model_dump(mode="json", exclude={"evidence"}) if obs.reports_written > 0 else None
+        observation.reports_written = len(reports) - reports_before
+        observation.saved_report = (
+            reports[-1].model_dump(mode="json", exclude={"evidence"}) if observation.reports_written > 0 else None
         )
-        return obs
+        return observation
 
 
 async def run_cases(
@@ -505,5 +526,5 @@ async def run_cases(
         async with limit:
             return await runner.run(case)
 
-    nested = await asyncio.gather(*[one(c) for c in cases])
-    return [obs for group in nested for obs in group]
+    nested = await asyncio.gather(*[one(case) for case in cases])
+    return [observation for group in nested for observation in group]

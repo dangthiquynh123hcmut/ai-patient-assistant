@@ -38,8 +38,8 @@ _HINTS = {
 }
 
 
-def _explain(exc: BaseException) -> str:
-    cause = exc.__cause__ or exc
+def _explain(exception: BaseException) -> str:
+    cause = exception.__cause__ or exception
     if isinstance(cause, anthropic.AuthenticationError):
         key = "auth"
     elif isinstance(cause, anthropic.PermissionDeniedError):
@@ -62,10 +62,10 @@ def _identity(region: str | None, profile: str | None) -> tuple[bool, str]:
         session = boto3.Session(profile_name=profile, region_name=region)
         who = session.client("sts").get_caller_identity()
         return True, f"IAM: {who['Arn']} (account {who['Account']}), region={session.region_name}"
-    except Exception as exc:  # noqa: BLE001 - chỉ để báo lỗi cho người dùng
-        network = any(word in type(exc).__name__ for word in ("Connect", "Proxy", "Timeout", "Endpoint"))
+    except Exception as exception:  # noqa: BLE001 - chỉ để báo lỗi cho người dùng
+        network = any(word in type(exception).__name__ for word in ("Connect", "Proxy", "Timeout", "Endpoint"))
         hint = _HINTS["connection"].replace("endpoint Bedrock", "endpoint STS") if network else _HINTS["auth"]
-        return False, f"Không xác định được danh tính IAM: {type(exc).__name__}: {exc}\n   → {hint}"
+        return False, f"Không xác định được danh tính IAM: {type(exception).__name__}: {exception}\n   → {hint}"
 
 
 async def run(region: str | None, profile: str | None, model: str) -> int:
@@ -81,16 +81,16 @@ async def run(region: str | None, profile: str | None, model: str) -> int:
     try:
         text, tokens_in, tokens_out = await llm.ping()
         print(f"{OK} 2. Gọi Claude thành công: “{text}” ({tokens_in} in / {tokens_out} out tokens)")
-    except LLMError as exc:
-        print(f"{FAIL} 2. Gọi Claude thất bại — {_explain(exc)}")
+    except LLMError as exception:
+        print(f"{FAIL} 2. Gọi Claude thất bại — {_explain(exception)}")
         return 1
 
     sentence = "Tuần này tôi đau mức 5 trên 10, đã tập 4 ngày, thấy đau tăng khi gập gối"
     now = datetime.now().astimezone()
     try:
         raw = await llm.extract_report(ReportPrompt(sources=[sentence], now=now))
-    except LLMError as exc:
-        print(f"{FAIL} 3. Structured output thất bại — {_explain(exc)}")
+    except LLMError as exception:
+        print(f"{FAIL} 3. Structured output thất bại — {_explain(exception)}")
         return 1
     draft, schema_issues = parse_report(raw)
     issues = schema_issues or validate_report(draft, ReportValidationContext(sources=[sentence], now=now))  # type: ignore[arg-type]
@@ -104,8 +104,8 @@ async def run(region: str | None, profile: str | None, model: str) -> int:
 
     try:
         intents = await llm.classify_intent("dạo này cái gối hơi nhức, muốn hẹn bác sĩ xem lại")
-    except LLMError as exc:
-        print(f"{FAIL} 4. Phân loại intent thất bại — {_explain(exc)}")
+    except LLMError as exception:
+        print(f"{FAIL} 4. Phân loại intent thất bại — {_explain(exception)}")
         return 1
     print(f"{OK} 4. Phân loại câu nói lỏng: {[i.value for i in intents]}")
     print("\nSẵn sàng: khởi động server.")
@@ -118,8 +118,8 @@ def main() -> None:
     parser.add_argument("--region", default=settings.aws_region)
     parser.add_argument("--profile", default=settings.aws_profile)
     parser.add_argument("--model", default=settings.llm_model_id)
-    args = parser.parse_args()
-    sys.exit(asyncio.run(run(args.region, args.profile, args.model)))
+    arguments = parser.parse_args()
+    sys.exit(asyncio.run(run(arguments.region, arguments.profile, arguments.model)))
 
 
 if __name__ == "__main__":

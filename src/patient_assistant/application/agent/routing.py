@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from patient_assistant.application.agent.deps import AgentLimits
+from patient_assistant.application.agent.dependencies import AgentLimits
 from patient_assistant.application.agent.state import AgentState
 from patient_assistant.domain.common import Resolution
 from patient_assistant.domain.conversation import ConfirmIntent, Intent, SafetyKind, interpret_confirmation
@@ -60,17 +60,17 @@ def after_clarify(state: AgentState) -> Literal["extract", "end"]:
 
 def confirmation_of(state: AgentState) -> ConfirmIntent | Literal["edit"]:
     """Quy quyết định của người dùng về confirm/cancel/edit/unclear. Lời nói mơ hồ = chưa xác nhận."""
-    d = state.decision
-    if d is None:
+    decision = state.decision
+    if decision is None:
         return ConfirmIntent.UNCLEAR
-    if d.action == "confirm":
+    if decision.action == "confirm":
         return ConfirmIntent.CONFIRM
-    if d.action == "cancel":
+    if decision.action == "cancel":
         return ConfirmIntent.CANCEL
-    if d.action == "edit":
+    if decision.action == "edit":
         return "edit"
-    if d.action == "reply" and d.text:
-        return interpret_confirmation(d.text)
+    if decision.action == "reply" and decision.text:
+        return interpret_confirmation(decision.text)
     return ConfirmIntent.UNCLEAR
 
 

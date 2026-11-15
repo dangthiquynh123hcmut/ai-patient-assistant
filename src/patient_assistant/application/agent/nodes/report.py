@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from patient_assistant.application.agent.deps import AgentDeps
+from patient_assistant.application.agent.dependencies import AgentDependencies
 from patient_assistant.application.agent.nodes.shared import (
     ask_user,
     idempotency_key,
@@ -25,14 +25,14 @@ from patient_assistant.domain.report.validators import ReportValidationContext, 
 
 
 class ReportNodes:
-    def __init__(self, deps: AgentDeps) -> None:
-        self.deps = deps
+    def __init__(self, dependencies: AgentDependencies) -> None:
+        self.dependencies = dependencies
 
     async def _generate(self, state: AgentState, feedback: CorrectionFeedback | None) -> dict[str, Any]:
         try:
-            raw = await self.deps.llm.extract_report(ReportPrompt(state.sources(), state.now, feedback))
-        except LLMError as exc:
-            return {"outcome": Outcome(kind=OutcomeKind.ERROR, code=f"llm_{exc.code}")}
+            raw = await self.dependencies.llm.extract_report(ReportPrompt(state.sources(), state.now, feedback))
+        except LLMError as exception:
+            return {"outcome": Outcome(kind=OutcomeKind.ERROR, code=f"llm_{exception.code}")}
         draft, schema_issues = parse_report(raw)
         return {"last_output": raw, "report_draft": draft, "issues": schema_issues, "edited_fields": []}
 
@@ -63,12 +63,12 @@ class ReportNodes:
             if not state.edited_fields
             else (state.report_draft.model_dump(mode="json") if state.report_draft else None)
         )
-        return {"issues": issues, "attempts": await record_attempt(self.deps, state, "report", output, issues)}
+        return {"issues": issues, "attempts": await record_attempt(self.dependencies, state, "report", output, issues)}
 
     async def present_draft(self, state: AgentState) -> dict[str, Any]:
         assert state.report_draft is not None
         # Bản nháp đổi (người dùng sửa, trích xuất lại) là câu hỏi mới; chỉ đếm khi hỏi lại đúng bản nháp cũ.
-        counters = next_ask(state, "confirm_report:" + state.report_draft.model_dump_json(), self.deps)
+        counters = next_ask(state, "confirm_report:" + state.report_draft.model_dump_json(), self.dependencies)
         if counters is None:
             return {"outcome": Outcome(kind=OutcomeKind.HANDOFF, code="too_many_rounds")}
         decision = ask_user(
@@ -105,7 +105,7 @@ class ReportNodes:
         if draft is None or state.issues or confirmation_of(state) != ConfirmIntent.CONFIRM:
             return {"outcome": Outcome(kind=OutcomeKind.ERROR, code="guard_violation")}
         key = idempotency_key("report", state.conversation_id, state.patient_id, draft.model_dump(mode="json"))
-        result = await self.deps.tools.save_patient_report(state.patient_id, draft, key, state.now)
+        result = await self.dependencies.tools.save_patient_report(state.patient_id, draft, key, state.now)
         updates: dict[str, Any] = {
             "tool_calls": tool_record(state, result),
             "write_result": result.model_dump(mode="json"),
@@ -121,7 +121,7 @@ class ReportNodes:
         report_id = data.get("id")
         if written.get("status") != "ok" or not report_id:
             return {"outcome": Outcome(kind=OutcomeKind.ERROR, code="verify_failed")}
-        back = await self.deps.tools.get_report(state.patient_id, report_id)
+        back = await self.dependencies.tools.get_report(state.patient_id, report_id)
         tool_calls = tool_record(state, back)
         if not back.ok:
             return {"tool_calls": tool_calls, "outcome": Outcome(kind=OutcomeKind.ERROR, code="verify_failed")}

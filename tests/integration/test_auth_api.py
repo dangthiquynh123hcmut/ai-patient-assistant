@@ -59,14 +59,14 @@ async def test_login_logout_and_bad_credentials(make_app: Any) -> None:
         unknown = await client.post("/v1/auth/login", json={"username": "khongco", "password": "x"})
         assert unknown.json()["detail"] == bad.json()["detail"]  # không lộ username nào có thật
 
-        r = await client.post("/v1/auth/login", json={"username": "BenhNhan1", "password": "demo1234"})
-        body = r.json()
-        assert r.status_code == 200 and body["user"]["role"] == "patient" and body["token_type"] == "bearer"
-        assert body["expires_in"] == 15 * 60 and "refresh_token" not in body and "password" not in r.text
-        cookie = r.headers["set-cookie"].lower()
+        response = await client.post("/v1/auth/login", json={"username": "BenhNhan1", "password": "demo1234"})
+        body = response.json()
+        assert response.status_code == 200 and body["user"]["role"] == "patient" and body["token_type"] == "bearer"
+        assert body["expires_in"] == 15 * 60 and "refresh_token" not in body and "password" not in response.text
+        cookie = response.headers["set-cookie"].lower()
         assert cookie.startswith("pa_refresh=") and "httponly" in cookie and "samesite=strict" in cookie
         assert "path=/v1/auth" in cookie
-        assert r.headers["cache-control"] == "no-store"
+        assert response.headers["cache-control"] == "no-store"
         claims = jwt.decode(body["access_token"], options={"verify_signature": False})
         assert (claims["typ"], claims["sub"], claims["role"]) == ("access", body["user"]["id"], "patient")
 
@@ -86,16 +86,16 @@ async def test_register_creates_patient_and_logs_in(make_app: Any) -> None:
     async with api_client(await make_app()) as client:
         assert (await client.get("/v1/auth/options")).json() == {"allow_registration": True}
         # Gửi kèm role/patient_id cũng không được: tài khoản tự đăng ký luôn là bệnh nhân với hồ sơ mới.
-        r = await client.post(
+        response = await client.post(
             "/v1/auth/register", json={**NEW_ACCOUNT, "role": "admin", "patient_id": "patient-demo-001"}
         )
-        assert r.status_code == 201, r.text
-        user = r.json()["user"]
+        assert response.status_code == 201, response.text
+        user = response.json()["user"]
         assert (user["username"], user["display_name"], user["role"]) == ("nguyen.van_a", "Nguyễn Văn A", "patient")
         assert user["patient_id"].startswith("patient-") and user["patient_id"] != "patient-demo-001"
-        assert "httponly" in r.headers["set-cookie"].lower() and "password" not in r.text
+        assert "httponly" in response.headers["set-cookie"].lower() and "password" not in response.text
 
-        bearer = {"Authorization": f"Bearer {r.json()['access_token']}"}
+        bearer = {"Authorization": f"Bearer {response.json()['access_token']}"}
         me = (await client.get("/v1/auth/me", headers=bearer)).json()  # đã đăng nhập ngay
         assert me["id"] == user["id"]
         reports = await client.get("/v1/me/reports", headers=bearer)
@@ -110,9 +110,9 @@ async def test_register_creates_patient_and_logs_in(make_app: Any) -> None:
         staff = await login(client, "bacsi")
         patients = (await client.get("/v1/meta", headers=staff)).json()["patients"]
         assert {"id": user["patient_id"], "label": "Nguyễn Văn A"} in [
-            {"id": p["id"], "label": p["label"]} for p in patients
+            {"id": patient["id"], "label": patient["label"]} for patient in patients
         ]
-        assert any(p["id"] == "patient-demo-001" for p in patients)
+        assert any(patient["id"] == "patient-demo-001" for patient in patients)
 
 
 async def test_register_rejects_taken_username_and_bad_input(make_app: Any) -> None:
@@ -125,8 +125,8 @@ async def test_register_rejects_taken_username_and_bad_input(make_app: Any) -> N
         demo = await client.post("/v1/auth/register", json={**NEW_ACCOUNT, "username": "benhnhan1"})
         assert demo.status_code == 409
         for bad in ({"username": "a"}, {"password": "ngan"}, {"display_name": "   "}):
-            r = await client.post("/v1/auth/register", json={**NEW_ACCOUNT, "username": "khac", **bad})
-            assert r.status_code == 422, (bad, r.text)
+            response = await client.post("/v1/auth/register", json={**NEW_ACCOUNT, "username": "khac", **bad})
+            assert response.status_code == 422, (bad, response.text)
     # Đăng ký trùng không để lại hồ sơ bệnh nhân mồ côi.
     profiles = await app.auth().list_patients()
     assert len(profiles) == len(seed.PATIENTS) + 1  # bệnh nhân demo + 1 tài khoản vừa đăng ký
@@ -135,8 +135,8 @@ async def test_register_rejects_taken_username_and_bad_input(make_app: Any) -> N
 async def test_register_can_be_disabled(make_app: Any) -> None:
     async with api_client(await make_app(allow_registration=False)) as client:
         assert (await client.get("/v1/auth/options")).json() == {"allow_registration": False}
-        r = await client.post("/v1/auth/register", json=NEW_ACCOUNT)
-        assert r.status_code == 403
+        response = await client.post("/v1/auth/register", json=NEW_ACCOUNT)
+        assert response.status_code == 403
         login_attempt = await client.post("/v1/auth/login", json={"username": "nguyen.van_a", "password": "x"})
         assert login_attempt.status_code == 401  # không có tài khoản nào được tạo
 
@@ -156,18 +156,18 @@ async def test_logout_all_revokes_every_device(make_app: Any) -> None:
         client.cookies.clear()
         assert (await client.post("/v1/auth/logout-all")).status_code == 401  # phải đăng nhập mới gọi được
 
-        r = await client.post("/v1/auth/logout-all", headers=laptop)
-        assert r.status_code == 204 and 'pa_refresh=""' in r.headers["set-cookie"]
+        response = await client.post("/v1/auth/logout-all", headers=laptop)
+        assert response.status_code == 204 and 'pa_refresh=""' in response.headers["set-cookie"]
         for headers in (phone, laptop):
             assert (await client.get("/v1/auth/me", headers=headers)).status_code == 401
         assert (await client.get("/v1/auth/me", headers=other)).status_code == 200  # tài khoản khác không bị ảnh hưởng
 
 
-def _auth(repos: dict[str, Any], clock: FixedClock, hours: float = 1) -> AuthService:
+def _auth(repositories: dict[str, Any], clock: FixedClock, hours: float = 1) -> AuthService:
     return AuthService(
-        repos["users"],
-        repos["sessions"],
-        repos["patients"],
+        repositories["users"],
+        repositories["sessions"],
+        repositories["patients"],
         clock,
         timedelta(hours=hours),
         tokens=JwtCodec(TEST_JWT_SECRET),
@@ -179,16 +179,16 @@ def _sid(token: str) -> str:
 
 
 async def test_purge_removes_only_expired_sessions(make_storage: Any) -> None:
-    repos = (await make_storage()).repos
+    repositories = (await make_storage()).repositories
     clock = FixedClock(NOW)
-    auth = _auth(repos, clock)
+    auth = _auth(repositories, clock)
     stale = (await auth.login("bacsi", "demo1234")).access_token  # không bao giờ dùng lại -> không tự bị xóa
     clock.now = lambda: NOW + timedelta(hours=2)  # type: ignore[method-assign]
     fresh = (await auth.login("benhnhan1", "demo1234")).access_token
-    assert await repos["sessions"].get(_sid(stale)) is not None  # đăng nhập không còn tự dọn
+    assert await repositories["sessions"].get(_sid(stale)) is not None  # đăng nhập không còn tự dọn
 
     assert await auth.purge_expired_sessions() == 1
-    assert await repos["sessions"].get(_sid(stale)) is None
+    assert await repositories["sessions"].get(_sid(stale)) is None
     assert await auth.authenticate(fresh) is not None  # phiên còn hạn giữ nguyên
     assert await auth.purge_expired_sessions() == 0
 
@@ -196,13 +196,13 @@ async def test_purge_removes_only_expired_sessions(make_storage: Any) -> None:
 async def test_purge_job_once_and_on_a_schedule(make_storage: Any) -> None:
     from patient_assistant.interface.cli import purge_sessions
 
-    repos = (await make_storage()).repos
+    repositories = (await make_storage()).repositories
     clock = FixedClock(NOW)
-    auth = _auth(repos, clock)
+    auth = _auth(repositories, clock)
     first = (await auth.login("bacsi", "demo1234")).access_token
     clock.now = lambda: NOW + timedelta(hours=2)  # type: ignore[method-assign]
     await purge_sessions.purge(auth)  # không --every: chạy một lần rồi thoát
-    assert await repos["sessions"].get(_sid(first)) is None
+    assert await repositories["sessions"].get(_sid(first)) is None
 
     # Chạy theo lịch: lỗi một lần (vd. DB khởi động lại) không làm chết job, lần sau vẫn dọn tiếp.
     second = (await auth.login("bacsi", "demo1234")).access_token
@@ -222,7 +222,7 @@ async def test_purge_job_once_and_on_a_schedule(make_storage: Any) -> None:
     auth.purge_expired_sessions = flaky  # type: ignore[method-assign]
     with pytest.raises(asyncio.CancelledError):
         await purge_sessions.purge(auth, every_minutes=0.0001)
-    assert calls == 3 and await repos["sessions"].get(_sid(second)) is None
+    assert calls == 3 and await repositories["sessions"].get(_sid(second)) is None
 
     with pytest.raises(SystemExit):
         purge_sessions.main(["--every", "0"])
@@ -238,9 +238,9 @@ async def test_lockout_after_repeated_failures(make_app: Any) -> None:
 
 
 async def test_access_token_expires_and_refresh_rotates(make_storage: Any) -> None:
-    repos = (await make_storage()).repos
+    repositories = (await make_storage()).repositories
     clock = FixedClock(NOW)
-    auth = _auth(repos, clock, hours=12)
+    auth = _auth(repositories, clock, hours=12)
     first = await auth.login("bacsi", "demo1234")
     assert await auth.authenticate(first.access_token) is not None
     assert await auth.authenticate(first.refresh_token) is None  # refresh token không dùng làm access token được
@@ -264,9 +264,9 @@ async def test_access_token_expires_and_refresh_rotates(make_storage: Any) -> No
 
 
 async def test_reused_refresh_token_revokes_session(make_storage: Any) -> None:
-    repos = (await make_storage()).repos
+    repositories = (await make_storage()).repositories
     clock = FixedClock(NOW)
-    auth = _auth(repos, clock, hours=12)
+    auth = _auth(repositories, clock, hours=12)
     stolen = await auth.login("benhnhan1", "demo1234")
     current = await auth.refresh(stolen.refresh_token)
 
@@ -285,8 +285,8 @@ async def test_reused_refresh_token_revokes_session(make_storage: Any) -> None:
 
 
 async def test_forged_tokens_are_rejected(make_storage: Any) -> None:
-    repos = (await make_storage()).repos
-    auth = _auth(repos, FixedClock(NOW))
+    repositories = (await make_storage()).repositories
+    auth = _auth(repositories, FixedClock(NOW))
     real = await auth.login("admin", "demo1234")
     claims = jwt.decode(real.access_token, options={"verify_signature": False})
     forged = [
@@ -316,10 +316,10 @@ async def test_refresh_endpoint_rotates_cookie(make_app: Any) -> None:
         expired = {"Authorization": f"Bearer {login_r.json()['access_token']}"}
         assert (await client.get("/v1/auth/me", headers=expired)).status_code == 401
 
-        r = await client.post("/v1/auth/refresh")
-        assert r.status_code == 200 and r.json()["user"]["username"] == "benhnhan1"
+        response = await client.post("/v1/auth/refresh")
+        assert response.status_code == 200 and response.json()["user"]["username"] == "benhnhan1"
         assert client.cookies.get("pa_refresh") not in (None, old_cookie)  # cookie đã được thay
-        fresh = {"Authorization": f"Bearer {r.json()['access_token']}"}
+        fresh = {"Authorization": f"Bearer {response.json()['access_token']}"}
         assert (await client.get("/v1/me/reports", headers=fresh)).status_code == 200
 
         # Gửi lại cookie cũ ngay sau khi xoay (vd. tab khác): 409, phiên vẫn còn.
@@ -340,7 +340,7 @@ async def test_deactivated_user_cannot_refresh(make_app: Any) -> None:
         patient_cookie = client.cookies.get("pa_refresh")
         client.cookies.clear()
         users = (await client.get("/v1/admin/users", headers=admin)).json()
-        target = next(u for u in users if u["username"] == "benhnhan2")
+        target = next(user for user in users if user["username"] == "benhnhan2")
         assert (await client.patch(f"/v1/admin/users/{target['id']}", headers=admin, json={"active": False})).is_success
         refresh = await client.post("/v1/auth/refresh", headers=_refresh_cookie(patient_cookie))
         assert refresh.status_code == 401 and "không hợp lệ" in refresh.json()["detail"]
@@ -370,8 +370,8 @@ async def test_patient_cannot_touch_another_patients_conversation(make_app: Any)
     async with api_client(await make_app(llm=_booking_llm())) as client:
         owner = await login(client, "benhnhan1")
         other = await login(client, "benhnhan2")
-        r = await client.post("/v1/chat/c-1/messages", headers=owner, json={"text": BOOK})
-        assert r.json()["interrupt"]["kind"] == "choose_slot"
+        response = await client.post("/v1/chat/c-1/messages", headers=owner, json={"text": BOOK})
+        assert response.json()["interrupt"]["kind"] == "choose_slot"
         # Biết conversation_id cũng không đọc / gửi / trả lời thay được.
         assert (await client.post("/v1/chat/c-1/messages", headers=other, json={"text": "hi"})).status_code == 404
         resume = await client.post("/v1/chat/c-1/resume", headers=other, json={"action": "choose", "option_no": 1})
@@ -392,15 +392,15 @@ async def test_patient_reopens_past_conversation_and_continues(make_app: Any) ->
         [conv] = (await client.get("/v1/me/conversations", headers=again)).json()
         assert conv["conversation_id"] == "c-2" and conv["title"].startswith("Cho tôi đặt lịch")
         messages = (await client.get("/v1/me/conversations/c-2", headers=again)).json()
-        assert [m["role"] for m in messages] == ["user", "assistant"]
+        assert [message["role"] for message in messages] == ["user", "assistant"]
         pending = (await client.get("/v1/chat/c-2/pending", headers=again)).json()
         assert pending["kind"] == "choose_slot" and pending["options"]
 
         # Trả lời tiếp ngay trên hội thoại cũ.
-        r = await client.post("/v1/chat/c-2/resume", headers=again, json={"action": "choose", "option_no": 1})
-        assert r.json()["interrupt"]["kind"] == "confirm_booking"
-        r = await client.post("/v1/chat/c-2/resume", headers=again, json={"action": "confirm"})
-        assert r.json()["status"] == "done"
+        response = await client.post("/v1/chat/c-2/resume", headers=again, json={"action": "choose", "option_no": 1})
+        assert response.json()["interrupt"]["kind"] == "confirm_booking"
+        response = await client.post("/v1/chat/c-2/resume", headers=again, json={"action": "confirm"})
+        assert response.json()["status"] == "done"
         assert (await client.get("/v1/chat/c-2/pending", headers=again)).json() is None  # xong: không còn câu hỏi
 
 
@@ -414,16 +414,22 @@ async def test_every_question_and_answer_is_logged_for_staff(make_app: Any) -> N
         await client.post("/v1/chat/log-1/resume", headers=patient, json={"action": "confirm"})
 
         mine = (await client.get("/v1/me/conversations", headers=patient)).json()
-        assert [(c["conversation_id"], c["title"], c["message_count"], c["last_kind"]) for c in mine] == [
-            ("log-1", "tuần này tôi đau mức 3", 6, "report_saved")
-        ]
+        assert [
+            (
+                conversation["conversation_id"],
+                conversation["title"],
+                conversation["message_count"],
+                conversation["last_kind"],
+            )
+            for conversation in mine
+        ] == [("log-1", "tuần này tôi đau mức 3", 6, "report_saved")]
 
         staff = await login(client, "bacsi")
         listed = (await client.get(f"/v1/staff/conversations?patient_id={PATIENT}", headers=staff)).json()
-        assert [c["conversation_id"] for c in listed] == ["log-1"]
+        assert [conversation["conversation_id"] for conversation in listed] == ["log-1"]
         assert (await client.get("/v1/staff/conversations?patient_id=patient-demo-002", headers=staff)).json() == []
         messages = (await client.get("/v1/staff/conversations/log-1", headers=staff)).json()
-        assert [(m["role"], m["action"], m["text"][:22]) for m in messages] == [
+        assert [(message["role"], message["action"], message["text"][:22]) for message in messages] == [
             ("user", "message", "tuần này tôi đau mức 3"),
             ("assistant", "clarify", "Trong kỳ này bạn đã tậ"),
             ("user", "reply", "tập 4 ngày"),
@@ -460,8 +466,8 @@ async def test_admin_manages_accounts(make_app: Any) -> None:
         assert (await client.get("/v1/me/reports", headers=session)).status_code == 200
 
         # Đổi mật khẩu -> phiên cũ bị đăng xuất, mật khẩu cũ hết dùng được.
-        r = await client.patch(f"/v1/admin/users/{user_id}", headers=admin, json={"password": "matkhaumoi1"})
-        assert r.status_code == 200
+        response = await client.patch(f"/v1/admin/users/{user_id}", headers=admin, json={"password": "matkhaumoi1"})
+        assert response.status_code == 200
         assert (await client.get("/v1/auth/me", headers=session)).status_code == 401
         old = await client.post("/v1/auth/login", json={"username": "nguyenvana", "password": "matkhau123"})
         assert old.status_code == 401
@@ -518,7 +524,7 @@ async def test_sql_accounts_sessions_and_log(make_storage: Any) -> None:
         )
     [conv] = await log.list_conversations(PATIENT, 10)
     assert (conv.message_count, conv.last_kind) == (2, "chat")
-    assert [m.text for m in await log.list_messages("t1")] == ["#0", "#1"]  # cùng thời điểm vẫn đúng thứ tự
+    assert [message.text for message in await log.list_messages("t1")] == ["#0", "#1"]  # cùng thời điểm vẫn đúng thứ tự
 
 
 async def test_patients_with_the_same_name_only_see_their_own_data(make_app: Any) -> None:
@@ -535,7 +541,7 @@ async def test_patients_with_the_same_name_only_see_their_own_data(make_app: Any
 
         staff = await login(client, "bacsi")
         patients = (await client.get("/v1/meta", headers=staff)).json()["patients"]
-        assert [p["label"] for p in patients].count("Nguyễn Văn An") == 3
+        assert [patient["label"] for patient in patients].count("Nguyễn Văn An") == 3
 
 
 async def test_register_with_birth_date_and_phone(make_app: Any) -> None:
@@ -547,26 +553,30 @@ async def test_register_with_birth_date_and_phone(make_app: Any) -> None:
         assert (str(profile.date_of_birth), profile.phone) == ("1990-05-17", "0912345678")  # +84 -> 0, bỏ khoảng trắng
         client.cookies.clear()
         for bad in ({"phone": "12345"}, {"date_of_birth": "2999-01-01"}):
-            r = await client.post("/v1/auth/register", json={**NEW_ACCOUNT, "username": "khac", **bad})
-            assert r.status_code == 422, (bad, r.text)
+            response = await client.post("/v1/auth/register", json={**NEW_ACCOUNT, "username": "khac", **bad})
+            assert response.status_code == 422, (bad, response.text)
 
 
 async def test_staff_can_tell_apart_patients_with_identical_details(make_app: Any) -> None:
     async with api_client(await make_app()) as client:
         staff = await login(client, "bacsi")
         patients = (await client.get("/v1/meta", headers=staff)).json()["patients"]
-        binh = [p for p in patients if p["display_name"] == "Trần Thị Bình"]
+        binh = [patient for patient in patients if patient["display_name"] == "Trần Thị Bình"]
         # Trùng cả họ tên, ngày sinh, số điện thoại: chỉ mã hồ sơ là khác nhau.
-        assert len(binh) == 2 and len({(p["date_of_birth"], p["phone"]) for p in binh}) == 1
-        assert len({p["id"] for p in binh}) == 2
-        an = [p for p in patients if p["display_name"] == "Nguyễn Văn An"]
-        assert len({p["date_of_birth"] for p in an}) == 2 and len({p["phone"] for p in an}) == 2
+        assert len(binh) == 2 and len({(patient["date_of_birth"], patient["phone"]) for patient in binh}) == 1
+        assert len({patient["id"] for patient in binh}) == 2
+        an = [patient for patient in patients if patient["display_name"] == "Nguyễn Văn An"]
+        assert len({patient["date_of_birth"] for patient in an}) == 2 and len({patient["phone"] for patient in an}) == 2
 
 
 async def test_patient_info_shows_birth_date_and_phone_but_llm_tool_does_not(make_app: Any) -> None:
     app = await make_app()
     info = done(await app.chat().send_message("pi-1", PATIENT, "xem thông tin của tôi"), "patient_info")
     assert "Ngày sinh: 15/01/1980" in info.response.text and "Số điện thoại: 0901000001" in info.response.text
-    summary = next(t for t in app.toolbox().read_only_specs(PATIENT, NOW) if t.name == "get_patient_summary")
+    summary = next(
+        specification
+        for specification in app.toolbox().read_only_specifications(PATIENT, NOW)
+        if specification.name == "get_patient_summary"
+    )
     profile = (await summary.handler(None))["data"]["profile"]  # type: ignore[arg-type]
     assert profile["display_name"] == "Bệnh nhân Demo 1" and "phone" not in profile and "date_of_birth" not in profile

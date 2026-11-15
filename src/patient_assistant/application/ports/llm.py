@@ -47,7 +47,7 @@ class BookingPrompt:
 
 
 @dataclass(frozen=True)
-class ToolSpec:
+class ToolSpecification:
     """Tool đọc dữ liệu mà LLM được phép gọi. Định danh bệnh nhân đã được bind sẵn trong `handler`."""
 
     name: str
@@ -100,7 +100,7 @@ class LLMPort(Protocol):
         ...
 
     async def answer_question(
-        self, question: str, tools: list[ToolSpec], max_tool_calls: int, memory: str | None = None
+        self, question: str, tools: list[ToolSpecification], max_tool_calls: int, memory: str | None = None
     ) -> GroundedAnswer: ...
 
     async def converse(self, text: str, context: str | None = None, memory: str | None = None) -> str:
@@ -116,7 +116,7 @@ class LLMPort(Protocol):
         task: Literal["booking", "assistant"],
         context: str,
         history: list[AgentMessage],
-        tools: list[ToolSpec],
+        tools: list[ToolSpecification],
         max_tool_calls: int,
     ) -> AgentReply:
         """Vòng tool-use: LLM tự quyết hỏi gì, gọi tool nào. `context` do code soạn (hôm nay, danh mục...).

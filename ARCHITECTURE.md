@@ -655,7 +655,7 @@ src/patient_assistant/
       state.py                 # AgentState, Outcome, UserDecision, InterruptPayload, FieldExplanation
       routing.py               # hàm routing thuần
       presenters.py            # câu chữ: câu hỏi lại, giải thích từng trường, câu trả lời cuối
-      deps.py                  # AgentDeps, AgentLimits (tiêm từ container)
+      dependencies.py                  # AgentDependencies, AgentLimits (tiêm từ container)
       nodes/  common.py  report.py  booking.py  shared.py
       flows/  report_flow.py  booking_flow.py      # subgraph
       graph.py                 # graph chính
@@ -667,7 +667,7 @@ src/patient_assistant/
     persistence/  memory.py  seed.py  sql/{models,repositories,setup}.py
                   demo_data/*.json   # khoa, bác sĩ, lịch làm việc, bệnh nhân, kế hoạch, tài liệu, lịch sử demo
     calendar/vn_holidays.py  clock.py  audit.py
-  interface/api/  app.py  schemas.py  deps.py      # create_app wire Container vào router
+  interface/api/  app.py  schemas.py  dependencies.py      # create_app wire Container vào router
                   routers/{auth,chat,me,staff}_router.py   # Depends(Provide[Container.x]) + @inject
   interface/cli/  dump.py  seed.py  check_llm.py     # xuất dữ liệu; seed dữ liệu demo; kiểm tra Bedrock
   evaluation/                  # lớp ngoài cùng, giống interface: cases, harness, metrics, report, runner, datasets/

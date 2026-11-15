@@ -71,10 +71,10 @@ class Slot(BaseModel):
     end_at: datetime
 
     def label(self, department_name: str | None = None) -> str:
-        dept = f" – {department_name}" if department_name else ""
+        department = f" – {department_name}" if department_name else ""
         return (
             f"{WEEKDAY_NAMES[self.start_at.weekday()]}, {self.start_at:%d/%m/%Y}, "
-            f"{self.start_at:%H:%M} – {self.doctor_name}{dept}"
+            f"{self.start_at:%H:%M} – {self.doctor_name}{department}"
         )
 
 

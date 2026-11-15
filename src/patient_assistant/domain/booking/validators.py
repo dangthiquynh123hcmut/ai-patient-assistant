@@ -34,32 +34,32 @@ class BookingValidationContext:
 def parse_booking(raw: dict[str, Any]) -> tuple[BookingRequest | None, list[ValidationIssue]]:
     try:
         return BookingRequest.model_validate(raw), []
-    except ValidationError as exc:
+    except ValidationError as exception:
         return None, [
             ValidationIssue(
-                field=str(err["loc"][0]) if err["loc"] else None,
+                field=str(error["loc"][0]) if error["loc"] else None,
                 layer=Layer.SCHEMA,
                 code="invalid_schema",
-                message=err["msg"],
+                message=error["msg"],
                 suggestion="Trả đúng schema; dùng null nếu không có thông tin.",
                 resolution=Resolution.LLM_FIXABLE,
             )
-            for err in exc.errors()
+            for error in exception.errors()
         ]
 
 
 def find_department(code: str | None, departments: list[Department]) -> Department | None:
-    return next((d for d in departments if d.code == code), None)
+    return next((department for department in departments if department.code == code), None)
 
 
-_DEPT_LEAD_WORDS = {"khoa", "chuyen", "kham", "phong"}  # "khoa nội", "chuyên khoa mắt", "khám mắt" (đã bỏ dấu)
+_DEPARTMENT_LEAD_WORDS = {"khoa", "chuyen", "kham", "phong"}  # "khoa nội", "chuyên khoa mắt", "khám mắt" (đã bỏ dấu)
 
 
 def _fold(text: str) -> list[str]:
     """Chữ thường, bỏ dấu, bỏ chữ dẫn ("khoa", "khám"...): "Khoa Nội tổng" -> ["noi", "tong"]."""
     decomposed = unicodedata.normalize("NFD", normalize(text).replace("đ", "d"))
-    words = "".join(c for c in decomposed if unicodedata.category(c) != "Mn").split()
-    while words and words[0] in _DEPT_LEAD_WORDS:
+    words = "".join(character for character in decomposed if unicodedata.category(character) != "Mn").split()
+    while words and words[0] in _DEPARTMENT_LEAD_WORDS:
         words = words[1:]
     return words
 
@@ -82,14 +82,18 @@ def departments_matching(mention: str, departments: list[Department]) -> list[De
     said = _fold(mention)
     if len("".join(said)) < 2:
         return []
-    return [d for d in departments if any(_names_department(said, _fold(n)) for n in d.names())]
+    return [
+        department
+        for department in departments
+        if any(_names_department(said, _fold(department_name)) for department_name in department.names())
+    ]
 
 
 def department_in_text(text: str, departments: list[Department]) -> Department | None:
     """Khoa người dùng nêu trong câu; nhiều khoa cùng khớp thì lấy cụm dài nhất
     ("khoa nội thần kinh" -> Nội thần kinh, không phải Nội tổng quát qua "khoa nội")."""
-    hits = [(len(hit), d) for d in departments if (hit := contains_phrase(text, d.names()))]
-    return max(hits, key=lambda h: h[0])[1] if hits else None
+    hits = [(len(hit), department) for department in departments if (hit := contains_phrase(text, department.names()))]
+    return max(hits, key=lambda scored_hit: scored_hit[0])[1] if hits else None
 
 
 def find_doctor(name: str, department_code: str | None, doctors: list[Doctor]) -> Doctor | None:
@@ -100,10 +104,10 @@ def find_doctor(name: str, department_code: str | None, doctors: list[Doctor]) -
     wanted = wanted.strip()
     if not wanted:
         return None
-    pool = [d for d in doctors if department_code is None or d.department_code == department_code]
-    matches = [d for d in pool if f" {wanted} " in f" {normalize(d.name)} "]
+    pool = [doctor for doctor in doctors if department_code is None or doctor.department_code == department_code]
+    matches = [doctor for doctor in pool if f" {wanted} " in f" {normalize(doctor.name)} "]
     if not matches:  # gõ/nói không dấu hoặc tiếng Anh: "doctor Binh"
-        matches = [d for d in pool if f" {unaccent(wanted)} " in f" {unaccent(d.name)} "]
+        matches = [doctor for doctor in pool if f" {unaccent(wanted)} " in f" {unaccent(doctor.name)} "]
     return matches[0] if len(matches) == 1 else None
 
 
@@ -112,27 +116,27 @@ def _ambiguous_department(mention: str, candidates: list[Department]) -> Validat
         field="department_code",
         layer=Layer.BUSINESS,
         code="department_ambiguous",
-        message=f"“{mention}” có thể là khoa {' hoặc '.join(d.name for d in candidates)}.",
+        message=f"“{mention}” có thể là khoa {' hoặc '.join(department.name for department in candidates)}.",
         resolution=Resolution.ASK_USER,
     )
 
 
-def _department_issues(req: BookingRequest, ctx: BookingValidationContext) -> list[ValidationIssue]:
-    if req.department_code is None and req.department_mentioned:
-        candidates = departments_matching(req.department_mentioned, ctx.departments)
+def _department_issues(request: BookingRequest, context: BookingValidationContext) -> list[ValidationIssue]:
+    if request.department_code is None and request.department_mentioned:
+        candidates = departments_matching(request.department_mentioned, context.departments)
         if len(candidates) > 1:
-            return [_ambiguous_department(req.department_mentioned, candidates)]
+            return [_ambiguous_department(request.department_mentioned, candidates)]
         # Người dùng nêu một khoa phòng khám không có -> nói rõ là không có, mời chọn lại (không hỏi chung chung).
         return [
             ValidationIssue(
                 field="department_code",
                 layer=Layer.BUSINESS,
                 code="department_not_offered",
-                message=f"Hiện phòng khám chưa có “{req.department_mentioned}”.",
+                message=f"Hiện phòng khám chưa có “{request.department_mentioned}”.",
                 resolution=Resolution.ASK_USER,
             )
         ]
-    if req.department_code is None:
+    if request.department_code is None:
         return [
             ValidationIssue(
                 field="department_code",
@@ -142,36 +146,40 @@ def _department_issues(req: BookingRequest, ctx: BookingValidationContext) -> li
                 resolution=Resolution.ASK_USER,
             )
         ]
-    dept = find_department(req.department_code, ctx.departments)
-    if dept is None:
+    department = find_department(request.department_code, context.departments)
+    if department is None:
         return [
             ValidationIssue(
                 field="department_code",
                 layer=Layer.SCHEMA,
                 code="unknown_department",
-                message=f"Mã khoa '{req.department_code}' không có trong danh mục.",
+                message=f"Mã khoa '{request.department_code}' không có trong danh mục.",
                 suggestion="Chỉ dùng mã khoa trong danh mục, hoặc null nếu người dùng không nêu khoa.",
                 resolution=Resolution.LLM_FIXABLE,
             )
         ]
-    if ctx.department_from_plan or ctx.department_from_memory:
+    if context.department_from_plan or context.department_from_memory:
         return []
     # Khoa phải do người dùng nêu — không được suy ra từ triệu chứng (FR-09.11). Người dùng có thể gõ tắt/không
     # dấu ("nội tổng"): chấp nhận khi cụm khoa họ nói (nguyên văn trong lời họ) chỉ đúng khoa này.
-    mention = req.department_mentioned
-    if mention and quote_in_sources(mention, ctx.sources):
-        candidates = departments_matching(mention, ctx.departments)
-        if dept in candidates and len(candidates) > 1 and not contains_phrase(" ".join(ctx.sources), dept.names()):
+    mention = request.department_mentioned
+    if mention and quote_in_sources(mention, context.sources):
+        candidates = departments_matching(mention, context.departments)
+        if (
+            department in candidates
+            and len(candidates) > 1
+            and not contains_phrase(" ".join(context.sources), department.names())
+        ):
             return [_ambiguous_department(mention, candidates)]
-        if dept in candidates:
+        if department in candidates:
             return []
-    if not contains_phrase(" ".join(ctx.sources), dept.names()):
+    if not contains_phrase(" ".join(context.sources), department.names()):
         return [
             ValidationIssue(
                 field="department_code",
                 layer=Layer.GROUNDING,
                 code="department_not_in_source",
-                message=f"Người dùng không nêu khoa '{dept.name}'.",
+                message=f"Người dùng không nêu khoa '{department.name}'.",
                 suggestion="Không suy ra khoa từ triệu chứng; đặt department_code = null.",
                 resolution=Resolution.LLM_FIXABLE,
             )
@@ -179,13 +187,13 @@ def _department_issues(req: BookingRequest, ctx: BookingValidationContext) -> li
     return []
 
 
-def _verbatim_issues(req: BookingRequest, ctx: BookingValidationContext) -> list[ValidationIssue]:
+def _verbatim_issues(request: BookingRequest, context: BookingValidationContext) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     for name in VERBATIM_FIELDS:
-        value = getattr(req, name)
+        value = getattr(request, name)
         if not value:
             continue
-        if not quote_in_sources(value, ctx.sources):
+        if not quote_in_sources(value, context.sources):
             issues.append(
                 ValidationIssue(
                     field=name,
@@ -197,7 +205,7 @@ def _verbatim_issues(req: BookingRequest, ctx: BookingValidationContext) -> list
                 )
             )
             continue
-        flags = overlapping_flags(value, ctx.stt_flags)
+        flags = overlapping_flags(value, context.stt_flags)
         if flags:
             issues.append(
                 ValidationIssue(
@@ -212,13 +220,13 @@ def _verbatim_issues(req: BookingRequest, ctx: BookingValidationContext) -> list
 
 
 def validate_booking(
-    req: BookingRequest, resolution: DateResolution, ctx: BookingValidationContext
+    request: BookingRequest, resolution: DateResolution, context: BookingValidationContext
 ) -> list[ValidationIssue]:
-    issues = _department_issues(req, ctx) + _verbatim_issues(req, ctx)
+    issues = _department_issues(request, context) + _verbatim_issues(request, context)
     # Lỗi do LLM trích sai phải sửa trước; chưa cần xét ngày khi cụm ngày còn chưa đúng nguyên văn.
-    if any(i.resolution == Resolution.LLM_FIXABLE for i in issues):
+    if any(issue.resolution == Resolution.LLM_FIXABLE for issue in issues):
         return issues
-    if req.date_expression is None and resolution.window is None:
+    if request.date_expression is None and resolution.window is None:
         issues.append(
             ValidationIssue(
                 field="date_expression",
@@ -231,14 +239,14 @@ def validate_booking(
     else:
         issues += resolution.issues
         if resolution.window:
-            issues += window_issues(resolution.window, ctx.now, ctx.policy)
-    if req.doctor_name and find_doctor(req.doctor_name, req.department_code, ctx.doctors) is None:
+            issues += window_issues(resolution.window, context.now, context.policy)
+    if request.doctor_name and find_doctor(request.doctor_name, request.department_code, context.doctors) is None:
         issues.append(
             ValidationIssue(
                 field="doctor_name",
                 layer=Layer.CONSISTENCY,
                 code="doctor_not_found",
-                message=f"Không tìm thấy duy nhất một bác sĩ '{req.doctor_name}' trong khoa đã chọn.",
+                message=f"Không tìm thấy duy nhất một bác sĩ '{request.doctor_name}' trong khoa đã chọn.",
                 resolution=Resolution.ASK_USER,
             )
         )

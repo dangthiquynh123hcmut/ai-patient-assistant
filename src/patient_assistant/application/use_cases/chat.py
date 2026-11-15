@@ -89,7 +89,7 @@ class ChatUseCase:
                 note = _step("reuse_context", "Người dùng nhắc lại thông tin đã nói → nối lời cũ vào việc đang làm.")
                 steps = [note, *restarted.steps]
                 return restarted.model_copy(
-                    update={"steps": [s.model_copy(update={"index": i}) for i, s in enumerate(steps)]}
+                    update={"steps": [step.model_copy(update={"index": i}) for i, step in enumerate(steps)]}
                 )
             kind = await self._side_talk.triage(decision.text, state.intent)
             if kind == ReplyKind.SWITCH:
@@ -101,7 +101,7 @@ class ChatUseCase:
                 )
                 steps = [note, *switched.steps]
                 return switched.model_copy(
-                    update={"steps": [s.model_copy(update={"index": i}) for i, s in enumerate(steps)]}
+                    update={"steps": [step.model_copy(update={"index": i}) for i, step in enumerate(steps)]}
                 )
             if kind == ReplyKind.ASIDE:
                 pending = InterruptPayload.model_validate(_pending(snapshot)[0])

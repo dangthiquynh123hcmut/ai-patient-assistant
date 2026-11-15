@@ -11,14 +11,14 @@ from typing import Any
 
 import pytest
 
-from patient_assistant.application.ports.llm import BookingPrompt, GroundedAnswer, ReportPrompt, ToolSpec
+from patient_assistant.application.ports.llm import BookingPrompt, GroundedAnswer, ReportPrompt, ToolSpecification
 from patient_assistant.domain.booking.models import SlotOption
 from patient_assistant.domain.conversation import Intent
 from patient_assistant.evaluation.cases import load_cases
 from patient_assistant.evaluation.harness import run_cases
 from patient_assistant.evaluation.metrics import compute
 from patient_assistant.evaluation.report import hard_zero_violations
-from tests.conftest import booking_out, pg_settings
+from tests.conftest import booking_out, postgres_settings
 
 NEW_CASES = {
     *("bk-own-01", "bk-rec-01", "bk-rec-02", "bk-rec-03", "bk-clash-01", "bk-max-01", "bk-mot-01"),
@@ -85,7 +85,7 @@ class StandInLLM:
         return None
 
     async def answer_question(
-        self, question: str, tools: list[ToolSpec], max_tool_calls: int, memory: str | None = None
+        self, question: str, tools: list[ToolSpecification], max_tool_calls: int, memory: str | None = None
     ) -> GroundedAnswer:
         return GroundedAnswer(text="")
 
@@ -94,9 +94,9 @@ class StandInLLM:
 
 
 async def test_new_eval_cases_pass_with_a_correct_extractor() -> None:
-    cases = [c for c in load_cases() if c.id in NEW_CASES]
-    assert {c.id for c in cases} == NEW_CASES
-    observations = await run_cases(cases, StandInLLM, pg_settings(), concurrency=4)
+    cases = [case for case in load_cases() if case.id in NEW_CASES]
+    assert {case.id for case in cases} == NEW_CASES
+    observations = await run_cases(cases, StandInLLM, postgres_settings(), concurrency=4)
     report = compute(cases, observations)
     failed = {v.case_id: v.failures for v in report.verdicts if not v.passed}
     assert not failed, failed
@@ -110,10 +110,10 @@ async def test_eval_catches_offers_that_ignore_the_patients_schedule(monkeypatch
 
     monkeypatch.setattr(
         "patient_assistant.application.services.booking_service.fit_to_schedule",
-        lambda slots, *_: [SlotFit(s) for s in slots],
+        lambda slots, *_: [SlotFit(slot) for slot in slots],
     )
-    cases = [c for c in load_cases() if c.id in {"bk-own-01", "bk-rec-01"}]
-    report = compute(cases, await run_cases(cases, StandInLLM, pg_settings(), concurrency=2))
+    cases = [case for case in load_cases() if case.id in {"bk-own-01", "bk-rec-01"}]
+    report = compute(cases, await run_cases(cases, StandInLLM, postgres_settings(), concurrency=2))
     assert "own_schedule_overlap" in hard_zero_violations(report)
     failed = {v.case_id for v in report.verdicts if not v.passed}
     assert failed == {"bk-own-01", "bk-rec-01"}

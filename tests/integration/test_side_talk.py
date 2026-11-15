@@ -31,7 +31,7 @@ async def test_aside_question_is_answered_and_same_question_asked_again(make_app
     assert "patient-demo-001" in aside.interrupt.message  # biết người dùng là ai: từ phiên đăng nhập
     assert "chưa có gì được lưu" in aside.interrupt.message
     assert aside.interrupt.message.endswith(first.interrupt.message)  # hỏi lại đúng câu đang chờ
-    assert [s.node for s in aside.steps] == ["side_reply"]
+    assert [step.node for step in aside.steps] == ["side_reply"]
     # Câu hỏi chen ngang không vào dữ liệu và không tính lượt hỏi lại.
     state = await app.chat().inspect_state("s1")
     assert state.user_replies == [] and state.clarify_rounds == 0
@@ -58,7 +58,9 @@ async def test_switch_task_then_continue_unfinished_report(make_app: Any) -> Non
     resumed = waiting(await app.chat().send_message("s3", PATIENT, "vậy giờ bạn lưu đi"), "clarify")
     assert resumed.interrupt.message.startswith("Mình tiếp tục việc gửi báo cáo theo dõi")
     draft = waiting(await app.chat().resume("s3", PATIENT, _reply("tập được 4 ngày")), "confirm_report")
-    assert [e.value for e in draft.interrupt.explanations if e.field == "pain_level"] == [3]  # nhớ câu cũ
+    assert [explanation.value for explanation in draft.interrupt.explanations if explanation.field == "pain_level"] == [
+        3
+    ]  # nhớ câu cũ
     saved = done(await app.chat().resume("s3", PATIENT, UserDecision(action="confirm")), "report_saved")
     assert "Đã lưu" in saved.response.text
 
@@ -113,7 +115,7 @@ async def test_asking_for_the_same_task_again_reuses_what_was_said(make_app: Any
     assert "phục hồi chức năng" in sources and sources[-1] == "tôi muốn đặt lịch khám thứ ba tuần sau"
     options = waiting(result, "choose_slot")
     assert "dùng lại thông tin bạn đã nói" in options.interrupt.message
-    assert {o.slot.department_code for o in options.interrupt.options} == {"PHCN"}
+    assert {option.slot.department_code for option in options.interrupt.options} == {"PHCN"}
 
 
 async def test_vague_request_with_unfinished_task_continues_it(make_app: Any) -> None:

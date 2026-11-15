@@ -33,10 +33,10 @@ async def test_asking_about_another_patient_only_returns_own_data(make_app: Any)
 async def test_vague_request_gets_targeted_suggestions(make_app: Any) -> None:
     app = await make_app()
     ask = waiting(await app.chat().send_message("i3", PATIENT, "tôi cần giúp về lịch"), "clarify")
-    labels = [c.label for c in ask.interrupt.choices]
+    labels = [choice.label for choice in ask.interrupt.choices]
     assert labels[:2] == ["Đặt lịch khám", "Xem lịch hẹn"]  # các intent đoán được xếp trước
     assert "đặt lịch khám hoặc xem lịch hẹn" in ask.interrupt.message
-    chosen = next(c for c in ask.interrupt.choices if c.label == "Xem lịch hẹn")
+    chosen = next(choice for choice in ask.interrupt.choices if choice.label == "Xem lịch hẹn")
     done(await app.chat().resume("i3", PATIENT, UserDecision(action="reply", text=chosen.text)), "appointments")
 
 

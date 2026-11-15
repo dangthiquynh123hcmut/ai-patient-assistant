@@ -11,13 +11,13 @@ from typing import Any
 
 from patient_assistant.application.agent.nodes.assistant_agent import SYSTEM_NOTE
 from patient_assistant.application.agent.state import UserDecision
-from patient_assistant.application.ports.llm import AgentMessage, AgentReply, ToolSpec
+from patient_assistant.application.ports.llm import AgentMessage, AgentReply, ToolSpecification
 from patient_assistant.domain.conversation import Intent
 from patient_assistant.domain.text.vi_dates import DateWindow
-from tests.conftest import NOW, PATIENT, TZ, ScriptedLLM, call_tool, done, waiting
+from tests.conftest import NOW, PATIENT, TIMEZONE, ScriptedLLM, call_tool, done, waiting
 
 SAME_AS_CURRENT = "Đặt cho tôi một lịch khám giống lịch hiện tại nhưng cách 7 ngày"
-Tools = dict[str, ToolSpec]
+Tools = dict[str, ToolSpecification]
 
 
 async def _make(make_app: Any, llm: ScriptedLLM) -> Any:
@@ -66,7 +66,7 @@ async def _propose(
 async def same_as_current_plus_7(tools: Tools, history: list[AgentMessage], context: str) -> AgentReply:
     """Cách Claude xử lý câu "giống lịch hiện tại, cách 7 ngày": tra lịch, tự cộng ngày, tìm đúng bác sĩ/giờ."""
     current = (await call_tool(tools, "find_my_appointments", when="upcoming", department_code=None))["data"][0]
-    start = datetime.fromisoformat(current["start_at"]).astimezone(TZ)
+    start = datetime.fromisoformat(current["start_at"]).astimezone(TIMEZONE)
     hhmm = f"{start:%H:%M}"
     slots = await _search(
         tools, current["department_code"], start.date() + timedelta(days=7), current["doctor_id"], hhmm
@@ -85,17 +85,17 @@ async def test_same_as_current_appointment_seven_days_later_without_questions(ma
     confirm = waiting(await app.chat().send_message("a1", PATIENT, SAME_AS_CURRENT), "confirm_booking")
     # Không hỏi khoa/ngày/giờ: đi thẳng tới thẻ xác nhận, kèm căn cứ để người dùng kiểm tra.
     assert "cách 7 ngày" in confirm.interrupt.message
-    explain = {e.field: e for e in confirm.interrupt.explanations}
+    explain = {explanation.field: explanation for explanation in confirm.interrupt.explanations}
     assert set(explain) >= {"slot", "basis", "reason"}
     assert explain["reason"].value == "tái khám" and explain["reason"].origin.value == "backend"
     assert llm.booking_prompts == []  # không dùng bộ trích xuất của luồng workflow
-    assert [s.node for s in confirm.steps if s.node == "agent"] == ["agent"]
+    assert [step.node for step in confirm.steps if step.node == "agent"] == ["agent"]
     assert len(await _appointments(app)) == 1  # chưa ghi gì trước khi xác nhận
 
     final = done(await app.chat().resume("a1", PATIENT, UserDecision(action="confirm")), "appointment_booked")
     booked = await _appointments(app)
     assert len(booked) == 2
-    new = next(a for a in booked if a["id"] != current["id"])
+    new = next(appointment for appointment in booked if appointment["id"] != current["id"])
     old_start = datetime.fromisoformat(current["slot"]["start_at"])
     new_start = datetime.fromisoformat(new["slot"]["start_at"])
     assert new_start - old_start == timedelta(days=7)
@@ -147,7 +147,7 @@ async def test_follow_up_goes_to_agent_and_change_at_confirm_card_is_understood(
 
     async def first_slot(tools: Tools, history: list[AgentMessage], context: str) -> AgentReply:
         # Lượt 2 thấy cả lượt 1: câu hỏi của agent và câu người dùng trả lời.
-        assert [m.role for m in history] == ["user", "assistant", "user"]
+        assert [message.role for message in history] == ["user", "assistant", "user"]
         assert history[1].text == "Bạn muốn khám khoa nào, ngày nào?"
         slots = await _search(tools, "PHCN", tuesday)
         return await _propose(tools, slots[0]["slot_id"])
@@ -177,7 +177,7 @@ async def test_follow_up_goes_to_agent_and_change_at_confirm_card_is_understood(
 
     done(await chat.resume("a4", PATIENT, UserDecision(action="reply", text="xác nhận")), "appointment_booked")
     booked = await _appointments(app)
-    assert [a["slot"]["slot_id"] for a in booked] == later  # đặt đúng slot của đề xuất sau cùng
+    assert [appointment["slot"]["slot_id"] for appointment in booked] == later  # đặt đúng slot của đề xuất sau cùng
 
     # Việc đặt lịch đã xong: câu tiếp theo không còn bị dồn vào agent.
     calls = len(llm.agent_calls)

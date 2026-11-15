@@ -15,7 +15,7 @@ from dependency_injector import containers, providers
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from patient_assistant.application.agent.deps import AgentDeps, AgentLimits
+from patient_assistant.application.agent.dependencies import AgentDependencies, AgentLimits
 from patient_assistant.application.agent.graph import build_agent_graph
 from patient_assistant.application.agent.side_talk import SideTalk
 from patient_assistant.application.agent.state import checkpoint_types
@@ -72,11 +72,11 @@ async def require_llm(llm: AnthropicBedrockLLM, settings: Settings) -> None:
     """Hệ thống chỉ chạy khi gọi được LLM: thử một lần lúc khởi động, lỗi thì dừng hẳn."""
     try:
         await llm.ping()
-    except Exception as exc:  # noqa: BLE001 - thiếu credential, sai quyền, mất mạng... đều là không gọi được LLM
+    except Exception as exception:  # noqa: BLE001 - thiếu credential, sai quyền, mất mạng... đều là không gọi được LLM
         raise RuntimeError(
-            f"Không gọi được LLM ({settings.llm_model_id}): {type(exc).__name__}: {exc}. "
+            f"Không gọi được LLM ({settings.llm_model_id}): {type(exception).__name__}: {exception}. "
             "Kiểm tra bằng: python -m patient_assistant.interface.cli.check_llm"
-        ) from exc
+        ) from exception
 
 
 def build_stt(settings: Settings) -> STTPort:
@@ -89,13 +89,13 @@ def build_stt(settings: Settings) -> STTPort:
 
 def stt_prompts() -> dict[str, str]:
     """initial_prompt theo ngôn ngữ: từ vựng của phòng khám để whisper nhận đúng tên riêng."""
-    doctors = ", ".join(d.name.removeprefix("BS. ") for d in seed.DOCTORS)
+    doctors = ", ".join(doctor.name.removeprefix("BS. ") for doctor in seed.DOCTORS)
     return {
         "vi": (
             "Khoa: "
-            + ", ".join(d.name for d in seed.DEPARTMENTS)
+            + ", ".join(department.name for department in seed.DEPARTMENTS)
             + ". Bác sĩ: "
-            + ", ".join(d.name for d in seed.DOCTORS)
+            + ", ".join(doctor.name for doctor in seed.DOCTORS)
             + "."
         ),
         "en": (
@@ -111,10 +111,10 @@ def _demo_users(password: str, created_at: Any) -> tuple[tuple[User, str], ...]:
     """Băm mật khẩu demo một lần cho cả tiến trình (scrypt chậm có chủ đích)."""
     return tuple(
         (
-            User(id=f"user-{a.username}", created_at=created_at, **a.model_dump(exclude={"password"})),
-            hash_password(a.password),
+            User(id=f"user-{account.username}", created_at=created_at, **account.model_dump(exclude={"password"})),
+            hash_password(account.password),
         )
-        for a in seed.demo_accounts(password)
+        for account in seed.demo_accounts(password)
     )
 
 
@@ -140,7 +140,7 @@ def token_codec(settings: Settings) -> TokenCodec:
     return JwtCodec(settings.jwt_secret or _ephemeral_jwt_secret())
 
 
-def sql_repositories(sessions: async_sessionmaker[AsyncSession], tz: Any) -> dict[str, Any]:
+def sql_repositories(sessions: async_sessionmaker[AsyncSession], timezone: Any) -> dict[str, Any]:
     return {
         "users": accounts.SqlUserRepository(sessions),
         "sessions": accounts.SqlSessionRepository(sessions),
@@ -149,8 +149,8 @@ def sql_repositories(sessions: async_sessionmaker[AsyncSession], tz: Any) -> dic
         "catalog": sql.SqlCatalogRepository(sessions),
         "plans": sql.SqlPlanRepository(sessions),
         "patients": sql.SqlPatientRepository(sessions),
-        "slots": sql.SqlSlotRepository(sessions, tz),
-        "appointments": sql.SqlAppointmentRepository(sessions, tz),
+        "slots": sql.SqlSlotRepository(sessions, timezone),
+        "appointments": sql.SqlAppointmentRepository(sessions, timezone),
         "knowledge": sql.SqlKnowledgeRepository(sessions),
     }
 
@@ -166,7 +166,7 @@ class Container(containers.DeclarativeContainer):
 
     Phụ thuộc từ bên ngoài (`providers.Dependency`) được truyền khi tạo container, vì chúng cần I/O hoặc
     quản lý vòng đời (kết nối Postgres, ping LLM) — xem `assemble()` và `build_container()`:
-        settings, clock, repos (dict repository SQL), checkpointer, llm, stt
+        settings, clock, repositories (dict repository SQL), checkpointer, llm, stt
     Test/eval truyền repo trong schema riêng, LLM giả, FixedClock; production truyền bản thật.
 
     Dùng: `container.chat()` trả instance (Singleton: một instance cho mỗi container).
@@ -176,7 +176,7 @@ class Container(containers.DeclarativeContainer):
     # ------------------------------------------------------------------ từ bên ngoài
     settings = providers.Dependency(instance_of=Settings)
     clock: providers.Dependency[Clock] = providers.Dependency()
-    repos = providers.Dependency(instance_of=dict)
+    repositories = providers.Dependency(instance_of=dict)
     checkpointer: providers.Dependency[Any] = providers.Dependency()
     llm: providers.Dependency[LLMPort] = providers.Dependency()
     stt: providers.Dependency[STTPort] = providers.Dependency()
@@ -186,16 +186,16 @@ class Container(containers.DeclarativeContainer):
     policy = providers.Singleton(BookingPolicy)
 
     # ------------------------------------------------------------------ repositories (adapter SQL)
-    user_repository = repos.provided["users"]
-    session_repository = repos.provided["sessions"]
-    conversation_log = repos.provided["conversation_log"]
-    report_repository = repos.provided["reports"]
-    catalog_repository = repos.provided["catalog"]
-    plan_repository = repos.provided["plans"]
-    patient_repository = repos.provided["patients"]
-    slot_repository = repos.provided["slots"]
-    appointment_repository = repos.provided["appointments"]
-    knowledge_repository = repos.provided["knowledge"]
+    user_repository = repositories.provided["users"]
+    session_repository = repositories.provided["sessions"]
+    conversation_log = repositories.provided["conversation_log"]
+    report_repository = repositories.provided["reports"]
+    catalog_repository = repositories.provided["catalog"]
+    plan_repository = repositories.provided["plans"]
+    patient_repository = repositories.provided["patients"]
+    slot_repository = repositories.provided["slots"]
+    appointment_repository = repositories.provided["appointments"]
+    knowledge_repository = repositories.provided["knowledge"]
     # Tên ngắn API dùng (lịch sử hội thoại)
     log = conversation_log
 
@@ -235,15 +235,15 @@ class Container(containers.DeclarativeContainer):
         max_slot_search_rounds=settings.provided.max_slot_search_rounds,
         max_agent_tool_calls=settings.provided.max_agent_tool_calls,
     )
-    agent_deps = providers.Singleton(
-        AgentDeps,
+    agent_dependencies = providers.Singleton(
+        AgentDependencies,
         llm=llm,
         tools=toolbox,
         audit=audit,
         limits=limits,
         agent_mode=settings.provided.effective_agent_mode,
     )
-    agent_graph = providers.Singleton(build_agent_graph, agent_deps, checkpointer)
+    agent_graph = providers.Singleton(build_agent_graph, agent_dependencies, checkpointer)
     # Câu trả lời ở thẻ chờ: workflow cần SideTalk để tách câu hỏi chen ngang / đổi việc; ở chế độ full agent tự hiểu.
     side_talk = providers.Singleton(_side_talk, settings.provided.effective_agent_mode, llm, toolbox)
 
@@ -254,13 +254,13 @@ class Container(containers.DeclarativeContainer):
         TranscribeUseCase, stt, settings.provided.stt_confidence_threshold, settings.provided.stt_language
     )
     # Mô tả thêm cho bệnh nhân demo (demo_data/patients.json); bệnh nhân tự đăng ký hiển thị bằng họ tên.
-    patient_labels = providers.Object({p.id: p.label for p in seed.PATIENTS})
+    patient_labels = providers.Object({patient.id: patient.label for patient in seed.PATIENTS})
 
 
-def build_auth(settings: Settings, repos: dict[str, Any], clock: Clock) -> AuthService:
+def build_auth(settings: Settings, repositories: dict[str, Any], clock: Clock) -> AuthService:
     """AuthService không cần LLM/graph (CLI seed, purge_sessions): lấy từ container với các phụ thuộc tối thiểu."""
     container = Container(
-        settings=providers.Object(settings), repos=providers.Object(repos), clock=providers.Object(clock)
+        settings=providers.Object(settings), repositories=providers.Object(repositories), clock=providers.Object(clock)
     )
     auth: AuthService = container.auth()
     return auth
@@ -268,7 +268,7 @@ def build_auth(settings: Settings, repos: dict[str, Any], clock: Clock) -> AuthS
 
 def assemble(
     settings: Settings,
-    repos: dict[str, Any],
+    repositories: dict[str, Any],
     llm: LLMPort,
     stt: STTPort,
     clock: Clock,
@@ -279,7 +279,7 @@ def assemble(
     """Lắp ráp thuần (không I/O) — test dùng trực tiếp với repo Postgres trong schema riêng, LLM giả và FixedClock."""
     container = Container(
         settings=providers.Object(settings),
-        repos=providers.Object(repos),
+        repositories=providers.Object(repositories),
         llm=providers.Object(llm),
         stt=providers.Object(stt),
         clock=providers.Object(clock),
@@ -326,7 +326,7 @@ async def postgres_checkpointer(stack: AsyncExitStack, settings: Settings, schem
 
 @dataclass
 class Storage:
-    repos: dict[str, Any]
+    repositories: dict[str, Any]
     sessions: async_sessionmaker[AsyncSession]
     checkpointer: Any
 
@@ -372,7 +372,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
         await require_llm(llm, settings)
         policy = BookingPolicy(is_holiday=vietnam_holiday_checker())
         container = assemble(
-            settings, storage.repos, llm, build_stt(settings), clock, storage.checkpointer, policy=policy
+            settings, storage.repositories, llm, build_stt(settings), clock, storage.checkpointer, policy=policy
         )
         if settings.seed_demo_data:
             await container.auth().seed(seed.demo_accounts(settings.seed_password))  # chỉ tạo tài khoản còn thiếu
