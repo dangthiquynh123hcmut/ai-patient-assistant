@@ -152,6 +152,9 @@ def intent_question(user_text: str, ranked: list[Intent]) -> str:
     )
 
 
+# Hỏi dữ liệu của người khác: từ chối, không hiện gì thêm. Cùng câu với prompt agent (assistant_agent.md).
+OTHER_PATIENT_REFUSAL = "Mình chỉ có thể hiển thị thông tin của chính tài khoản đang đăng nhập."
+
 CHAT_FALLBACK = (
     "Chào bạn! Mình là trợ lý ảo của phòng khám. Mình có thể giúp bạn gửi báo cáo theo dõi, "
     "xem lại báo cáo, đặt hoặc xem lịch khám, và trả lời câu hỏi từ tài liệu hướng dẫn. Bạn cần gì nào?"
@@ -466,7 +469,7 @@ def final_text(outcome: Outcome, safety: SafetyKind, pending: list[Intent]) -> s
             else "Bạn chưa có lịch hẹn nào sắp tới."
         )
     elif kind == OutcomeKind.PATIENT_INFO:
-        text = patient_info_text(data, own_only=outcome.code == "own_data_only")
+        text = patient_info_text(data)
     elif kind == OutcomeKind.ANSWER:
         text = str(data)
         if outcome.source_ids:
@@ -505,12 +508,9 @@ def pain_trend(reports: list[dict[str, Any]]) -> str | None:
     )
 
 
-def patient_info_text(data: dict[str, Any], own_only: bool = False) -> str:
-    lines = []
-    if own_only:
-        lines.append("Mình chỉ có thể hiển thị thông tin của chính tài khoản đang đăng nhập.")
+def patient_info_text(data: dict[str, Any]) -> str:
     profile = data["profile"]
-    lines.append(f"Thông tin của {profile['display_name']} (mã {profile['id']}):")
+    lines = [f"Thông tin của {profile['display_name']} (mã {profile['id']}):"]
     if profile.get("date_of_birth"):
         born = date.fromisoformat(str(profile["date_of_birth"]))
         lines.append(f"- Ngày sinh: {born:%d/%m/%Y}")
@@ -547,7 +547,7 @@ def patient_info_text(data: dict[str, Any], own_only: bool = False) -> str:
         )
     else:
         lines.append("- Chưa có lịch hẹn sắp tới.")
-    lines.append("Số liệu lấy trực tiếp từ hệ thống (dữ liệu giả lập); đây không phải đánh giá y khoa.")
+    lines.append("Số liệu lấy trực tiếp từ hệ thống")
     return "\n".join(lines)
 
 

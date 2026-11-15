@@ -1,4 +1,4 @@
-"""Engine, migration (Alembic) và nạp dữ liệu giả lập.
+"""Engine, migration (Alembic).
 
 Bảng chỉ được tạo/đổi qua migration Alembic (`sql/migrations/`), không dùng `metadata.create_all`, nên
 database của dev, test, eval và production luôn đúng cùng một lịch sử schema.

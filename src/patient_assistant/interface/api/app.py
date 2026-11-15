@@ -37,9 +37,11 @@ def wire(app: FastAPI, container: Container) -> None:
 def create_app(
     container: Container | None = None,
     container_factory: Callable[[], AbstractAsyncContextManager[Container]] | None = None,
+    api_docs: bool = False,
 ) -> FastAPI:
     """`container`: đã lắp sẵn (test) — dùng ngay, lifespan không tạo container.
     Nếu không, lifespan tạo container bằng `container_factory` (mặc định `build_container(Settings())`).
+    `api_docs`: phục vụ /docs, /redoc, /openapi.json (PA_API_DOCS); tắt thì cả ba trả 404.
     """
     factory = container_factory or (lambda: build_container(Settings()))
 
@@ -52,7 +54,14 @@ def create_app(
             wire(app, built)
             yield
 
-    app = FastAPI(title="AI Patient Assistant", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(
+        title="AI Patient Assistant",
+        version="0.1.0",
+        lifespan=lifespan,
+        docs_url="/docs" if api_docs else None,
+        redoc_url="/redoc" if api_docs else None,
+        openapi_url="/openapi.json" if api_docs else None,
+    )
     for module in ROUTERS:
         app.include_router(module.router)
 
@@ -67,4 +76,5 @@ def create_app(
 
 def app() -> FastAPI:
     """Entry point cho uvicorn: `uvicorn patient_assistant.interface.api.app:app --factory`."""
-    return create_app()
+    settings = Settings()
+    return create_app(container_factory=lambda: build_container(settings), api_docs=settings.api_docs)

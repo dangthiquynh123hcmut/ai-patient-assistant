@@ -14,6 +14,7 @@ from patient_assistant.application.agent.presenters import (
     CHAT_FALLBACK,
     INTENT_CHOICES,
     INTENT_LABELS,
+    OTHER_PATIENT_REFUSAL,
     doctors_text,
     final_text,
     intent_choices,
@@ -199,22 +200,19 @@ class CommonNodes:
         return {"tool_calls": tool_record(state, result), "outcome": outcome}
 
     async def fetch_patient_info(self, state: AgentState) -> dict[str, Any]:
-        """Chỉ trả thông tin của bệnh nhân đang đăng nhập — kể cả khi người dùng hỏi về người khác."""
+        """Thông tin của bệnh nhân đang đăng nhập. Hỏi về người khác thì từ chối hẳn, không tra cứu và không hiện hồ
+        sơ của chính mình — cùng cách làm với agent (PA_AGENT_MODE=full)."""
+        if any(asks_about_other_patient(text) for text in state.sources()):
+            return {"outcome": Outcome(kind=OutcomeKind.ANSWER, code="other_patient", data=OTHER_PATIENT_REFUSAL)}
         result = await self.dependencies.tools.get_patient_summary(state.patient_id, state.now)
         if not result.ok:
             return {
                 "tool_calls": tool_record(state, result),
                 "outcome": Outcome(kind=OutcomeKind.ERROR, code="tool_unavailable"),
             }
-        other = any(asks_about_other_patient(text) for text in state.sources())
         return {
             "tool_calls": tool_record(state, result),
-            "outcome": Outcome(
-                kind=OutcomeKind.PATIENT_INFO,
-                code="own_data_only" if other else None,
-                data=result.data,
-                source_ids=result.source_ids,
-            ),
+            "outcome": Outcome(kind=OutcomeKind.PATIENT_INFO, data=result.data, source_ids=result.source_ids),
         }
 
     async def fetch_doctors(self, state: AgentState) -> dict[str, Any]:

@@ -48,13 +48,9 @@ export function ChatPage() {
     <>
       <TopBar
         title="Trợ lý bệnh nhân AI"
-        subtitle="Dữ liệu giả lập · dự án học tập · không chẩn đoán"
-        actions={
-          <button className="btn ghost" type="button" onClick={chat.reset}>
-            Hội thoại mới
-          </button>
-        }
-      >
+        actions={<button className="btn ghost" type="button" onClick={chat.reset}>
+          Hội thoại mới
+        </button>} subtitle={""}      >
         {meta && (
           <div className="badges">
             <span className="badge on">LLM: {meta.llm_model}</span>

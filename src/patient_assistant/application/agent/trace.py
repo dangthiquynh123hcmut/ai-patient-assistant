@@ -200,14 +200,11 @@ def _summary(node: str, update: dict[str, Any]) -> str:  # noqa: C901 - một nh
         return f"Chưa xác định được: {update.get('notice')} → hỏi lại."
     if node == "fetch_patient_info":
         patient_info_outcome = update.get("outcome") or {}
+        if patient_info_outcome.get("code") == "other_patient":
+            return "Người dùng hỏi dữ liệu của người khác → từ chối, không tra cứu gì (bằng code)."
         if patient_info_outcome.get("kind") != "patient_info":
             return _outcome(update) or ""
-        note = (
-            " Người dùng hỏi về người khác → chỉ trả thông tin của tài khoản đang đăng nhập."
-            if patient_info_outcome.get("code") == "own_data_only"
-            else ""
-        )
-        return f"Ghép hồ sơ + kế hoạch + báo cáo gần đây + lịch hẹn từ backend (bằng code).{note}"
+        return "Ghép hồ sơ + kế hoạch + báo cáo gần đây + lịch hẹn từ backend (bằng code)."
     if node == "rag_answer":
         if outcome and update["outcome"].get("source_ids"):
             return f"Trả lời dựa trên tài liệu: {', '.join(update['outcome']['source_ids'])}."

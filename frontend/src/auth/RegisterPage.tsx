@@ -55,7 +55,6 @@ export function RegisterPage() {
           </span>
           <div>
             <h1>Tạo tài khoản bệnh nhân</h1>
-            <p className="sub">Dữ liệu giả lập · dự án học tập · không chẩn đoán</p>
           </div>
         </div>
         <form className="auth-form" onSubmit={submit}>

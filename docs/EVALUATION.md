@@ -40,7 +40,7 @@ Chạy case viết cho workflow ở chế độ agent (`booking`, `full`), harne
 - Lỗi LLM tiêm sẵn (`llm_script.reports`) thay vào tham số agent gửi cho `propose_report`.
 - `full`: không chấm intent (không có bước phân loại); outcome `chat` được tính đúng cho case đọc dữ liệu (`appointments`, `history`, `patient_info`, `answer`); `list_my_appointments` được thỏa bởi `find_my_appointments`; `response_contains` của case workflow chỉ ghi vào mục **Ghi chú** của báo cáo, không tính là trượt.
 - `date_from`/`date_to` được so với ngày của slot đã xác nhận (slot phải nằm trong khoảng); `department_from_plan` và `offers.hint` không áp dụng (ghi chú).
-- Case có hành vi khác nhau theo chế độ thì ghim chế độ trong case: `conv-info-02` (`agent_mode: "workflow"`) hiện hồ sơ của chính người dùng khi bị hỏi hồ sơ người khác; ở chế độ full agent từ chối hẳn, không tra cứu (`agent-other-patient`).
+- Case có hành vi khác nhau theo chế độ thì ghim chế độ trong case bằng `agent_mode`. Hỏi hồ sơ người khác thì mọi chế độ đều từ chối hẳn bằng cùng một câu, không tra cứu, không hiện hồ sơ của chính mình (`conv-info-02`, `agent-other-patient`).
 
 Nếu nhiều case trả về `error (llm_unavailable)`, nghĩa là Bedrock đang giới hạn tốc độ: giảm `--concurrency` và chạy lại các case đó bằng `--case`.
 

@@ -7,7 +7,8 @@ import { errorText, useToast } from "./Toast";
 
 interface Props {
   title: string;
-  subtitle: string;
+  /** Dòng phụ dưới tiêu đề; bỏ trống thì không hiện. */
+  subtitle?: string;
   /** Badge, thanh điều hướng... nằm giữa. */
   children?: ReactNode;
   /** Nút thêm bên phải, trước nút đăng xuất. */
@@ -58,7 +59,7 @@ export function TopBar({ title, subtitle, children, actions }: Props) {
         </span>
         <div>
           <h1>{title}</h1>
-          <p className="sub">{subtitle}</p>
+          {subtitle && <p className="sub">{subtitle}</p>}
         </div>
       </div>
       <div className="topbar-mid">{children}</div>

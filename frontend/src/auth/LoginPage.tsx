@@ -51,7 +51,6 @@ export function LoginPage() {
           </span>
           <div>
             <h1>Trợ lý bệnh nhân AI</h1>
-            <p className="sub">Dữ liệu giả lập · dự án học tập · không chẩn đoán</p>
           </div>
         </div>
         <form className="auth-form" onSubmit={submit}>

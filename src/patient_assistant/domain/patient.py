@@ -21,7 +21,7 @@ def normalize_phone(value: str | None) -> str | None:
 
 
 class PatientProfile(BaseModel):
-    """Hồ sơ tối thiểu của bệnh nhân (dữ liệu giả lập). Họ tên có thể trùng: mã `id` mới là định danh."""
+    """Hồ sơ tối thiểu của bệnh nhân. Họ tên có thể trùng: mã `id` mới là định danh."""
 
     model_config = ConfigDict(frozen=True)
 

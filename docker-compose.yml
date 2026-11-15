@@ -15,6 +15,7 @@ x-backend-env: &backend-env
   PA_SESSION_TTL_HOURS: ${PA_SESSION_TTL_HOURS:-12}
   PA_ALLOW_REGISTRATION: ${PA_ALLOW_REGISTRATION:-true}
   PA_COOKIE_SECURE: ${PA_COOKIE_SECURE:-false}
+  PA_API_DOCS: ${PA_API_DOCS:-false}
   PA_LLM_MODEL_ID: ${PA_LLM_MODEL_ID:-global.anthropic.claude-opus-4-6-v1}
   PA_AWS_REGION: ${PA_AWS_REGION:-ap-southeast-1}
   PA_BOOKING_MODE: ${PA_BOOKING_MODE:-workflow}
@@ -88,6 +89,9 @@ services:
       - "patient_assistant.interface.cli.purge_sessions"
       - "--every"
       - "${PA_SESSION_PURGE_EVERY_MINUTES:-60}"
+    # Image backend có HEALTHCHECK gọi HTTP :8000; job này không chạy web server nên tắt (nếu không sẽ luôn unhealthy).
+    healthcheck:
+      disable: true
     depends_on:
       migrate:
         condition: service_completed_successfully

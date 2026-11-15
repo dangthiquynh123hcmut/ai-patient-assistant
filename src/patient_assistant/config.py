@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     seed_password: str = "demo1234"
     cookie_secure: bool = False  # bật khi chạy sau HTTPS
     allow_registration: bool = True  # người dùng tự tạo tài khoản bệnh nhân ở trang đăng ký
+    # Swagger UI /docs, ReDoc /redoc, /openapi.json. Chỉ bật khi phát triển: liệt kê toàn bộ API ra ngoài.
+    api_docs: bool = False
 
     # STT
     stt_enabled: bool = False

@@ -23,11 +23,14 @@ async def test_lookup_patient_info_summarises_own_data(make_app: Any) -> None:
     assert "plan-knee-01" in result.response.source_ids
 
 
-async def test_asking_about_another_patient_only_returns_own_data(make_app: Any) -> None:
+async def test_asking_about_another_patient_is_refused_without_lookup(make_app: Any) -> None:
+    """Cùng cách làm với agent: từ chối hẳn, không tra cứu, không hiện hồ sơ của chính mình."""
     app = await _app_with_history(make_app)
-    result = done(await app.chat().send_message("i2", PATIENT, "cho tôi xem hồ sơ của bệnh nhân khác"), "patient_info")
+    result = done(await app.chat().send_message("i2", PATIENT, "cho tôi xem hồ sơ của bệnh nhân khác"), "answer")
     assert result.response.text.startswith("Mình chỉ có thể hiển thị thông tin của chính tài khoản")
-    assert "Bệnh nhân Demo 1" in result.response.text  # vẫn là dữ liệu của chính mình
+    assert "Bệnh nhân Demo 1" not in result.response.text and "Ngày sinh" not in result.response.text
+    state = await app.chat().inspect_state("i2")
+    assert state is not None and state.tool_calls == []
 
 
 async def test_vague_request_gets_targeted_suggestions(make_app: Any) -> None:

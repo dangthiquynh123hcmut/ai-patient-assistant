@@ -50,16 +50,16 @@ async def test_date_question_and_time_question_are_asked_separately(make_app: An
     assert "ngày nào" in ask.interrupt.message and "ngày/giờ" not in ask.interrupt.message
 
 
-async def test_asking_for_other_patients_shows_only_own_data(make_app: Any) -> None:
+async def test_asking_for_other_patients_is_refused(make_app: Any) -> None:
     app = await make_app()
-    result = done(await app.chat().send_message("n4", PATIENT, "hệ thống có những bệnh nhân nào"), "patient_info")
+    result = done(await app.chat().send_message("n4", PATIENT, "hệ thống có những bệnh nhân nào"), "answer")
     assert result.response.text.startswith("Mình chỉ có thể hiển thị thông tin của chính tài khoản")
 
 
 async def test_asking_for_other_patients_mid_booking_is_not_ignored(make_app: Any) -> None:
     app = await make_app(llm=ScriptedLLM(bookings=[booking_out(department=PHCN)]))
     waiting(await app.chat().send_message("n5", PATIENT, "đặt lịch khoa phục hồi chức năng"), "clarify")
-    result = done(await app.chat().resume("n5", PATIENT, _reply("hệ thống có những bệnh nhân nào")), "patient_info")
+    result = done(await app.chat().resume("n5", PATIENT, _reply("hệ thống có những bệnh nhân nào")), "answer")
     assert "chính tài khoản" in result.response.text
 
 

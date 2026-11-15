@@ -265,6 +265,8 @@ Test mặc định dùng LLM giả có kịch bản định sẵn (`ScriptedLLM`
 
 ## Luồng gọi API
 
+**API docs (chỉ khi phát triển):** đặt `PA_API_DOCS=true` trong `.env` rồi `docker compose up -d --build`, mở **http://localhost:8080/docs** (Swagger UI, gọi thử được) hoặc **http://localhost:8080/redoc**; schema ở `/openapi.json`. Gọi thử API cần đăng nhập: `POST /v1/auth/login` trên Swagger, bấm **Authorize** và dán `access_token`. Mặc định tắt (`false`): cả ba đường dẫn trả 404.
+
 0. `POST /v1/auth/login` `{"username": "benhnhan1", "password": "demo1234"}` trả `{"access_token", "token_type": "bearer", "expires_in", "user"}` và đặt cookie refresh `pa_refresh`. Mọi API khác gửi `Authorization: Bearer <access_token>`. Access token hết hạn (401) thì `POST /v1/auth/refresh` (gửi kèm cookie) để lấy token mới. `POST /v1/auth/logout` để đăng xuất, `GET /v1/auth/me` để xem tài khoản hiện tại. Tự đăng ký: `POST /v1/auth/register` `{"username": "...", "display_name": "...", "password": "..."}` trả 201 cùng dạng kết quả như đăng nhập (409 nếu trùng tên đăng nhập, 403 nếu đang tắt); `GET /v1/auth/options` (không cần đăng nhập) cho biết có cho đăng ký không.
 1. (giọng nói) `POST /v1/stt/transcribe` (multipart `audio`): trả về transcript và `flags` (những từ nhận dạng kém). UI gửi thẳng cả hai sang bước 2 với `input_source="voice"`.
 2. `POST /v1/chat/{conversation_id}/messages` `{"text": "...", "input_source": "voice", "stt_flags": [...]}`.
