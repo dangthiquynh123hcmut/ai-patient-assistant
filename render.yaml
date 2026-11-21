@@ -9,13 +9,8 @@ services:
     branch: brach/deploy
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    # Mỗi lần khởi động: migration + bổ sung dữ liệu demo (idempotent), rồi chạy API (1 worker vì RAM 512 MB).
-    # Render đặt cổng qua biến PORT.
-    dockerCommand: >-
-      sh -c "alembic upgrade head
-      && python -m patient_assistant.interface.cli.seed
-      && exec uvicorn patient_assistant.interface.api.app:app --factory --host 0.0.0.0 --port ${PORT:-8000}
-      --workers 1 --proxy-headers --forwarded-allow-ips='*'"
+    # Migration + seed rồi chạy API (1 worker vì RAM 512 MB): xem scripts/render-start.sh.
+    dockerCommand: sh /app/render-start.sh
     healthCheckPath: /health
     autoDeploy: true
     envVars:
