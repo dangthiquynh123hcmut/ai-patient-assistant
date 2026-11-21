@@ -1,0 +1,2 @@
+# Script shell chạy trong container Linux: luôn giữ xuống dòng LF (CRLF làm sh báo lỗi).
+*.sh text eol=lf

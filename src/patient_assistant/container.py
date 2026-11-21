@@ -9,7 +9,8 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
 from functools import cache
-from typing import Any
+from typing import TYPE_CHECKING, Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from dependency_injector import containers, providers
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
@@ -37,6 +38,9 @@ from patient_assistant.infrastructure.audit import StructlogAuditLog
 from patient_assistant.infrastructure.calendar.vn_holidays import vietnam_holiday_checker
 from patient_assistant.infrastructure.clock import SystemClock
 from patient_assistant.infrastructure.llm.bedrock import AnthropicBedrockLLM
+
+if TYPE_CHECKING:
+    from patient_assistant.infrastructure.llm.openai_chat import OpenAIChatLLM
 from patient_assistant.infrastructure.persistence import seed
 from patient_assistant.infrastructure.persistence.sql import accounts
 from patient_assistant.infrastructure.persistence.sql import repositories as sql
@@ -57,7 +61,20 @@ def checkpoint_serde() -> JsonPlusSerializer:
     return JsonPlusSerializer(allowed_msgpack_modules=sorted(checkpoint_types()))
 
 
-def build_llm(settings: Settings) -> AnthropicBedrockLLM:
+def build_llm(settings: Settings) -> AnthropicBedrockLLM | OpenAIChatLLM:
+    """Adapter LLM theo PA_LLM_PROVIDER: bedrock (Claude, IAM) hoặc openai (API key)."""
+    if settings.llm_provider == "openai":
+        from patient_assistant.infrastructure.llm.openai_chat import OpenAIChatLLM
+
+        return OpenAIChatLLM.from_api_key(
+            settings.openai_api_key,
+            settings.openai_model,
+            base_url=settings.openai_base_url,
+            reasoning=settings.openai_reasoning,
+            effort_extract=settings.llm_effort_extract,
+            effort_light=settings.llm_effort_light,
+            effort_agent=settings.llm_effort_agent,
+        )
     return AnthropicBedrockLLM.from_region(
         settings.aws_region,
         settings.llm_model_id,
@@ -68,13 +85,14 @@ def build_llm(settings: Settings) -> AnthropicBedrockLLM:
     )
 
 
-async def require_llm(llm: AnthropicBedrockLLM, settings: Settings) -> None:
+async def require_llm(llm: AnthropicBedrockLLM | OpenAIChatLLM, settings: Settings) -> None:
     """Hệ thống chỉ chạy khi gọi được LLM: thử một lần lúc khởi động, lỗi thì dừng hẳn."""
     try:
         await llm.ping()
     except Exception as exception:  # noqa: BLE001 - thiếu credential, sai quyền, mất mạng... đều là không gọi được LLM
         raise RuntimeError(
-            f"Không gọi được LLM ({settings.llm_model_id}): {type(exception).__name__}: {exception}. "
+            f"Không gọi được LLM ({settings.llm_provider}: {settings.active_llm_model}): "
+            f"{type(exception).__name__}: {exception}. "
             "Kiểm tra bằng: python -m patient_assistant.interface.cli.check_llm"
         ) from exception
 
@@ -293,8 +311,17 @@ def assemble(
 
 
 def checkpointer_dsn(database_url: str) -> str:
-    """URL SQLAlchemy (`postgresql+asyncpg://...`) -> DSN libpq cho psycopg mà checkpointer LangGraph dùng."""
-    return database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    """URL SQLAlchemy (`postgresql+asyncpg://...`) -> DSN libpq cho psycopg mà checkpointer LangGraph dùng.
+
+    asyncpg nhận `?ssl=require` (Postgres cloud như Neon), libpq thì gọi là `sslmode`: đổi tên tham số để cả hai
+    driver dùng chung một PA_DATABASE_URL.
+    """
+    url = database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    parts = urlsplit(url)
+    if not parts.query:
+        return url
+    query = [("sslmode" if key == "ssl" else key, value) for key, value in parse_qsl(parts.query, True)]
+    return urlunsplit(parts._replace(query=urlencode(query)))
 
 
 async def postgres_checkpointer(stack: AsyncExitStack, settings: Settings, schema: str | None = None) -> Any:
