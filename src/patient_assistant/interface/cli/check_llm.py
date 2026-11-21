@@ -3,6 +3,8 @@
     python -m patient_assistant.interface.cli.check_llm
     python -m patient_assistant.interface.cli.check_llm --region ap-southeast-1 --profile default
 
+PA_LLM_PROVIDER=openai: kiểm tra OpenAI bằng PA_OPENAI_API_KEY / PA_OPENAI_MODEL (bỏ qua bước IAM).
+
 Đọc cấu hình từ .env (PA_AWS_REGION, PA_AWS_PROFILE, PA_LLM_MODEL_ID). Mỗi lần chạy gọi Claude 3 lần
 với đầu vào rất ngắn (chi phí không đáng kể).
 """
@@ -11,8 +13,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 from datetime import datetime
+from typing import Any
 
 import anthropic
 
@@ -77,12 +81,26 @@ async def run(region: str | None, profile: str | None, model: str) -> int:
     if not ok:
         return 1
 
-    llm = AnthropicBedrockLLM.from_region(region, model, aws_profile=profile)
+    return await _exercise(AnthropicBedrockLLM.from_region(region, model, aws_profile=profile))
+
+
+async def run_openai(settings: Settings) -> int:
+    from patient_assistant.container import build_llm
+
+    print(f"Nhà cung cấp: OpenAI · model: {settings.openai_model} · base_url: {settings.openai_base_url or 'mặc định'}")
+    if not (settings.openai_api_key or os.environ.get("OPENAI_API_KEY")):
+        print(f"{FAIL} 1. Chưa đặt PA_OPENAI_API_KEY (hoặc OPENAI_API_KEY)")
+        return 1
+    print(f"{OK} 1. Đã có API key")
+    return await _exercise(build_llm(settings))
+
+
+async def _exercise(llm: Any) -> int:
     try:
         text, tokens_in, tokens_out = await llm.ping()
-        print(f"{OK} 2. Gọi Claude thành công: “{text}” ({tokens_in} in / {tokens_out} out tokens)")
+        print(f"{OK} 2. Gọi LLM thành công: “{text}” ({tokens_in} in / {tokens_out} out tokens)")
     except LLMError as exception:
-        print(f"{FAIL} 2. Gọi Claude thất bại — {_explain(exception)}")
+        print(f"{FAIL} 2. Gọi LLM thất bại — {_explain(exception)}")
         return 1
 
     sentence = "Tuần này tôi đau mức 5 trên 10, đã tập 4 ngày, thấy đau tăng khi gập gối"
@@ -95,7 +113,7 @@ async def run(region: str | None, profile: str | None, model: str) -> int:
     draft, schema_issues = parse_report(raw)
     issues = schema_issues or validate_report(draft, ReportValidationContext(sources=[sentence], now=now))  # type: ignore[arg-type]
     if draft is None or issues:
-        print(f"{FAIL} 3. Claude trả về nhưng validator từ chối: {[i.code for i in issues]} — đầu ra: {raw}")
+        print(f"{FAIL} 3. LLM trả về nhưng validator từ chối: {[i.code for i in issues]} — đầu ra: {raw}")
         return 1
     print(
         f"{OK} 3. Trích xuất báo cáo qua validator: đau={draft.pain_level}, tập={draft.exercise_days}, "
@@ -114,6 +132,8 @@ async def run(region: str | None, profile: str | None, model: str) -> int:
 
 def main() -> None:
     settings = Settings()
+    if settings.llm_provider == "openai":
+        sys.exit(asyncio.run(run_openai(settings)))
     parser = argparse.ArgumentParser(description="Kiểm tra kết nối Claude trên Amazon Bedrock (IAM)")
     parser.add_argument("--region", default=settings.aws_region)
     parser.add_argument("--profile", default=settings.aws_profile)

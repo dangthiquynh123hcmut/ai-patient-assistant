@@ -13,7 +13,17 @@ class Settings(BaseSettings):
 
     timezone: str = "Asia/Ho_Chi_Minh"
 
-    # LLM: Claude trên Amazon Bedrock. Server không khởi động nếu không gọi được LLM.
+    # Nhà cung cấp LLM: bedrock (Claude qua IAM, mặc định) | openai (API key). Server không khởi động nếu không gọi
+    # được LLM của nhà cung cấp đã chọn.
+    llm_provider: Literal["bedrock", "openai"] = "bedrock"
+    # OpenAI: key trống thì SDK đọc OPENAI_API_KEY. base_url chỉ đặt khi dùng dịch vụ tương thích OpenAI.
+    # reasoning: gửi reasoning_effort hay không; trống = tự nhận theo tên model (gpt-5*, o1/o3/o4*).
+    openai_api_key: str | None = None
+    openai_model: str = "gpt-5-mini"
+    openai_base_url: str | None = None
+    openai_reasoning: bool | None = None
+
+    # LLM: Claude trên Amazon Bedrock (khi llm_provider=bedrock).
     # Để trống thì SDK tự lấy theo chuỗi credential chuẩn của AWS: AWS_REGION / AWS_PROFILE / ~/.aws/config.
     aws_region: str | None = None
     aws_profile: str | None = None
@@ -64,10 +74,23 @@ class Settings(BaseSettings):
     agent_mode: Literal["workflow", "booking", "full"] | None = None
     max_agent_tool_calls: int = 10
 
-    @field_validator("agent_mode", mode="before")
+    @field_validator(
+        "agent_mode",
+        "openai_api_key",
+        "openai_base_url",
+        "openai_reasoning",
+        "aws_region",
+        "aws_profile",
+        mode="before",
+    )
     @classmethod
     def _blank_is_unset(cls, value: object) -> object:
         return None if value == "" else value
+
+    @property
+    def active_llm_model(self) -> str:
+        """Model đang dùng theo nhà cung cấp đã chọn (để log / báo lỗi)."""
+        return self.openai_model if self.llm_provider == "openai" else self.llm_model_id
 
     @property
     def effective_agent_mode(self) -> Literal["workflow", "booking", "full"]:

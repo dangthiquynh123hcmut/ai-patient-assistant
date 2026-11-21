@@ -1,0 +1,59 @@
+# Render Blueprint: backend FastAPI (Docker, gói Free). Database ở Neon, frontend ở Vercel (frontend/vercel.json).
+# Dashboard Render -> New -> Blueprint -> chọn repo + nhánh này. Các biến `sync: false` sẽ được hỏi khi tạo.
+services:
+  - type: web
+    name: patient-assistant-api
+    runtime: docker
+    plan: free
+    region: singapore
+    branch: brach/deploy
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # Mỗi lần khởi động: migration + bổ sung dữ liệu demo (idempotent), rồi chạy API (1 worker vì RAM 512 MB).
+    # Render đặt cổng qua biến PORT.
+    dockerCommand: >-
+      sh -c "alembic upgrade head
+      && python -m patient_assistant.interface.cli.seed
+      && exec uvicorn patient_assistant.interface.api.app:app --factory --host 0.0.0.0 --port ${PORT:-8000}
+      --workers 1 --proxy-headers --forwarded-allow-ips='*'"
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      # --- Neon: connection string KHÔNG có "-pooler", dạng
+      # postgresql+asyncpg://USER:PASSWORD@ep-xxx.ap-southeast-1.aws.neon.tech/neondb?ssl=require
+      - key: PA_DATABASE_URL
+        sync: false
+      # --- LLM: OpenAI bằng API key (https://platform.openai.com/api-keys)
+      - key: PA_LLM_PROVIDER
+        value: openai
+      - key: PA_OPENAI_API_KEY
+        sync: false
+      - key: PA_OPENAI_MODEL
+        value: gpt-5-mini
+      # Muốn dùng Claude trên Bedrock thay OpenAI: trong Dashboard đặt PA_LLM_PROVIDER=bedrock và thêm
+      # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY (IAM user chỉ có quyền bedrock:InvokeModel*),
+      # PA_AWS_REGION=ap-southeast-1, PA_LLM_MODEL_ID=global.anthropic.claude-opus-4-6-v1. KHÔNG đặt AWS_PROFILE.
+      # --- Đăng nhập
+      - key: PA_JWT_SECRET
+        generateValue: true
+      - key: PA_SEED_PASSWORD
+        sync: false
+      - key: PA_COOKIE_SECURE
+        value: "true"
+      - key: PA_ALLOW_REGISTRATION
+        value: "true"
+      - key: PA_API_DOCS
+        value: "false"
+      # --- Schema/dữ liệu do lệnh khởi động ở trên lo, app không tự làm lại
+      - key: PA_AUTO_CREATE_SCHEMA
+        value: "false"
+      - key: PA_SEED_DEMO_DATA
+        value: "false"
+      - key: PA_CHECKPOINTER_POOL_SIZE
+        value: "3"
+      - key: PA_TIMEZONE
+        value: Asia/Ho_Chi_Minh
+      - key: PA_BOOKING_MODE
+        value: workflow
+      - key: PA_STT_ENABLED
+        value: "false"
