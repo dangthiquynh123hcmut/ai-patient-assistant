@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import type { AgentState, Meta, Resolution } from "../../api/types";
+import type { AgentState, AttemptRecord, Meta, Resolution } from "../../api/types";
 import { RESOLUTION_LABEL } from "../../lib/format";
 import type { Turn } from "../chat/useChat";
 
@@ -66,8 +66,21 @@ function Timeline({ turns }: { turns: Turn[] }) {
   );
 }
 
-function ValidationTab({ st, limits }: { st: AgentState; limits: Meta["limits"] | undefined }) {
+type AttemptRow = AttemptRecord & { turn: number | null };
+
+/** Các lần validator chạy trong cả hội thoại: mỗi lượt lấy danh sách `attempts` ở bước cuối cùng có trường này. */
+function attemptHistory(turns: Turn[], st: AgentState): AttemptRow[] {
+  const rows = turns.flatMap((turn, i) => {
+    const last = [...turn.steps].reverse().find((s) => Array.isArray(s.details.attempts));
+    return last ? (last.details.attempts as AttemptRecord[]).map((a) => ({ ...a, turn: i + 1 })) : [];
+  });
+  // Hội thoại cũ (trước khi bước có lưu attempts): chỉ còn state của lượt cuối.
+  return rows.length ? rows : st.attempts.map((a) => ({ ...a, turn: null }));
+}
+
+function ValidationTab({ st, turns, limits }: { st: AgentState; turns: Turn[]; limits: Meta["limits"] | undefined }) {
   const w = st.resolved_window;
+  const attempts = attemptHistory(turns, st);
   return (
     <div className="tab-body">
       <div className="section">
@@ -104,11 +117,12 @@ function ValidationTab({ st, limits }: { st: AgentState; limits: Meta["limits"] 
         </dl>
       </div>
       <div className="section">
-        <h3>Các lần trích xuất</h3>
-        {st.attempts.length ? (
+        <h3>Các lần trích xuất (cả hội thoại)</h3>
+        {attempts.length ? (
           <table className="grid">
             <thead>
               <tr>
+                <th>Lượt</th>
                 <th>Flow</th>
                 <th>Lần</th>
                 <th>Kết quả</th>
@@ -116,8 +130,9 @@ function ValidationTab({ st, limits }: { st: AgentState; limits: Meta["limits"] 
               </tr>
             </thead>
             <tbody>
-              {st.attempts.map((a, i) => (
+              {attempts.map((a, i) => (
                 <tr key={i}>
+                  <td>{a.turn ?? "—"}</td>
                   <td>{a.flow}</td>
                   <td>{a.attempt_no === 0 ? "lần đầu" : `sửa lần ${a.attempt_no}`}</td>
                   <td>{a.passed ? <span className="ok">đạt</span> : <span className="bad">không đạt</span>}</td>
@@ -133,11 +148,14 @@ function ValidationTab({ st, limits }: { st: AgentState; limits: Meta["limits"] 
             </tbody>
           </table>
         ) : (
-          <p className="muted">Chưa có.</p>
+          <p className="muted">
+            Chưa có lần kiểm tra nào. Validator chỉ chạy khi LLM đưa ra bản nháp báo cáo hoặc yêu cầu đặt lịch (ví dụ:
+            “đau mức 5, tuần này tập 3 ngày”); chat thông thường và tra cứu không qua bước này.
+          </p>
         )}
       </div>
       <div className="section">
-        <h3>Lỗi hiện tại</h3>
+        <h3>Lỗi hiện tại (lượt mới nhất)</h3>
         {st.issues.length ? (
           <table className="grid">
             <thead>
@@ -347,7 +365,7 @@ export function Inspector({ turns, state, limits }: { turns: Turn[]; state: Agen
       </nav>
       {tab === "timeline" && <Timeline turns={turns} />}
       {tab !== "timeline" && !state && <Empty text="Chưa có dữ liệu." />}
-      {tab === "validation" && state && <ValidationTab st={state} limits={limits} />}
+      {tab === "validation" && state && <ValidationTab st={state} turns={turns} limits={limits} />}
       {tab === "tools" && state && <ToolsTab st={state} />}
       {tab === "state" && state && <StateTab st={state} />}
     </section>

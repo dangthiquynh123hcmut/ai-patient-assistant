@@ -72,7 +72,7 @@ class BookingNodes:
                 BookingPrompt(state.sources(), state.now, departments, feedback)
             )
         except LLMError as exception:
-            return {"outcome": Outcome(kind=OutcomeKind.ERROR, code=f"llm_{exception.code}")}
+            return {"outcome": Outcome(kind=OutcomeKind.ERROR, code=f"llm_{exception.code}", detail=str(exception))}
         request, schema_issues = parse_booking(raw)
         from_plan = False
         tool_calls = state.tool_calls

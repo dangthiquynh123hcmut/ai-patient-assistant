@@ -393,6 +393,9 @@ async def test_patient_reopens_past_conversation_and_continues(make_app: Any) ->
         assert conv["conversation_id"] == "c-2" and conv["title"].startswith("Cho tôi đặt lịch")
         messages = (await client.get("/v1/me/conversations/c-2", headers=again)).json()
         assert [message["role"] for message in messages] == ["user", "assistant"]
+        # Diễn biến các bước agent được lưu cùng câu trả lời -> tải lại trang vẫn xem được.
+        assert messages[0]["steps"] == []
+        assert [step["node"] for step in messages[1]["steps"]][:2] == ["ingest", "guard_input"]
         pending = (await client.get("/v1/chat/c-2/pending", headers=again)).json()
         assert pending["kind"] == "choose_slot" and pending["options"]
 

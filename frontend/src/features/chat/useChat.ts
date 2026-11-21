@@ -1,9 +1,10 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "../../api/client";
 import type {
   AgentResponse,
   AgentState,
+  ChatMessage,
   Decision,
   InterruptPayload,
   StepTrace,
@@ -30,6 +31,37 @@ export interface Turn {
   steps: StepTrace[];
 }
 
+// Hội thoại đang mở của tab này, để tải lại trang thì mở lại đúng hội thoại (kèm diễn biến từng lượt).
+const CURRENT_KEY = "pa.currentConversation";
+
+function remember(id: string | null): void {
+  try {
+    if (id) sessionStorage.setItem(CURRENT_KEY, id);
+    else sessionStorage.removeItem(CURRENT_KEY);
+  } catch {
+    // Trình duyệt chặn storage: chỉ mất tính năng tự mở lại.
+  }
+}
+
+function remembered(): string | null {
+  try {
+    return sessionStorage.getItem(CURRENT_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** Dựng lại "Diễn biến" từ lịch sử: mỗi câu trả lời của trợ lý mang các bước của lượt, ghép với câu người dùng ngay trước. */
+function turnsFrom(messages: ChatMessage[]): Turn[] {
+  const turns: Turn[] = [];
+  let said = "";
+  for (const m of messages) {
+    if (m.role === "user") said = m.text;
+    else if (m.steps?.length) turns.push({ said, steps: m.steps });
+  }
+  return turns;
+}
+
 /** Trạng thái một hội thoại với agent: tin nhắn, câu hỏi đang chờ, diễn biến từng lượt, state backend. */
 export function useChat(onError: (message: string) => void) {
   const [conversationId, setConversationId] = useState(newConversationId);
@@ -52,6 +84,7 @@ export function useChat(onError: (message: string) => void) {
       setBusy(true);
       try {
         const res = await call();
+        remember(res.conversation_id);
         setTurns((list) => [...list, { said, steps: res.steps }]);
         if (res.status === "waiting_user" && res.interrupt) {
           setPending(res.interrupt);
@@ -148,9 +181,11 @@ export function useChat(onError: (message: string) => void) {
         setConversationId(id);
         setEntries(restored);
         setPending(waiting);
-        setTurns([]);
+        setTurns(turnsFrom(messages));
+        remember(id);
         setAgentState(await api.state(id).catch(() => null));
       } catch (err) {
+        remember(null);
         onError(`Không mở được hội thoại: ${errorText(err)}`);
       } finally {
         busyRef.current = false;
@@ -160,7 +195,14 @@ export function useChat(onError: (message: string) => void) {
     [onError],
   );
 
+  // Tải lại trang: mở lại hội thoại đang dở của tab này.
+  useEffect(() => {
+    const id = remembered();
+    if (id) void open(id);
+  }, [open]);
+
   const reset = useCallback(() => {
+    remember(null);
     setConversationId(newConversationId());
     setEntries([]);
     setPending(null);

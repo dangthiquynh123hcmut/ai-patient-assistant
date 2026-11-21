@@ -162,4 +162,5 @@ class ChatMessageRow(Base):
     action: Mapped[str] = mapped_column(String(32))
     text: Mapped[str] = mapped_column(Text)
     intent: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    steps: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, server_default="[]")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=_now, index=True)

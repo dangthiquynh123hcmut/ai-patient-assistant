@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from datetime import date, datetime
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -118,4 +119,6 @@ class ChatMessage(BaseModel):
     action: str  # user: message|reply|confirm|choose|edit|cancel|other_time; assistant: kind của câu trả lời
     text: str
     intent: str | None = None
+    # Diễn biến các bước agent đã chạy trong lượt (chỉ ở câu trả lời của trợ lý) — để xem lại sau khi tải lại trang.
+    steps: list[dict[str, Any]] = Field(default_factory=list)
     created_at: datetime

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Literal
+from typing import Any, Literal
 
 from patient_assistant.application.agent.state import AgentState, InterruptPayload, UserDecision
 from patient_assistant.application.ports.clock import Clock
@@ -80,12 +80,25 @@ class ConversationService:
 
     async def _add_result(self, conversation_id: str, result: TurnResult) -> None:
         intent = next((step.details.get("intent") for step in result.steps if step.node == "classify"), None)
+        steps = [step.model_dump(mode="json") for step in result.steps]
         if result.interrupt is not None:
-            await self._add(conversation_id, "assistant", result.interrupt.kind, result.interrupt.message, intent)
+            await self._add(
+                conversation_id, "assistant", result.interrupt.kind, result.interrupt.message, intent, steps
+            )
         elif result.response is not None:
-            await self._add(conversation_id, "assistant", result.response.kind.value, result.response.text, intent)
+            await self._add(
+                conversation_id, "assistant", result.response.kind.value, result.response.text, intent, steps
+            )
 
-    async def _add(self, conversation_id: str, role: str, action: str, text: str, intent: str | None = None) -> None:
+    async def _add(
+        self,
+        conversation_id: str,
+        role: str,
+        action: str,
+        text: str,
+        intent: str | None = None,
+        steps: list[dict[str, Any]] | None = None,
+    ) -> None:
         await self._log.add_message(
             ChatMessage(
                 id=str(uuid.uuid4()),
@@ -94,6 +107,7 @@ class ConversationService:
                 action=action,
                 text=text,
                 intent=intent,
+                steps=steps or [],
                 created_at=self._clock.now(),
             )
         )

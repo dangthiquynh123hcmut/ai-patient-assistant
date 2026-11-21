@@ -199,6 +199,18 @@ async def test_report_rejected_too_many_times_is_handed_to_staff(make_app: Any) 
         True,
     ]
     assert await _history(app) == []
+    # Tab "Kiểm tra & sửa lỗi" đọc các lần validator chạy trên đề xuất của agent, giống luồng workflow.
+    state = await app.chat().inspect_state("f8")
+    assert state is not None
+    assert [(a.flow, a.attempt_no, a.passed) for a in state.attempts] == [
+        ("report", 0, False),
+        ("report", 1, False),
+        ("report", 2, False),
+        ("report", 3, False),
+    ]
+    assert state.attempts[0].issue_codes == ["missing_field"]
+    assert state.attempts[1].llm_fixable_codes == ["evidence_not_found"]
+    assert [issue.code for issue in state.issues] == ["evidence_not_found"]
 
 
 async def test_filler_reply_on_card_shows_the_same_card_without_writing(make_app: Any) -> None:

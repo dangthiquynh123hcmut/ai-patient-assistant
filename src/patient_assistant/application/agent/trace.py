@@ -103,7 +103,8 @@ def _outcome(update: dict[str, Any]) -> str | None:
     outcome = update.get("outcome")
     if not outcome:
         return None
-    return f"Kết quả: {outcome['kind']}" + (f" ({outcome['code']})" if outcome.get("code") else "")
+    text = f"Kết quả: {outcome['kind']}" + (f" ({outcome['code']})" if outcome.get("code") else "")
+    return text + (f" — Chi tiết: {outcome['detail']}" if outcome.get("detail") else "")
 
 
 def _decision(update: dict[str, Any]) -> str:
@@ -270,7 +271,8 @@ def describe_step(index: int, namespace: tuple[str, ...], node: str, update: Any
     details = {
         k: v
         for k, v in data.items()
-        if k not in ("attempts", "tool_calls", "last_output", "agent_history", "agent_slots")
+        # `attempts` giữ lại: tab "Kiểm tra & sửa lỗi" dựng lịch sử kiểm tra của cả hội thoại từ các bước đã lưu.
+        if k not in ("tool_calls", "last_output", "agent_history", "agent_slots")
     }
     return StepTrace(
         index=index, flow=flow, node=node, title=title, kind=kind, summary=_summary(node, data), details=details

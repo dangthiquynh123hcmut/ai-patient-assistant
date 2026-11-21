@@ -25,7 +25,7 @@ from patient_assistant.domain.report.rules import (
     range_issue,
 )
 from patient_assistant.domain.text.grounding import overlapping_flags, quote_in_sources
-from patient_assistant.domain.text.vi_numbers import number_supported
+from patient_assistant.domain.text.vi_numbers import number_contradicted
 
 NUMERIC_BOUNDS = {"pain_level": PAIN_RANGE, "exercise_days": EXERCISE_DAYS_RANGE}
 
@@ -107,7 +107,10 @@ def _grounding_issues(draft: ReportExtraction, context: ReportValidationContext)
             )
             continue
         if name in NUMERIC_BOUNDS:
-            if not number_supported(int(value), quote):
+            # Chỉ từ chối khi trích dẫn nói rõ một con số khác. Trích dẫn không có con số ("I don't walk much") thì
+            # code không đọc được mọi cách nói tự nhiên -> để người dùng kiểm tra trên thẻ xác nhận, không bắt LLM
+            # "sửa" một trích dẫn vốn đúng đến hết lượt rồi chuyển nhân viên.
+            if number_contradicted(int(value), quote):
                 issues.append(
                     ValidationIssue(
                         field=name,

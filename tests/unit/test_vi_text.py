@@ -8,7 +8,12 @@ from hypothesis import strategies as st
 
 from patient_assistant.domain.text.grounding import quote_in_sources
 from patient_assistant.domain.text.vi_dates import resolve
-from patient_assistant.domain.text.vi_numbers import digitize, extract_numbers, number_supported
+from patient_assistant.domain.text.vi_numbers import (
+    digitize,
+    extract_numbers,
+    number_contradicted,
+    number_supported,
+)
 from tests.conftest import NOW, TIMEZONE
 
 
@@ -31,6 +36,30 @@ def test_digitize_and_zero_phrases() -> None:
     assert digitize("ngày năm tháng mười một") == "ngày 5 tháng 11"
     assert number_supported(0, "tuần này tôi chưa tập lần nào")
     assert not number_supported(5, "đã tập 4 ngày")
+
+
+def test_english_numbers_and_zero_phrases() -> None:
+    assert extract_numbers("I exercised five days, pain is 4") == [5, 4]
+    assert number_supported(5, "Yes, five.")
+    assert number_supported(0, "this week I don't exercise")
+    assert number_supported(0, "I didn't work out at all")
+
+
+@pytest.mark.parametrize(
+    ("value", "quote", "contradicted"),
+    [
+        (5, "đã tập 4 ngày", True),
+        (4, "I exercised five days", True),
+        (3, "this week I don't exercise", True),  # nói rõ là không tập mà giá trị khác 0
+        (0, "this week I don't exercise", False),
+        (5, "Yes, five.", False),
+        # Không có con số nào -> code không kết luận, người dùng kiểm tra trên thẻ xác nhận.
+        (0, "I only walk around my house", False),
+        (2, "dạo này tập thất thường", False),
+    ],
+)
+def test_number_contradicted_only_when_quote_states_another_number(value: int, quote: str, contradicted: bool) -> None:
+    assert number_contradicted(value, quote) is contradicted
 
 
 def test_quote_in_sources_tolerates_punctuation_but_rejects_fabrication() -> None:

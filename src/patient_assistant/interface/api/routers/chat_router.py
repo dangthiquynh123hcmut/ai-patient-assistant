@@ -25,7 +25,7 @@ TranscribeDependency = Annotated[TranscribeUseCase, Depends(Provide[Container.tr
 @router.get("/chat/{conversation_id}/state")
 @inject
 async def chat_state(conversation_id: str, conversations: ConversationsDependency, user: PatientUser) -> Any:
-    """State hiện tại của hội thoại (dữ liệu giả lập) — để xem chi tiết cách agent ra quyết định."""
+    """State hiện tại của hội thoại — để xem chi tiết cách agent ra quyết định."""
     try:
         state = await conversations.state(user, conversation_id)
     except NotAllowed as exception:

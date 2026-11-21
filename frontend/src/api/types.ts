@@ -261,5 +261,7 @@ export interface ChatMessage {
   action: string;
   text: string;
   intent: string | null;
+  /** Diễn biến các bước agent của lượt này (chỉ ở câu trả lời của trợ lý). */
+  steps: StepTrace[];
   created_at: string;
 }

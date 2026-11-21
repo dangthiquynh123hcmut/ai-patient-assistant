@@ -1,4 +1,9 @@
-"""Đọc số tiếng Việt viết bằng chữ hoặc chữ số ("bốn" -> 4, "hai mươi mốt" -> 21, "5/10" -> [5, 10])."""
+"""Đọc số viết bằng chữ hoặc chữ số ("bốn" -> 4, "hai mươi mốt" -> 21, "five" -> 5, "5/10" -> [5, 10]).
+
+Chủ yếu là tiếng Việt; tiếng Anh chỉ có số đếm nhỏ và cụm "không tập" thường gặp. Danh sách cụm từ không thể phủ hết
+ngôn ngữ tự nhiên, nên validator chỉ dùng module này để bắt trích dẫn *nói rõ một con số khác* (`number_contradicted`).
+Trích dẫn không chứa con số nào thì code không kết luận, người dùng kiểm tra trên thẻ xác nhận.
+"""
 
 from __future__ import annotations
 
@@ -24,6 +29,26 @@ DIGITS: dict[str, int] = {
 }
 _TEN_WORDS = {"mười", "mươi"}
 _NUMBER_TOKEN = re.compile(r"^\d+$")
+# Số đếm tiếng Anh. Tách khỏi DIGITS vì DIGITS còn dùng để ghép số tiếng Việt và chọn từ quan trọng cho cờ STT.
+EN_NUMBERS: dict[str, int] = {
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+}
+
+_EN_ZERO_PHRASES = tuple(
+    f"{negation} {verb}"
+    for negation in ("don't", "didn't", "do not", "did not", "haven't", "have not", "never", "no", "not")
+    for verb in ("exercise", "exercised", "exercises", "work out", "worked out", "workout", "train", "trained")
+)
 
 # Cụm biểu thị "0 lần/ngày" — dùng cho grounding và kiểm tra mâu thuẫn.
 ZERO_PHRASES = (
@@ -34,6 +59,7 @@ ZERO_PHRASES = (
     "chưa tập được",
     "không tập được",
     "nghỉ tập cả tuần",
+    *_EN_ZERO_PHRASES,
 )
 
 
@@ -74,6 +100,9 @@ def extract_numbers(text: str) -> list[int]:
         if _NUMBER_TOKEN.match(tok):
             flush()
             out.append(int(tok))
+        elif tok in EN_NUMBERS:
+            flush()
+            out.append(EN_NUMBERS[tok])
         elif tok in DIGITS or tok in _TEN_WORDS:
             buffer.append(tok)
             if len(buffer) == 3:
@@ -116,3 +145,14 @@ def number_supported(value: int, quote: str) -> bool:
     if value in extract_numbers(quote):
         return True
     return value == 0 and contains_phrase(quote, ZERO_PHRASES) is not None
+
+
+def number_contradicted(value: int, quote: str) -> bool:
+    """Trích dẫn nói rõ một con số khác `value` ("tập 4 ngày" mà value=5, "không tập" mà value=3).
+
+    Trích dẫn không chứa con số nào ("I walk most days", "dạo này lười") thì code không kết luận được -> không coi là
+    mâu thuẫn; trích dẫn vẫn phải có thật trong lời người dùng và giá trị được hiện trên thẻ xác nhận trước khi lưu.
+    """
+    if number_supported(value, quote):
+        return False
+    return bool(extract_numbers(quote)) or contains_phrase(quote, ZERO_PHRASES) is not None

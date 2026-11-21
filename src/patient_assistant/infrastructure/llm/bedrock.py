@@ -26,6 +26,7 @@ from importlib import resources
 from typing import Any, Literal
 
 import anthropic
+import structlog
 from pydantic import BaseModel, ValidationError
 
 from patient_assistant.application.ports.llm import (
@@ -45,6 +46,25 @@ from patient_assistant.infrastructure.llm.schema import strict_schema
 
 # Chỉ dẫn gửi cho LLM viết bằng tiếng Anh; lời người dùng và dữ liệu giữ nguyên ngôn ngữ gốc.
 EN_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+
+_log = structlog.get_logger("patient_assistant.llm")
+
+
+def _root_cause(exception: BaseException) -> str:
+    """Chuỗi lỗi từ ngoài vào trong ("APIConnectionError: Connection error. <- NoCredentialsError: Unable to...")."""
+    parts: list[str] = []
+    current: BaseException | None = exception
+    while current is not None and len(parts) < 4:
+        parts.append(f"{type(current).__name__}: {current}".strip())
+        current = current.__cause__ or current.__context__
+    return " <- ".join(parts)[:1000]
+
+
+def _logged(error: LLMError) -> LLMError:
+    """Ghi mọi lỗi LLM ngay tại nguồn, kể cả ở những node nuốt lỗi để dùng phương án dự phòng."""
+    _log.warning("llm_error", code=error.code, retryable=error.retryable, detail=str(error))
+    return error
 
 
 def _prompt(name: str) -> str:
@@ -140,18 +160,27 @@ class AnthropicBedrockLLM:
                 **parameters,
             )
         except anthropic.RateLimitError as exception:
-            raise LLMError("unavailable", "rate limited", retryable=True) from exception
+            raise _logged(LLMError("unavailable", f"rate limited: {_root_cause(exception)}", retryable=True)) from (
+                exception
+            )
         except anthropic.APIConnectionError as exception:
-            raise LLMError("unavailable", "connection error", retryable=True) from exception
+            # "Connection error." của SDK không nói gì; lỗi thật (hết hạn credential, DNS, timeout...) nằm ở __cause__.
+            raise _logged(
+                LLMError("unavailable", f"connection error: {_root_cause(exception)}", retryable=True)
+            ) from exception
         except anthropic.APIStatusError as exception:
             retryable = exception.status_code >= 500
-            raise LLMError(
-                "unavailable" if retryable else "bad_request", str(exception), retryable=retryable
+            raise _logged(
+                LLMError(
+                    "unavailable" if retryable else "bad_request",
+                    f"HTTP {exception.status_code}: {_root_cause(exception)}",
+                    retryable=retryable,
+                )
             ) from exception
         if response.stop_reason == "refusal":
-            raise LLMError("refusal", "model declined the request")
+            raise _logged(LLMError("refusal", "model declined the request"))
         if response.stop_reason == "max_tokens":
-            raise LLMError("max_tokens", "output truncated")
+            raise _logged(LLMError("max_tokens", f"output truncated at max_tokens={self._max_tokens}"))
         return response
 
     async def _structured(self, system: str, user: str, schema: dict[str, Any], effort: str) -> dict[str, Any]:
@@ -164,9 +193,11 @@ class AnthropicBedrockLLM:
         try:
             value = json.loads(text)
         except json.JSONDecodeError as exception:
-            raise LLMError("invalid_output", "structured output is not valid JSON") from exception
+            raise _logged(
+                LLMError("invalid_output", f"structured output is not valid JSON: {exception}")
+            ) from exception
         if not isinstance(value, dict):
-            raise LLMError("invalid_output", "structured output is not an object")
+            raise _logged(LLMError("invalid_output", f"structured output is not an object: {type(value).__name__}"))
         return value
 
     async def ping(self) -> tuple[str, int, int]:
@@ -196,7 +227,7 @@ class AnthropicBedrockLLM:
         try:
             return _IntentList.model_validate(raw).intents
         except ValidationError as exception:
-            raise LLMError("invalid_output", "invalid intent list") from exception
+            raise _logged(LLMError("invalid_output", f"invalid intent list: {exception}")) from exception
 
     async def extract_report(self, prompt: ReportPrompt) -> dict[str, Any]:
         user = _render_sources(prompt.sources, prompt.now) + _render_feedback(prompt.feedback)

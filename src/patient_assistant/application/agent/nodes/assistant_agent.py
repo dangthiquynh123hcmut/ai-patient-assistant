@@ -31,6 +31,7 @@ from patient_assistant.application.agent.routing import confirmation_of
 from patient_assistant.application.agent.state import (
     AgentProposal,
     AgentState,
+    AttemptRecord,
     FieldExplanation,
     InterruptPayload,
     Outcome,
@@ -48,7 +49,7 @@ from patient_assistant.domain.booking.models import (
     SlotOption,
 )
 from patient_assistant.domain.booking.policy import window_issues
-from patient_assistant.domain.common import Origin, Resolution
+from patient_assistant.domain.common import Origin, Resolution, ValidationIssue
 from patient_assistant.domain.conversation import (
     ConfirmIntent,
     SafetyKind,
@@ -249,6 +250,24 @@ class _Run:
         # Số lần `propose_report` bị validator từ chối vì lỗi LLM tự sửa được (không tính lỗi phải hỏi người dùng).
         self.rejections = state.correction_count
         self.handoff = False
+        # Mỗi lần validator chạy trên đề xuất của LLM -> hiện ở tab "Kiểm tra & sửa lỗi" như ở luồng workflow.
+        self.attempts: list[AttemptRecord] = []
+        self.issues: list[ValidationIssue] = []
+
+    async def _record_attempt(
+        self, flow: Literal["report"], output: dict[str, Any], issues: list[ValidationIssue]
+    ) -> None:
+        attempt = AttemptRecord(
+            flow=flow,
+            attempt_no=sum(a.flow == flow for a in [*self.state.attempts, *self.attempts]),
+            output=output,
+            issue_codes=[i.code for i in issues],
+            llm_fixable_codes=[i.code for i in issues if i.resolution == Resolution.LLM_FIXABLE],
+            passed=not issues,
+        )
+        self.attempts.append(attempt)
+        self.issues = issues
+        await self.dependencies.audit.record("attempt", self.state.conversation_id, attempt.model_dump(mode="json"))
 
     # ------------------------------------------------------------ đọc
 
@@ -431,6 +450,7 @@ class _Run:
             input_data,
             ReportValidationContext(sources=self.user_texts, now=self.state.now, stt_flags=self.state.stt_flags),
         )
+        await self._record_attempt("report", input_data.model_dump(mode="json"), issues)
         if issues:
             details = [f"{i.field}: {i.message}" for i in issues]
             if any(i.resolution == Resolution.ASK_USER for i in issues):
@@ -568,7 +588,8 @@ class AgentNodes:
                 "agent_run_tools": [call.tool for call in run.calls],
                 "agent_history": history,
                 "agent_active": False,
-                "outcome": state.agent_last_write or Outcome(kind=OutcomeKind.ERROR, code=f"llm_{exception.code}"),
+                "outcome": state.agent_last_write
+                or Outcome(kind=OutcomeKind.ERROR, code=f"llm_{exception.code}", detail=str(exception)),
             }
         updates |= {
             "tool_calls": [*state.tool_calls, *run.calls],
@@ -576,6 +597,8 @@ class AgentNodes:
             "agent_slots": [*state.agent_slots, *run.new_slots][-MAX_KNOWN_SLOTS:],
             "correction_count": run.rejections,
         }
+        if run.attempts:
+            updates |= {"attempts": [*state.attempts, *run.attempts], "issues": run.issues}
         if run.handoff:
             return updates | {
                 "agent_history": history,

@@ -50,6 +50,40 @@ def test_value_not_matching_evidence_is_llm_fixable() -> None:
     assert _codes(_report(exercise_days=5)) == {"value_evidence_mismatch": Resolution.LLM_FIXABLE}
 
 
+def test_english_report_without_digits_is_accepted() -> None:
+    # Ca thật bị chuyển nhân viên: "I don't exercise" -> exercise_days=0 trước đây bị coi là trích dẫn sai số.
+    sources = [
+        "This week, I think my level is 5, and this week I don't exercise. I only work to my work and work from "
+        "work to home and sometimes I walk around my house.",
+        "Yes, five.",
+    ]
+    draft = _report(
+        exercise_days=0,
+        symptom_change=None,
+        evidence=[
+            Evidence(field="pain_level", quote="Yes, five."),
+            Evidence(field="exercise_days", quote="this week I don't exercise"),
+        ],
+    )
+    assert _codes(draft, sources) == {}
+
+
+def test_english_quote_with_other_number_is_still_rejected() -> None:
+    draft = _report(
+        exercise_days=3,
+        symptom_change=None,
+        evidence=[
+            Evidence(field="pain_level", quote="my level is 5"),
+            Evidence(field="exercise_days", quote="I don't exercise"),
+        ],
+    )
+    # Cụm "không tập" tiếng Anh giờ cũng được kiểm tra mâu thuẫn (lời gần nhất nói không tập mà có số ngày tập).
+    assert _codes(draft, ["my level is 5, I don't exercise"]) == {
+        "value_evidence_mismatch": Resolution.LLM_FIXABLE,
+        "contradiction": Resolution.ASK_USER,
+    }
+
+
 def test_fabricated_evidence_is_llm_fixable() -> None:
     draft = _report(
         evidence=[

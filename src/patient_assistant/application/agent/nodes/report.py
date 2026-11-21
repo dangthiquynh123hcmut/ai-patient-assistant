@@ -32,7 +32,7 @@ class ReportNodes:
         try:
             raw = await self.dependencies.llm.extract_report(ReportPrompt(state.sources(), state.now, feedback))
         except LLMError as exception:
-            return {"outcome": Outcome(kind=OutcomeKind.ERROR, code=f"llm_{exception.code}")}
+            return {"outcome": Outcome(kind=OutcomeKind.ERROR, code=f"llm_{exception.code}", detail=str(exception))}
         draft, schema_issues = parse_report(raw)
         return {"last_output": raw, "report_draft": draft, "issues": schema_issues, "edited_fields": []}
 

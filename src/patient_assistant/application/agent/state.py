@@ -38,6 +38,8 @@ class OutcomeKind(StrEnum):
 class Outcome(BaseModel):
     kind: OutcomeKind
     code: str | None = None  # lý do cụ thể: llm_refusal, tool_unavailable, no_slots, too_many_corrections...
+    # Chi tiết kỹ thuật cho người vận hành (trace + log), ví dụ lỗi gốc từ Bedrock. Không đưa vào câu trả lời.
+    detail: str | None = None
     data: Any = None
     issues: list[ValidationIssue] = Field(default_factory=list)
     source_ids: list[str] = Field(default_factory=list)

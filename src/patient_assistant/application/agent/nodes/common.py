@@ -245,7 +245,7 @@ class CommonNodes:
         except LLMError as exception:
             return {
                 "tool_calls": [*state.tool_calls, *calls],
-                "outcome": Outcome(kind=OutcomeKind.ERROR, code=f"llm_{exception.code}"),
+                "outcome": Outcome(kind=OutcomeKind.ERROR, code=f"llm_{exception.code}", detail=str(exception)),
             }
         tool_calls = [*state.tool_calls, *calls]
         if not output_is_safe(answer.text):
@@ -319,6 +319,7 @@ class CommonNodes:
             {
                 "outcome": outcome.kind.value,
                 "code": outcome.code,
+                "error_detail": outcome.detail,
                 "intent": state.intent.value if state.intent else None,
                 "corrections": state.correction_count,
                 "clarify_rounds": state.clarify_rounds,

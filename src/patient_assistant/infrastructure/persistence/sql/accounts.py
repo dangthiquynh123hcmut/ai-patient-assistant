@@ -221,6 +221,7 @@ class SqlConversationLog:
                     action=row.action,
                     text=row.text,
                     intent=row.intent,
+                    steps=row.steps or [],
                     created_at=row.created_at,
                 )
                 for row in await session.scalars(query)
